@@ -30,12 +30,19 @@ kotlin {
 // исходников, и установщик.
 val coreLibDir = layout.buildDirectory.dir("coreLib")
 
+// Внутри — подкаталог `common`, и это не украшение. Compose складывает в
+// установщик не сам каталог ресурсов, а его подкаталоги с именами платформ;
+// файл, положенный в корень, молча не попадает никуда, и приложение
+// устанавливается без ядра. Собирается всегда ровно одна библиотека — под ту
+// систему, на которой запустили cargo, — поэтому `common`, а не `windows-x64`.
+val coreLibFiles = coreLibDir.map { it.dir("common") }
+
 val copyCoreLibrary by tasks.registering(Copy::class) {
     description = "Кладёт собранное ядро на Rust рядом с приложением"
     from(rootProject.layout.projectDirectory.dir("../core/target/release")) {
         include("wolfy_core.dll", "libwolfy_core.so", "libwolfy_core.dylib")
     }
-    into(coreLibDir)
+    into(coreLibFiles)
 }
 
 // Всё, что читает этот каталог, обязано дождаться копирования: иначе Gradle
@@ -58,6 +65,18 @@ val packagingRequested = gradle.startParameter.taskNames.any { name ->
     name.contains("package", ignoreCase = true) || name.contains("Distributable")
 }
 
+// Путь к ядру для запуска из исходников.
+//
+// Только для него: в установленном приложении библиотека приезжает ресурсом, и
+// куда именно её распаковали — знает сам установленный экземпляр. Добавить этот
+// путь в общие jvmArgs значило бы зашить каталог машины разработчика в чужой
+// установщик, где он и мусор, и обещание, которого никто не выполнит.
+tasks.matching { it.name == "run" || it.name == "runRelease" }.configureEach {
+    if (this is JavaExec) {
+        jvmArgs("-Djna.library.path=" + coreLibFiles.get().asFile.absolutePath)
+    }
+}
+
 compose.desktop {
     application {
         mainClass = "com.wolfy.desktop.MainKt"
@@ -68,16 +87,16 @@ compose.desktop {
             }.get().metadata.installationPath.asFile.absolutePath
         }
 
-        // Запуск из исходников: JNA ищет библиотеку там, куда её положила
-        // задача выше. В установленном приложении она лежит рядом с
-        // исполняемым файлом, и путь не нужен.
-        jvmArgs += "-Djna.library.path=${coreLibDir.get().asFile.absolutePath}"
-
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Exe)
             packageName = "Wolfy"
             packageVersion = "1.0.0"
-            description = "Читалка английских книг"
+            // Латиницей, и не по недосмотру: установщик собирает WiX, а строки
+            // он пишет в кодовой странице 1252 — кириллица в неё не влезает и
+            // роняет сборку целиком (LGHT0311). Название приложения при этом
+            // остаётся своим, а описание в списке программ Windows читают
+            // вторым планом, если читают вообще.
+            description = "Wolfy - reading English books"
             vendor = "Wolfy"
 
             // Ядро едет в установщик как ресурс приложения.
