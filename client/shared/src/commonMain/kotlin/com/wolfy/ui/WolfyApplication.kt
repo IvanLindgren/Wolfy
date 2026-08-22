@@ -29,6 +29,7 @@ import com.wolfy.ffi.WolfyCore
 import com.wolfy.ffi.createWolfyCore
 import com.wolfy.platform.PickedBook
 import com.wolfy.platform.rememberBookPicker
+import com.wolfy.platform.rememberPhotoPicker
 import com.wolfy.theme.ReadingTheme
 import com.wolfy.theme.WolfyTheme
 import com.wolfy.ui.decks.DecksScreen
@@ -62,6 +63,14 @@ import kotlinx.coroutines.launch
 fun WolfyApplication(
     serverUrl: String = "http://localhost:8080",
     sessionToken: String? = null,
+    /**
+     * Есть ли у устройства камера, которой снимают страницу.
+     *
+     * Не «Android или Windows»: на планшете с клавиатурой камера есть, а на
+     * настольной машине — веб-камера, которой страницу книги не снять.
+     * Решает тот, кто запускает приложение.
+     */
+    onPhone: Boolean = false,
 ) {
     var failure by remember { mutableStateOf<String?>(null) }
 
@@ -78,7 +87,7 @@ fun WolfyApplication(
                 settings = settings,
                 sync = SyncService(library, settings, api),
                 reader = ReaderViewModel(core = core, api = api, library = library),
-                catalogue = LibraryViewModel(library, core),
+                catalogue = LibraryViewModel(library, core, api),
             )
         } catch (e: CoreException) {
             failure = e.message
@@ -114,6 +123,7 @@ fun WolfyApplication(
 
         Shell(
             parts = parts,
+            onPhone = onPhone,
             theme = settings.readingTheme,
             fontScale = settings.fontScale,
             onThemeChange = parts.settings::setTheme,
@@ -137,6 +147,7 @@ private class Parts(
 @Composable
 private fun Shell(
     parts: Parts,
+    onPhone: Boolean,
     theme: ReadingTheme,
     fontScale: Float,
     onThemeChange: (ReadingTheme) -> Unit,
@@ -183,6 +194,20 @@ private fun Shell(
     }
 
     val pick = rememberBookPicker(onPicked = parts.catalogue::import)
+    // Съёмка страницы: на телефоне камерой, на компьютере — выбором файла.
+    // Камеры у настольной машины обычно нет, а страницу всё равно снимают
+    // телефоном и переносят.
+    val shoot = rememberPhotoPicker(fromCamera = onPhone, onPicked = parts.catalogue::recognize)
+
+    // Распознанную страницу открываем сразу: читатель снимал её, чтобы читать,
+    // а не чтобы найти в списке.
+    LaunchedEffect(parts) {
+        parts.catalogue.recognized.collect { book ->
+            reading = book
+            section = Section.Books
+            parts.reader.open(book)
+        }
+    }
     val syncStatus by parts.sync.status.collectAsState()
 
     // Обмен с сервером: при запуске и потом, пока есть что отправлять.
@@ -213,6 +238,7 @@ private fun Shell(
                         state = catalogue,
                         onOpen = open,
                         onImport = pick,
+                        onShoot = shoot,
                         onRemove = { parts.catalogue.remove(it.id) },
                     )
 

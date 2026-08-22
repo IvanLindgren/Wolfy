@@ -67,6 +67,9 @@ kotlin {
             // Выбор файла на Android идёт через чужой экран, а его запуск
             // регистрируется в композиции — это отсюда.
             implementation(libs.androidx.activity.compose)
+            // FileProvider: снимок страницы передаётся системной камере
+            // ссылкой, а file-ссылку с Android 7 передавать нельзя.
+            implementation(libs.androidx.core.ktx)
         }
 
         named("desktopMain").dependencies {

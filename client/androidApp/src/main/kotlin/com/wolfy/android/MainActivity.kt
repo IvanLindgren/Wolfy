@@ -12,6 +12,6 @@ class MainActivity : ComponentActivity() {
         // до края экрана, иначе поля страницы спорят с полями системы.
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        setContent { WolfyApplication() }
+        setContent { WolfyApplication(onPhone = true) }
     }
 }

@@ -114,6 +114,49 @@ class Library(
         }
     }
 
+    /**
+     * Добавляет распознанную страницу.
+     *
+     * Все снимки складываются в одну книгу, а не заводят по книге на страницу.
+     * Фотографируют обычно подряд — разворот за разворотом, — и библиотека,
+     * заполненная десятком книг по абзацу каждая, перестаёт быть библиотекой.
+     *
+     * Файл переписывается целиком: страница снимка это килобайты, и городить
+     * дозапись ради них незачем.
+     */
+    fun appendSnapshot(text: String): LibraryBook {
+        val page = text.trim()
+        val existing = _state.value.books.firstOrNull { it.title == SNAPSHOTS && !it.deleted }
+
+        val whole = when {
+            existing == null || !existing.readable -> page
+            else -> {
+                val before = store.readText(existing.path).trimEnd()
+                // Пустая строка между страницами: для ядра граница абзаца это
+                // и граница предложения, и без неё последняя фраза страницы
+                // слиплась бы с первой фразой следующей.
+                if (before.isEmpty()) page else before + PAGE_BREAK + page
+            }
+        }
+
+        val path = store.writeText(SNAPSHOTS_FILE, whole)
+
+        if (existing != null) {
+            edit(existing.id) { it.copy(path = path, sourceKey = "") }
+            return book(existing.id) ?: existing
+        }
+
+        val book = LibraryBook(
+            id = newId(),
+            path = path,
+            title = SNAPSHOTS,
+            format = "txt",
+            addedAt = now(),
+        )
+        update { it.copy(books = it.books + book) }
+        return book
+    }
+
     /** Запоминает, что ядро нашло в книге при открытии. */
     fun describe(id: String, title: String, author: String?, chapters: Int) {
         edit(id) { book ->
@@ -365,6 +408,19 @@ class Library(
     private companion object {
         /** Имя записи в хранилище. */
         const val RECORD = "library"
+
+        /** Книга, в которую складываются распознанные страницы. */
+        const val SNAPSHOTS = "Снимки со страниц"
+        const val SNAPSHOTS_FILE = "snapshots.txt"
+
+        /**
+         * Разделитель между снятыми страницами.
+         *
+         * Пустая строка: для ядра граница абзаца это и граница предложения,
+         * и без неё последняя фраза страницы слиплась бы с первой фразой
+         * следующей — а вместе с ней уехала бы в контекст перевода.
+         */
+        const val PAGE_BREAK = "\n\n"
     }
 }
 

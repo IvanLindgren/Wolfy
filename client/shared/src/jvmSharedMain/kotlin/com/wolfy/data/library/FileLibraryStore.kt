@@ -57,6 +57,18 @@ internal class FileLibraryStore(private val directory: File) : LibraryStore {
         }
     }
 
+    override fun readText(path: String): String {
+        val file = File(path)
+        return if (file.isFile) file.readText(Charsets.UTF_8) else ""
+    }
+
+    override fun writeText(fileName: String, text: String): String {
+        books.mkdirs()
+        val file = File(books, fileName)
+        file.writeText(text, Charsets.UTF_8)
+        return file.absolutePath
+    }
+
     /**
      * Отпечаток — SHA-256 содержимого.
      *

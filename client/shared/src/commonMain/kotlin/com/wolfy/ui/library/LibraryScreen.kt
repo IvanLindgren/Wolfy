@@ -52,6 +52,7 @@ fun LibraryScreen(
     state: LibraryUiState,
     onOpen: (LibraryBook) -> Unit,
     onImport: () -> Unit,
+    onShoot: () -> Unit,
     onRemove: (LibraryBook) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -79,7 +80,12 @@ fun LibraryScreen(
                         onOpen = { onOpen(current) },
                     )
                 }
-                LibraryHeader(count = state.books.size, onImport = onImport)
+                LibraryHeader(
+                    count = state.books.size,
+                    recognizing = state.recognizing,
+                    onImport = onImport,
+                    onShoot = onShoot,
+                )
                 state.message?.let { message ->
                     Text(
                         text = message,
@@ -155,7 +161,12 @@ private fun ContinueCard(book: LibraryBook, savedWords: Int, onOpen: () -> Unit)
 }
 
 @Composable
-private fun LibraryHeader(count: Int, onImport: () -> Unit) {
+private fun LibraryHeader(
+    count: Int,
+    recognizing: Boolean,
+    onImport: () -> Unit,
+    onShoot: () -> Unit,
+) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
 
@@ -171,12 +182,36 @@ private fun LibraryHeader(count: Int, onImport: () -> Unit) {
                 style = WolfyTheme.typography.screenTitle,
                 color = colors.ink,
             )
-            Text(
-                text = "+ добавить",
-                style = WolfyTheme.typography.button,
-                color = colors.accent,
-                modifier = Modifier.clickable(onClick = onImport),
-            )
+            Row(horizontalArrangement = Arrangement.spacedBy(spacing.large)) {
+                Text(
+                    text = "+ добавить",
+                    style = WolfyTheme.typography.button,
+                    color = colors.accent,
+                    modifier = Modifier.clickable(onClick = onImport),
+                )
+                // Съёмка страницы бумажной книги. Стоит рядом с добавлением
+                // файла, а не в отдельном разделе: и то, и другое отвечает на
+                // вопрос «как сюда попадает книга».
+                Text(
+                    text = if (recognizing) "распознаётся…" else "снять страницу",
+                    style = WolfyTheme.typography.button,
+                    color = if (recognizing) colors.inkMuted else colors.accent,
+                    modifier = Modifier.clickable(enabled = !recognizing, onClick = onShoot),
+                )
+            }
+        }
+        if (recognizing) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(spacing.medium),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                WolfySticker(Sticker.Thinking, size = 44.dp)
+                Text(
+                    text = "Вульфи читает снимок. Это занимает несколько секунд.",
+                    style = WolfyTheme.typography.caption,
+                    color = colors.inkMuted,
+                )
+            }
         }
         if (count > 0) {
             Text(
@@ -348,7 +383,7 @@ private fun EmptyLibrary(onImport: () -> Unit) {
             color = colors.ink,
         )
         Text(
-            text = "Добавьте книгу в epub, txt или pdf — и можно читать.",
+            text = "Добавьте книгу в epub, txt или pdf — или снимите страницу бумажной.",
             style = WolfyTheme.typography.body,
             color = colors.inkMuted,
             textAlign = TextAlign.Center,

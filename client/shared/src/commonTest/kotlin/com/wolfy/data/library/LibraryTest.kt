@@ -37,6 +37,17 @@ private class FakeStore : LibraryStore {
     }
 
     override fun fingerprint(path: String): String = fingerprints[path] ?: ""
+
+    /** Тексты книг по пути — так тест изображает накопление снимков. */
+    val texts = mutableMapOf<String, String>()
+
+    override fun readText(path: String): String = texts[path] ?: ""
+
+    override fun writeText(fileName: String, text: String): String {
+        val path = "/store/$fileName"
+        texts[path] = text
+        return path
+    }
 }
 
 /** Время под контролем: без него порядок книг зависел бы от скорости теста. */
@@ -301,6 +312,27 @@ class LibraryTest {
         )
 
         assertEquals(listOf("Science Fiction"), library.state.value.shelves.map { it.name })
+    }
+
+    @Test
+    fun снимки_страниц_копятся_в_одной_книге() {
+        // Фотографируют подряд, разворот за разворотом. Библиотека, где каждая
+        // страница стала отдельной книгой по абзацу, перестаёт быть библиотекой.
+        val store = FakeStore()
+        val library = library(store, Clock())
+
+        val first = library.appendSnapshot("The library smelled of dust.")
+        val second = library.appendSnapshot("Evelyn pushed the heavy door.")
+
+        assertEquals(first.id, second.id, "снимки обязаны лечь в одну книгу")
+        assertEquals(1, library.books.size)
+
+        val text = store.readText(second.path)
+        assertTrue(text.contains("dust"), text)
+        assertTrue(text.contains("Evelyn"), text)
+        // Пустая строка между страницами: без неё последняя фраза страницы
+        // слиплась бы с первой фразой следующей и уехала в контекст перевода.
+        assertTrue(text.contains("dust.\n\nEvelyn"), "страницы слиплись: $text")
     }
 
     @Test

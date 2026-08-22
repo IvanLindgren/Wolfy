@@ -6,14 +6,17 @@
 package api
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/wolfy/server/internal/auth"
 	"github.com/wolfy/server/internal/library"
+	"github.com/wolfy/server/internal/ocr"
 	"github.com/wolfy/server/internal/store"
 	"github.com/wolfy/server/internal/translate"
 )
@@ -24,6 +27,7 @@ type Server struct {
 	verifier  *auth.Verifier
 	translate *translate.Service
 	library   *library.Service
+	ocr       *ocr.Service
 	log       *slog.Logger
 }
 
@@ -32,9 +36,10 @@ func NewServer(
 	v *auth.Verifier,
 	t *translate.Service,
 	l *library.Service,
+	o *ocr.Service,
 	log *slog.Logger,
 ) *Server {
-	return &Server{store: s, verifier: v, translate: t, library: l, log: log}
+	return &Server{store: s, verifier: v, translate: t, library: l, ocr: o, log: log}
 }
 
 // Handler собирает маршруты сервиса.
@@ -50,6 +55,7 @@ func (s *Server) Handler() http.Handler {
 	private.HandleFunc("GET /v1/me", s.me)
 	private.HandleFunc("POST /v1/translate", s.postTranslate)
 	private.HandleFunc("POST /v1/sync", s.postSync)
+	private.HandleFunc("POST /v1/ocr", s.postOCR)
 
 	mux.Handle("/v1/", s.verifier.Middleware(private))
 
@@ -69,6 +75,9 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":    "ok",
 		"translate": s.translate.Configured(),
+		// Клиент прячет съёмку, если распознавание не настроено: кнопка,
+		// которая всегда отвечает ошибкой, хуже её отсутствия.
+		"ocr": s.ocr.Configured(),
 	})
 }
 
@@ -153,6 +162,49 @@ func (s *Server) postSync(w http.ResponseWriter, r *http.Request) {
 		return
 	case err != nil:
 		s.log.Error("синхронизация не удалась", "error", err, "user", user.ID)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+type ocrRequest struct {
+	// Image — снимок в base64. Не multipart намеренно: всё остальное в
+	// сервисе говорит на JSON, и заводить второй формат ради одного маршрута
+	// значит держать в голове два способа разбора запроса.
+	Image string `json:"image"`
+	Mime  string `json:"mime"`
+}
+
+// postOCR распознаёт страницу бумажной книги по фотографии.
+func (s *Server) postOCR(w http.ResponseWriter, r *http.Request) {
+	var req ocrRequest
+	// Предел с запасом на base64: он раздувает данные на треть.
+	limit := int64(ocr.MaxImageBytes) * 4 / 3
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit+4096)).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "снимок не разобран"})
+		return
+	}
+
+	image, err := base64.StdEncoding.DecodeString(strings.TrimSpace(req.Image))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "снимок не разобран"})
+		return
+	}
+
+	result, err := s.ocr.Recognize(r.Context(), image, req.Mime)
+	switch {
+	case errors.Is(err, ocr.ErrTooLarge):
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": err.Error()})
+		return
+	case errors.Is(err, ocr.ErrUnavailable):
+		s.log.Warn("распознавание недоступно", "error", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "распознавание сейчас недоступно",
+		})
+		return
+	case err != nil:
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}

@@ -20,6 +20,7 @@ import (
 	"github.com/wolfy/server/internal/auth"
 	"github.com/wolfy/server/internal/config"
 	"github.com/wolfy/server/internal/library"
+	"github.com/wolfy/server/internal/ocr"
 	"github.com/wolfy/server/internal/store"
 	"github.com/wolfy/server/internal/translate"
 )
@@ -62,8 +63,15 @@ func run() error {
 	}
 
 	server := &http.Server{
-		Addr:    cfg.Addr,
-		Handler: api.NewServer(db, auth.NewVerifier(db.Pool), translator, library.New(db), log).Handler(),
+		Addr: cfg.Addr,
+		Handler: api.NewServer(
+			db,
+			auth.NewVerifier(db.Pool),
+			translator,
+			library.New(db),
+			ocr.New(cfg.OCRKey, cfg.OCRURL, cfg.OCRModel, cfg.RequestTimeout),
+			log,
+		).Handler(),
 		// Таймауты обязательны: без них одно зависшее соединение держит
 		// горутину и файловый дескриптор до перезапуска сервиса.
 		ReadHeaderTimeout: 10 * time.Second,

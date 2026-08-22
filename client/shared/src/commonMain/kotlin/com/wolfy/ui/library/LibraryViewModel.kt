@@ -9,9 +9,14 @@ import com.wolfy.data.library.LibraryBook
 import com.wolfy.data.library.Shelf
 import com.wolfy.ffi.CoreException
 import com.wolfy.ffi.WolfyCore
+import com.wolfy.data.OcrResult
+import com.wolfy.data.WolfyApi
 import com.wolfy.platform.PickedBook
+import com.wolfy.platform.PickedPhoto
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -30,6 +35,8 @@ data class LibraryUiState(
     val continueReading: LibraryBook? = null,
     /** Сообщение читателю: книга не открылась, файл не скопировался. */
     val message: String? = null,
+    /** Идёт распознавание снимка страницы. */
+    val recognizing: Boolean = false,
 ) {
     /** Колода книги. */
     fun deck(bookId: String): List<Card> = cards.filter { it.bookId == bookId && !it.deleted }
@@ -48,11 +55,21 @@ data class LibraryUiState(
 class LibraryViewModel(
     private val library: Library,
     private val core: WolfyCore,
+    private val api: WolfyApi,
 ) : ViewModel() {
 
     private val message = MutableStateFlow<String?>(null)
+    private val recognizing = MutableStateFlow(false)
 
-    val state: StateFlow<LibraryUiState> = combine(library.state, message) { library, message ->
+    /** Книга, только что собранная из снимка: оболочка её откроет. */
+    private val _recognized = MutableSharedFlow<LibraryBook>(extraBufferCapacity = 1)
+    val recognized: SharedFlow<LibraryBook> = _recognized
+
+    val state: StateFlow<LibraryUiState> = combine(
+        library.state,
+        message,
+        recognizing,
+    ) { library, message, recognizing ->
         LibraryUiState(
             // Недавно открытые впереди, а никогда не открытые — по дате
             // добавления. Алфавит здесь был бы честнее, но библиотеку читают
@@ -67,6 +84,7 @@ class LibraryViewModel(
                 .filter { it.started && !it.finished && it.readable }
                 .maxByOrNull { it.progress.openedAt },
             message = message,
+            recognizing = recognizing,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), LibraryUiState())
 
@@ -110,6 +128,35 @@ class LibraryViewModel(
                 // плитка, которая не открывается, хуже, чем её отсутствие.
                 library.remove(book.id)
                 message.value = "Не получилось открыть книгу: ${e.message}"
+            }
+        }
+    }
+
+    /**
+     * Распознаёт снимок страницы и складывает его в книгу снимков.
+     *
+     * Единственное место приложения, где приходится ждать: модель смотрит на
+     * картинку несколько секунд. Поэтому ожидание показывается явно — молча
+     * замерший экран читатель понимает как поломку.
+     */
+    fun recognize(photo: PickedPhoto) {
+        viewModelScope.launch {
+            message.value = null
+            recognizing.value = true
+            try {
+                when (val result = api.recognize(photo)) {
+                    is OcrResult.Failed -> message.value = result.message
+                    is OcrResult.Ready -> {
+                        val book = library.appendSnapshot(result.text)
+                        val described = withContext(Dispatchers.Default) { describe(book.path) }
+                        library.describe(book.id, book.title, null, described.chapters)
+                        library.book(book.id)?.let { _recognized.tryEmit(it) }
+                    }
+                }
+            } catch (e: CoreException) {
+                message.value = "Страница распозналась, но не открылась: ${e.message}"
+            } finally {
+                recognizing.value = false
             }
         }
     }

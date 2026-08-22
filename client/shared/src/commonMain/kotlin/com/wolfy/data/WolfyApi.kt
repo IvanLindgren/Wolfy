@@ -2,7 +2,9 @@ package com.wolfy.data
 
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
+import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.plugins.timeout
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -11,6 +13,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.Serializable
+import com.wolfy.platform.PickedPhoto
 import kotlinx.serialization.json.Json
 
 /**
@@ -87,8 +90,51 @@ class WolfyApi(
         }
     }
 
+    /**
+     * Распознаёт страницу бумажной книги по снимку.
+     *
+     * Ответ бывает долгим — модель смотрит на картинку, — и это единственный
+     * запрос приложения, ради которого не грех показать ожидание.
+     */
+    suspend fun recognize(photo: PickedPhoto): OcrResult {
+        val token = tokenProvider() ?: return OcrResult.Failed("нужно войти в аккаунт")
+
+        return try {
+            val response = client.post("$baseUrl/v1/ocr") {
+                header("Authorization", "Bearer $token")
+                contentType(ContentType.Application.Json)
+                setBody(OcrRequest(image = encodeBase64(photo.bytes), mime = photo.mime))
+                timeout { requestTimeoutMillis = 120_000 }
+            }
+            when (response.status) {
+                HttpStatusCode.OK -> {
+                    val text = response.body<OcrResponse>().text
+                    if (text.isBlank()) {
+                        OcrResult.Failed("на снимке не нашлось текста")
+                    } else {
+                        OcrResult.Ready(text)
+                    }
+                }
+                HttpStatusCode.Unauthorized -> OcrResult.Failed("нужно войти заново")
+                HttpStatusCode.PayloadTooLarge -> OcrResult.Failed("снимок слишком большой")
+                HttpStatusCode.ServiceUnavailable ->
+                    OcrResult.Failed("распознавание сейчас недоступно")
+                else -> OcrResult.Failed("не получилось распознать страницу")
+            }
+        } catch (e: Exception) {
+            OcrResult.Failed("нет связи с сервером")
+        }
+    }
+
     companion object {
         fun defaultClient(): HttpClient = HttpClient {
+            // Распознавание снимка идёт секунды, а иногда и десятки секунд:
+            // модель смотрит на картинку. Общий таймаут поднят под него, а
+            // короткие запросы от этого не страдают — они и так отвечают быстро.
+            install(HttpTimeout) {
+                requestTimeoutMillis = 30_000
+                connectTimeoutMillis = 10_000
+            }
             install(ContentNegotiation) {
                 json(
                     Json {
@@ -100,6 +146,18 @@ class WolfyApi(
         }
     }
 }
+
+/** Результат распознавания страницы. */
+sealed interface OcrResult {
+    data class Ready(val text: String) : OcrResult
+    data class Failed(val message: String) : OcrResult
+}
+
+@Serializable
+private data class OcrRequest(val image: String, val mime: String)
+
+@Serializable
+private data class OcrResponse(val text: String = "", val model: String = "")
 
 /** Результат обмена с сервером. */
 sealed interface SyncResult {
