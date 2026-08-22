@@ -16,6 +16,7 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 mod error;
+pub mod ffi;
 pub mod lexicon;
 pub mod parser;
 pub mod tokenizer;
