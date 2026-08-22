@@ -64,6 +64,9 @@ kotlin {
             // OkHttp на Android: он уже есть в системе и умеет то, чего CIO
             // не умеет, — прозрачно ходить через системные настройки сети.
             implementation(libs.ktor.client.okhttp)
+            // Выбор файла на Android идёт через чужой экран, а его запуск
+            // регистрируется в композиции — это отсюда.
+            implementation(libs.androidx.activity.compose)
         }
 
         named("desktopMain").dependencies {

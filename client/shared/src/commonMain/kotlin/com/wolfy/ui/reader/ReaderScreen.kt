@@ -42,14 +42,14 @@ fun ReaderScreen(
     onSaveWord: () -> Unit,
     onPreviousChapter: () -> Unit,
     onNextChapter: () -> Unit,
+    onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = WolfyTheme.colors
-    val spacing = WolfyTheme.spacing
 
     Box(modifier.fillMaxSize().background(colors.paper)) {
         Column(Modifier.fillMaxSize()) {
-            ReaderTopBar(state)
+            ReaderTopBar(state, onClose = onClose)
 
             when {
                 state.error != null -> Message(state.error)
@@ -74,7 +74,7 @@ fun ReaderScreen(
 
 /** Шапка: глава и полоса прогресса чтения. */
 @Composable
-private fun ReaderTopBar(state: ReaderState) {
+private fun ReaderTopBar(state: ReaderState, onClose: () -> Unit) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
     val progress = if (state.chapterCount > 0) {
@@ -90,6 +90,13 @@ private fun ReaderTopBar(state: ReaderState) {
                 .padding(horizontal = spacing.pageMargin, vertical = spacing.small),
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
+            // Возврат в библиотеку — слева и текстом, а не значком: значок
+            // «назад» в шапке читалки читатели путают с переходом на
+            // предыдущую страницу, и промах стоит потерянного места в книге.
+            SectionLabel(
+                text = "‹ библиотека",
+                modifier = Modifier.clickable(onClick = onClose),
+            )
             SectionLabel(state.chapterTitle.ifBlank { state.bookTitle })
             SectionLabel("${(progress * 100).toInt()}%")
         }

@@ -5,6 +5,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.wolfy.data.TranslateResult
 import com.wolfy.data.WolfyApi
+import com.wolfy.data.library.Library
+import com.wolfy.data.library.LibraryBook
 import com.wolfy.ffi.Chapter
 import com.wolfy.ffi.CoreException
 import com.wolfy.ffi.ParsedText
@@ -73,7 +75,11 @@ data class ReaderBlock(
 class ReaderViewModel(
     private val core: WolfyCore,
     private val api: WolfyApi,
+    private val library: Library,
 ) : ViewModel() {
+
+    /** Книга, открытая сейчас. По ней читалка отчитывается библиотеке. */
+    private var bookId: String? = null
 
     private val _state = MutableStateFlow(ReaderState())
     val state: StateFlow<ReaderState> = _state.asStateFlow()
@@ -84,20 +90,38 @@ class ReaderViewModel(
     /** Запрос перевода для текущей карточки — новый тап отменяет предыдущий. */
     private var translationJob: Job? = null
 
-    /** Открывает книгу и показывает первую главу. */
-    fun open(path: String) {
+    /**
+     * Открывает книгу библиотеки на том месте, где читатель остановился.
+     *
+     * Название и число глав ядро узнаёт только сейчас — при добавлении книги
+     * их взять было неоткуда. Поэтому библиотека их и получает здесь, а не при
+     * импорте: разбирать книгу дважды ради строчки в списке незачем.
+     */
+    fun open(book: LibraryBook) {
+        closeCurrent()
+        bookId = book.id
+
         viewModelScope.launch {
-            _state.update { it.copy(loading = true, error = null) }
+            _state.update {
+                ReaderState(loading = true, savedLemmas = book.deck.toSet())
+            }
             try {
-                val opened = withContext(Dispatchers.Default) { core.openBook(path) }
+                val opened = withContext(Dispatchers.Default) { core.openBook(book.path) }
                 handle = opened.handle
+                val title = opened.info.title?.takeIf { it.isNotBlank() } ?: book.title
                 _state.update {
                     it.copy(
-                        bookTitle = opened.info.title ?: "Без названия",
+                        bookTitle = title,
                         chapterCount = opened.info.chapters.size,
                     )
                 }
-                loadChapter(0)
+                library.describe(
+                    id = book.id,
+                    title = title,
+                    author = opened.info.author,
+                    chapters = opened.info.chapters.size,
+                )
+                loadChapter(book.progress.chapter.coerceIn(0, (opened.info.chapters.size - 1).coerceAtLeast(0)))
             } catch (e: CoreException) {
                 _state.update {
                     it.copy(loading = false, error = e.message ?: "книга не открылась")
@@ -125,6 +149,10 @@ class ReaderViewModel(
                         error = null,
                     )
                 }
+                // Место в книге запоминается сразу, а не при выходе: приложение
+                // на телефоне закрывают свайпом, и «сохраню потом» означает
+                // «не сохраню».
+                bookId?.let { library.rememberProgress(it, index, 0f) }
             } catch (e: CoreException) {
                 _state.update {
                     it.copy(loading = false, error = e.message ?: "глава не прочиталась")
@@ -200,12 +228,13 @@ class ReaderViewModel(
     /**
      * Кладёт слово в колоду книги.
      *
-     * Пока только локально: синхронизация с сервером появится вместе с
-     * остальной колодой. Важно, что подсветка на странице обновляется сразу —
-     * читатель должен видеть свой словарь на полосе.
+     * Колода живёт в библиотеке и переживает закрытие приложения. Подсветка на
+     * странице обновляется тем же кадром: читатель должен видеть свой словарь
+     * на полосе, а не после перезахода.
      */
     fun saveWord() {
         val card = _state.value.card ?: return
+        bookId?.let { library.saveWord(it, card.analysis.lemma) }
         _state.update {
             it.copy(
                 savedLemmas = it.savedLemmas + card.analysis.lemma,
@@ -214,10 +243,16 @@ class ReaderViewModel(
         }
     }
 
-    override fun onCleared() {
-        // Ядро держит файл книги, пока номер не закрыт.
+    /** Закрывает книгу, не закрывая экран, — перед открытием следующей. */
+    fun closeCurrent() {
         handle?.let(core::closeBook)
         handle = null
+        bookId = null
+    }
+
+    override fun onCleared() {
+        // Ядро держит файл книги, пока номер не закрыт.
+        closeCurrent()
         super.onCleared()
     }
 }

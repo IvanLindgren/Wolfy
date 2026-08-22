@@ -1,8 +1,11 @@
 package com.wolfy.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -14,24 +17,38 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.wolfy.data.WolfyApi
+import com.wolfy.data.library.Library
+import com.wolfy.data.library.LibraryBook
+import com.wolfy.data.library.createLibraryStore
 import com.wolfy.data.writeDemoBook
 import com.wolfy.ffi.CoreException
+import com.wolfy.ffi.WolfyCore
 import com.wolfy.ffi.createWolfyCore
+import com.wolfy.platform.PickedBook
+import com.wolfy.platform.rememberBookPicker
 import com.wolfy.theme.ReadingTheme
 import com.wolfy.theme.WolfyTheme
+import com.wolfy.ui.decks.DecksScreen
+import com.wolfy.ui.library.LibraryScreen
+import com.wolfy.ui.library.LibraryViewModel
+import com.wolfy.ui.library.ShelvesScreen
+import com.wolfy.ui.nav.BottomBar
+import com.wolfy.ui.nav.Section
 import com.wolfy.ui.reader.ReaderScreen
 import com.wolfy.ui.reader.ReaderViewModel
+import com.wolfy.ui.settings.SettingsScreen
 
 /**
  * Корень приложения.
  *
- * Пока экран один — читалка с демо-главой. Навигация, библиотека и колоды
- * появятся вокруг него, но именно этот экран отвечает на главный вопрос
- * продукта: открывается ли карточка слова мгновенно и не мешает ли она читать.
+ * Четыре раздела внизу и читалка внутри первого из них — так же, как на
+ * макете. Читалка не отдельный раздел намеренно: книгу открывают из библиотеки
+ * и в библиотеку же возвращаются, и делать из этого переход между равными
+ * разделами значит заставлять читателя помнить, где он был.
  *
- * @param serverUrl адрес сервиса. По умолчанию локальный: контекстный перевод
- *   идёт через свой сервер, потому что ключи провайдеров нельзя класть в
- *   приложение, которое можно распаковать.
+ * @param serverUrl адрес сервиса. Контекстный перевод идёт через свой сервер,
+ *   потому что ключи провайдеров нельзя класть в приложение, которое можно
+ *   распаковать.
  * @param sessionToken токен Читавука. Пока его нет, перевод честно скажет, что
  *   нужен вход, а чтение и разбор слов работают без него.
  */
@@ -39,16 +56,26 @@ import com.wolfy.ui.reader.ReaderViewModel
 fun WolfyApplication(
     serverUrl: String = "http://localhost:8080",
     sessionToken: String? = null,
-    theme: ReadingTheme = ReadingTheme.Paper,
+    initialTheme: ReadingTheme = ReadingTheme.Paper,
 ) {
+    var theme by remember { mutableStateOf(initialTheme) }
+
     WolfyTheme(theme = theme) {
         var failure by remember { mutableStateOf<String?>(null) }
 
-        val viewModel = remember {
+        val parts = remember {
             try {
-                ReaderViewModel(
-                    core = createWolfyCore(),
-                    api = WolfyApi(baseUrl = serverUrl, tokenProvider = { sessionToken }),
+                val core = createWolfyCore()
+                val library = Library(createLibraryStore())
+                Parts(
+                    core = core,
+                    library = library,
+                    reader = ReaderViewModel(
+                        core = core,
+                        api = WolfyApi(baseUrl = serverUrl, tokenProvider = { sessionToken }),
+                        library = library,
+                    ),
+                    catalogue = LibraryViewModel(library, core),
                 )
             } catch (e: CoreException) {
                 failure = e.message
@@ -57,25 +84,115 @@ fun WolfyApplication(
         }
 
         val message = failure
-        if (viewModel == null || message != null) {
+        if (parts == null || message != null) {
             CoreUnavailable(message ?: "ядро недоступно")
             return@WolfyTheme
         }
 
-        LaunchedEffect(viewModel) {
-            viewModel.open(writeDemoBook())
+        // Первый запуск: библиотека пуста, и вместо пустого экрана в неё
+        // кладётся демо-глава. Она проходит ровно тот же путь, что настоящая
+        // книга, — никакого отдельного «режима примера» в читалке нет.
+        LaunchedEffect(parts) {
+            if (parts.library.books.isEmpty()) {
+                parts.catalogue.import(
+                    PickedBook(path = writeDemoBook(), name = "Старая библиотека.txt"),
+                )
+            }
         }
 
-        val state by viewModel.state.collectAsState()
+        Shell(parts, theme = theme, onThemeChange = { theme = it }, serverUrl = serverUrl,
+            signedIn = sessionToken != null)
+    }
+}
 
-        ReaderScreen(
-            state = state,
-            onWordTap = viewModel::onWordTap,
-            onDismissCard = viewModel::dismissCard,
-            onSaveWord = viewModel::saveWord,
-            onPreviousChapter = viewModel::previousChapter,
-            onNextChapter = viewModel::nextChapter,
-        )
+/** Всё, что живёт столько же, сколько само приложение. */
+private class Parts(
+    val core: WolfyCore,
+    val library: Library,
+    val reader: ReaderViewModel,
+    val catalogue: LibraryViewModel,
+)
+
+@Composable
+private fun Shell(
+    parts: Parts,
+    theme: ReadingTheme,
+    onThemeChange: (ReadingTheme) -> Unit,
+    serverUrl: String,
+    signedIn: Boolean,
+) {
+    var section by remember { mutableStateOf(Section.Books) }
+    // Открытая книга — состояние оболочки, а не читалки: по ней оболочка
+    // решает, показывать библиотеку или страницу, и она же переживает переход
+    // в другой раздел и обратно.
+    var reading by remember { mutableStateOf<LibraryBook?>(null) }
+
+    val catalogue by parts.catalogue.state.collectAsState()
+    val readerState by parts.reader.state.collectAsState()
+
+    val open: (LibraryBook) -> Unit = { book ->
+        reading = book
+        section = Section.Books
+        parts.reader.open(book)
+    }
+
+    val pick = rememberBookPicker(onPicked = parts.catalogue::import)
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(WolfyTheme.colors.paper)
+            // Системные панели: газетная полоса доходит до края экрана, но
+            // текст под часами и жестовой полосой читать невозможно.
+            .systemBarsPadding(),
+    ) {
+        Box(Modifier.weight(1f)) {
+            when (section) {
+                Section.Books -> when (reading) {
+                    null -> LibraryScreen(
+                        state = catalogue,
+                        onOpen = open,
+                        onImport = pick,
+                    )
+
+                    else -> ReaderScreen(
+                        state = readerState,
+                        onWordTap = parts.reader::onWordTap,
+                        onDismissCard = parts.reader::dismissCard,
+                        onSaveWord = parts.reader::saveWord,
+                        onPreviousChapter = parts.reader::previousChapter,
+                        onNextChapter = parts.reader::nextChapter,
+                        onClose = {
+                            parts.reader.closeCurrent()
+                            reading = null
+                        },
+                    )
+                }
+
+                Section.Shelves -> ShelvesScreen(
+                    state = catalogue,
+                    onOpen = open,
+                    onCreateShelf = parts.catalogue::addShelf,
+                    onRemoveShelf = parts.catalogue::removeShelf,
+                    onMove = parts.catalogue::moveToShelf,
+                )
+
+                Section.Srs -> DecksScreen(
+                    books = catalogue.books,
+                    onOpenBook = open,
+                )
+
+                Section.More -> SettingsScreen(
+                    theme = theme,
+                    onThemeChange = onThemeChange,
+                    coreVersion = remember { runCatching { parts.core.version() }.getOrElse { "?" } },
+                    serverUrl = serverUrl,
+                    signedIn = signedIn,
+                )
+            }
+        }
+
+        BottomBar(selected = section, onSelect = { section = it })
     }
 }
 
