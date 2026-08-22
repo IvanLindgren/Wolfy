@@ -45,9 +45,28 @@ tasks.matching { it.name == "prepareAppResources" }.configureEach {
     dependsOn(copyCoreLibrary)
 }
 
+// JDK, которым собирается установщик.
+//
+// jpackage входит только в полный JDK, а запускают сборку обычно из-под той
+// урезанной сборки, что приносит с собой IDE. Toolchain решает это раз и
+// навсегда: Gradle возьмёт подходящий JDK или скачает его.
+//
+// Спрашиваем toolchain только когда действительно собирают установщик:
+// обращение к нему разрешает — и при необходимости качает — JDK прямо во время
+// конфигурации, и делать это ради `desktopRun` или тестов незачем.
+val packagingRequested = gradle.startParameter.taskNames.any { name ->
+    name.contains("package", ignoreCase = true) || name.contains("Distributable")
+}
+
 compose.desktop {
     application {
         mainClass = "com.wolfy.desktop.MainKt"
+
+        if (packagingRequested) {
+            javaHome = javaToolchains.launcherFor {
+                languageVersion.set(JavaLanguageVersion.of(17))
+            }.get().metadata.installationPath.asFile.absolutePath
+        }
 
         // Запуск из исходников: JNA ищет библиотеку там, куда её положила
         // задача выше. В установленном приложении она лежит рядом с

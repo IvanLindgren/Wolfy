@@ -171,14 +171,100 @@ object Drills {
         blocks: List<String>,
         extra: List<String> = emptyList(),
         seed: Int = card.id.hashCode(),
-    ): Drill = Drill(
-        cardId = card.id,
-        kind = DrillKind.Builder,
-        question = card.translation.ifBlank { "Соберите фразу" },
-        subject = card.context,
-        answer = card.surface,
-        pieces = shuffled(blocks + extra.take(3), seed),
+    ): Drill {
+        // Пока фраза крепкая, спрашивают одно слово: предлог или артикль,
+        // на которых держится смысл. Собирать всё предложение целиком в этот
+        // момент рано — так же, как рано вводить слово по памяти, пока его
+        // ещё узнают из четырёх вариантов.
+        if (card.hp >= ASSEMBLE_BELOW) {
+            marker(card.surface, seed)?.let { return gapDrill(card, it, seed) }
+        }
+
+        return Drill(
+            cardId = card.id,
+            kind = DrillKind.Builder,
+            question = card.translation.ifBlank { "Соберите фразу" },
+            subject = "",
+            answer = card.surface,
+            pieces = shuffled(blocks + extra.take(3), seed),
+        )
+    }
+
+    /**
+     * Служебные слова, годные в пропуск, — группами по смыслу.
+     *
+     * Варианты берутся из одной группы, и это главное. Выбор между «for» и
+     * «the» не спрашивает ни о чём: неверный вариант виден, не читая фразы.
+     * Выбор между «for» и «since» — настоящий, и промахиваются в нём ровно
+     * там, где промахиваются в жизни.
+     *
+     * Формы глагола сюда не входят намеренно: правдоподобно неверную форму
+     * без словаря спряжений не сделать, а спрашивать «has read / have read»
+     * наугад — значит когда-нибудь засчитать верный ответ за ошибку. Формы
+     * тренирует колода грамматики, где неверные варианты выверены тестом.
+     */
+    private val MARKERS: List<List<String>> = listOf(
+        listOf("a", "an", "the"),
+        listOf("in", "on", "at", "to"),
+        listOf("for", "since", "during", "until"),
+        listOf("with", "without", "by", "from"),
+        listOf("of", "about", "over", "under"),
+        listOf("some", "any", "every", "no"),
     )
+
+    /** Найденный пропуск: слово, его место в предложении и группа вариантов. */
+    private class Marker(val word: String, val at: IntRange, val group: List<String>)
+
+    private fun gapDrill(card: Card, marker: Marker, seed: Int): Drill {
+        val sentence = card.surface
+        val gapped = sentence.substring(0, marker.at.first) + "___" +
+            sentence.substring(marker.at.last + 1)
+        val options = listOf(marker.word) +
+            marker.group.filter { !it.equals(marker.word, ignoreCase = true) }
+
+        return Drill(
+            cardId = card.id,
+            kind = DrillKind.Gap,
+            question = card.translation.ifBlank { "Какое слово пропущено?" },
+            subject = gapped,
+            answer = marker.word,
+            pieces = shuffled(options.take(4), seed),
+        )
+    }
+
+    /**
+     * Ищет во фразе слово для пропуска.
+     *
+     * Берётся не первое подходящее, а выбранное по фразе: одно и то же
+     * предложение обязано спрашивать об одном и том же, иначе читатель
+     * запоминает не язык, а то, что «здесь всегда первый пропуск».
+     */
+    private fun marker(sentence: String, seed: Int): Marker? {
+        val found = mutableListOf<Marker>()
+        var at = 0
+        while (at < sentence.length) {
+            if (!sentence[at].isLetter()) {
+                at++
+                continue
+            }
+            var end = at
+            while (end < sentence.length && (sentence[end].isLetter() || sentence[end] == '\'')) end++
+            val word = sentence.substring(at, end)
+            val group = MARKERS.firstOrNull { group ->
+                group.any { it.equals(word, ignoreCase = true) }
+            }
+            // Слово в начале фразы не берём: пропуск первым словом съедает
+            // заглавную букву и подсказывает ответ формой строки. Группа из
+            // трёх — это артикли, и трёх вариантов там достаточно: четвёртый
+            // пришлось бы взять из чужой группы, а он виден, не читая фразы.
+            if (group != null && group.size >= 3 && at > 0) {
+                found += Marker(word, at until end, group)
+            }
+            at = end + 1
+        }
+        if (found.isEmpty()) return null
+        return found[Lcg(seed).next(found.size)]
+    }
 
     /** Задание по правилу — целиком из ядра. */
     fun forRule(exercise: Exercise, cardId: String): Drill = Drill(

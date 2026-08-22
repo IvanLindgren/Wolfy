@@ -14,6 +14,18 @@ pluginManagement {
     }
 }
 
+// Скачивание JDK по требованию.
+//
+// Установщик под Windows собирает jpackage, а jpackage есть только в полном
+// JDK. На машине разработчика чаще всего стоит не он, а урезанная сборка из
+// Android Studio или IDEA — с ней собирается всё, кроме установщика, и
+// узнаётся об этом в последний момент. Плагин позволяет Gradle скачать нужный
+// JDK самому; на обычные сборки это не влияет, потому что до упаковки дело не
+// доходит.
+plugins {
+    id("org.gradle.toolchains.foojay-resolver-convention") version "0.9.0"
+}
+
 dependencyResolutionManagement {
     repositories {
         google()

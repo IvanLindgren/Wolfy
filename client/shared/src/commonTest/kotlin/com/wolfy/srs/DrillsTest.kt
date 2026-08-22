@@ -105,6 +105,59 @@ class DrillsTest {
         assertEquals(exercise.explanation, drill.explanation)
     }
 
+    private fun phrase(hp: Int) = Card(
+        id = "p1",
+        kind = "phrase",
+        surface = "I have been reading this book for a month.",
+        lemma = "I have been reading this book for a month.",
+        translation = "Я читаю эту книгу уже месяц.",
+        context = "I have been reading this book for a month.",
+        hp = hp,
+    )
+
+    @Test
+    fun крепкую_фразу_спрашивают_пропуском_а_слабую_конструктором() {
+        val blocks = listOf("I", "have been reading", "this book", "for a month")
+
+        val gap = Drills.forPhrase(phrase(hp = 100), blocks)
+        assertEquals(DrillKind.Gap, gap.kind)
+        assertTrue(gap.subject.contains("___"), "пропуска нет: ${gap.subject}")
+        assertTrue(gap.pieces.contains(gap.answer), "верного варианта нет среди четырёх")
+        assertEquals(gap.pieces.size, gap.pieces.distinct().size, "повтор в вариантах")
+
+        assertEquals(DrillKind.Builder, Drills.forPhrase(phrase(hp = 40), blocks).kind)
+    }
+
+    @Test
+    fun варианты_пропуска_из_одной_смысловой_группы() {
+        // Выбор между «for» и «the» не спрашивает ни о чём: неверный вариант
+        // виден, не читая фразы.
+        val gap = Drills.forPhrase(phrase(hp = 100), emptyList())
+        val prepositions = setOf("for", "since", "during", "until")
+        val articles = setOf("a", "an", "the")
+        assertTrue(
+            gap.pieces.all { it in prepositions } || gap.pieces.all { it in articles },
+            "варианты из разных групп: ${gap.pieces}",
+        )
+    }
+
+    @Test
+    fun пропуск_во_фразе_не_прыгает() {
+        val first = Drills.forPhrase(phrase(hp = 100), emptyList())
+        val second = Drills.forPhrase(phrase(hp = 100), emptyList())
+        assertEquals(first.subject, second.subject)
+        assertEquals(first.pieces, second.pieces)
+    }
+
+    @Test
+    fun фраза_без_служебных_слов_остаётся_конструктором() {
+        val card = phrase(hp = 100).copy(
+            surface = "She smiled quietly",
+            lemma = "She smiled quietly",
+        )
+        assertEquals(DrillKind.Builder, Drills.forPhrase(card, listOf("She", "smiled", "quietly")).kind)
+    }
+
     @Test
     fun перемешивание_ничего_не_теряет() {
         val items = (1..10).toList()
