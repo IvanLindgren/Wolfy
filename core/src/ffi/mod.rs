@@ -39,7 +39,10 @@ use crate::lexicon::{analyze, Lexicon};
 use crate::parser::{self, Book};
 use crate::tokenizer::{split, tokenize};
 
-use dto::{BookDto, ChapterDto, FindingDto, GrammarDto, TextDto, TokenDto, WordDto};
+use dto::{
+    ArticleDto, BookDto, ChapterDto, FindingDto, GrammarDto, ReferenceDto, TextDto, TokenDto,
+    WordDto,
+};
 
 thread_local! {
     /// Описание последней ошибки в этом потоке.
@@ -143,6 +146,24 @@ pub unsafe extern "C" fn wolfy_explain(text: *const c_char) -> *mut c_char {
 
         to_json(&GrammarDto {
             findings: findings.iter().map(FindingDto::from).collect(),
+        })
+    })
+}
+
+/// Отдаёт справочник грамматики целиком.
+///
+/// Целиком, а не по статье: их два десятка, вместе они весят несколько
+/// килобайт, и ходить в ядро за каждой значило бы гонять границу FFI ради
+/// экономии, которой не видно.
+///
+/// Объяснения приходят от самих детекторов — тех же, что разбирают книгу.
+/// Поэтому справочник не может разойтись с тем, что читатель видит в карточке.
+#[no_mangle]
+pub extern "C" fn wolfy_grammar_reference() -> *mut c_char {
+    guard(|| {
+        let articles = crate::grammar::articles(Lexicon::embedded());
+        to_json(&ReferenceDto {
+            articles: articles.iter().map(ArticleDto::from).collect(),
         })
     })
 }
@@ -365,6 +386,25 @@ mod tests {
     fn версия_ядра_отдаётся() {
         let version = забрать(wolfy_version()).expect("версия есть");
         assert_eq!(version, crate::VERSION);
+    }
+
+    #[test]
+    fn справочник_приходит_json_ом() {
+        let json = забрать(wolfy_grammar_reference()).expect("справочник есть");
+        let value: serde_json::Value = serde_json::from_str(&json).expect("это JSON");
+
+        let articles = value["articles"].as_array().expect("список статей");
+        assert!(articles.len() >= 20, "статей всего {}", articles.len());
+
+        // Объяснение приходит от детектора, а не из отдельного текста — иначе
+        // справочник разошёлся бы с тем, что читатель видит в карточке.
+        let perfect = articles
+            .iter()
+            .find(|a| a["rule"] == "present-perfect")
+            .expect("статья про Present Perfect");
+        assert_eq!(perfect["formula"], "have/has + V3");
+        assert!(perfect["explanation"].as_str().is_some_and(|s| !s.is_empty()));
+        assert_eq!(perfect["topic"], "tenses");
     }
 
     #[test]

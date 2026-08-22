@@ -46,6 +46,7 @@ fun SettingsScreen(
     coreVersion: String,
     serverUrl: String,
     signedIn: Boolean,
+    onOpenReference: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = WolfyTheme.colors
@@ -66,6 +67,24 @@ fun SettingsScreen(
         )
         Rule(thick = true)
 
+        SectionLabel("Грамматика")
+        Text(
+            text = "Справочник →",
+            style = WolfyTheme.typography.button,
+            color = colors.accent,
+            modifier = Modifier
+                .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.huge))
+                .clickable(onClick = onOpenReference)
+                .padding(horizontal = spacing.large, vertical = spacing.small),
+        )
+        Text(
+            text = "Времена, залог, модальные, неличные формы и условные — с теми же " +
+                "объяснениями, что в карточке слова.",
+            style = WolfyTheme.typography.caption,
+            color = colors.inkMuted,
+        )
+
+        Rule()
         SectionLabel("Тема чтения")
         ThemePicker(selected = theme, onSelect = onThemeChange)
         Text(

@@ -39,6 +39,15 @@ interface WolfyCore {
     fun explain(sentence: String): List<Finding>
 
     /**
+     * Справочник грамматики целиком.
+     *
+     * Названия, формулы и объяснения приходят от тех же детекторов, что
+     * разбирают книгу, — поэтому справочник не может разойтись с тем, что
+     * читатель видит в карточке слова.
+     */
+    fun reference(): List<Article>
+
+    /**
      * Открывает книгу и возвращает её описание вместе с номером.
      *
      * Номер обязателен к закрытию через [closeBook]: пока книга открыта, ядро
@@ -134,6 +143,30 @@ data class Finding(
 
 @Serializable
 internal data class GrammarResult(val findings: List<Finding> = emptyList())
+
+/**
+ * Статья справочника.
+ *
+ * Пример и его перевод хранятся в ядре рядом с правилом: пример, оторванный
+ * от правила, устаревает первым.
+ */
+@Serializable
+data class Article(
+    val rule: String,
+    /** Раздел: `tenses`, `voice`, `modals`, `verbals`, `conditionals`. */
+    val topic: String,
+    val topicTitle: String,
+    val title: String,
+    val formula: String,
+    val explanation: String,
+    val example: String,
+    val translation: String,
+    /** Когда правило уместно — то, чего нет в разборе готовой фразы. */
+    val usage: String,
+)
+
+@Serializable
+internal data class ReferenceResult(val articles: List<Article> = emptyList())
 
 /** Факт о форме слова: «Число» — «множественное, окончание -s». */
 @Serializable

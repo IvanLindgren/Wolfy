@@ -11,7 +11,7 @@
 
 use serde::Serialize;
 
-use crate::grammar::Finding;
+use crate::grammar::{Article, Finding};
 use crate::lexicon::{Fact, PosSet, WordAnalysis};
 use crate::parser::{Block, Chapter, ChapterInfo, Metadata};
 use crate::tokenizer::{Sentence, Token, TokenKind};
@@ -171,6 +171,49 @@ impl From<&Finding> for FindingDto {
 #[serde(rename_all = "camelCase")]
 pub struct GrammarDto {
     pub findings: Vec<FindingDto>,
+}
+
+/// Статья справочника.
+///
+/// Название, формула и объяснение приходят от самих детекторов, а не из
+/// отдельного текста: справочник, написанный отдельно, расходится с движком на
+/// второй же правке.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArticleDto {
+    pub rule: &'static str,
+    /// Раздел: `tenses`, `voice`, `modals`, `verbals`, `conditionals`.
+    pub topic: &'static str,
+    pub topic_title: &'static str,
+    pub title: &'static str,
+    pub formula: &'static str,
+    pub explanation: String,
+    pub example: &'static str,
+    pub translation: &'static str,
+    /// Когда правило уместно — то, чего нет в разборе готовой фразы.
+    pub usage: &'static str,
+}
+
+impl From<&Article> for ArticleDto {
+    fn from(article: &Article) -> Self {
+        ArticleDto {
+            rule: article.rule,
+            topic: article.topic.code(),
+            topic_title: article.topic.title(),
+            title: article.title,
+            formula: article.formula,
+            explanation: article.explanation.clone(),
+            example: article.example,
+            translation: article.translation,
+            usage: article.usage,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReferenceDto {
+    pub articles: Vec<ArticleDto>,
 }
 
 /// Книга сразу после открытия: метаданные и оглавление.

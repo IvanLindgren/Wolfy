@@ -53,6 +53,7 @@ fun WordCardSheet(
     state: WordCardState?,
     onDismiss: () -> Unit,
     onSave: () -> Unit,
+    onOpenRule: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = WolfyTheme.colors
@@ -93,7 +94,7 @@ fun WordCardSheet(
             exit = slideOutVertically(targetOffsetY = { it }),
         ) {
             if (state != null) {
-                CardBody(state, onSave, onDismiss, maxHeight = maxCardHeight)
+                CardBody(state, onSave, onDismiss, onOpenRule, maxHeight = maxCardHeight)
             }
         }
     }
@@ -104,6 +105,7 @@ private fun CardBody(
     state: WordCardState,
     onSave: () -> Unit,
     onDismiss: () -> Unit,
+    onOpenRule: (String) -> Unit,
     maxHeight: Dp,
 ) {
     val colors = WolfyTheme.colors
@@ -160,7 +162,9 @@ private fun CardBody(
             if (state.grammar.isNotEmpty()) {
                 Rule()
                 SectionLabel("Грамматика предложения")
-                state.grammar.forEach { GrammarNote(it) }
+                state.grammar.forEach { finding ->
+                    GrammarNote(finding, onOpen = { onOpenRule(finding.rule) })
+                }
             }
 
             Rule()
@@ -286,7 +290,7 @@ private fun Translation(state: WordCardState) {
  * прочитает заголовок.
  */
 @Composable
-private fun GrammarNote(finding: Finding) {
+private fun GrammarNote(finding: Finding, onOpen: () -> Unit) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
     val typography = WolfyTheme.typography
@@ -295,6 +299,7 @@ private fun GrammarNote(finding: Finding) {
         Modifier
             .fillMaxWidth()
             .background(colors.paper, RoundedCornerShape(spacing.small))
+            .clickable(onClick = onOpen)
             .padding(spacing.small),
         verticalArrangement = Arrangement.spacedBy(spacing.tight),
     ) {
@@ -307,6 +312,14 @@ private fun GrammarNote(finding: Finding) {
             Text(text = finding.formula, style = typography.caption, color = colors.accent)
         }
         Text(text = finding.explanation, style = typography.caption, color = colors.inkMuted)
+        // Правило в карточке объяснено коротко, потому что читатель посреди
+        // книги. Захочет разобраться — справочник объяснит то же самое, но с
+        // примерами и советом, когда правило уместно.
+        Text(
+            text = "подробнее в справочнике →",
+            style = typography.caption,
+            color = colors.accent,
+        )
     }
 }
 

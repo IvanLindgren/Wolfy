@@ -39,6 +39,7 @@ import com.wolfy.ui.nav.BottomBar
 import com.wolfy.ui.nav.Section
 import com.wolfy.ui.reader.ReaderScreen
 import com.wolfy.ui.reader.ReaderViewModel
+import com.wolfy.ui.reference.ReferenceScreen
 import com.wolfy.ui.settings.SettingsScreen
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -149,6 +150,12 @@ private fun Shell(
     // в другой раздел и обратно.
     var reading by remember { mutableStateOf<LibraryBook?>(null) }
     val scope = rememberCoroutineScope()
+    // Открытый справочник. Пустая строка — открыт целиком, непустая — на
+    // конкретном правиле, ради которого его и позвали из карточки слова.
+    var reference by remember { mutableStateOf<String?>(null) }
+    // Справочник считается ядром один раз: два десятка статей, доли
+    // миллисекунды, но пересчитывать их на каждый кадр незачем.
+    val articles = remember { runCatching { parts.core.reference() }.getOrElse { emptyList() } }
 
     val catalogue by parts.catalogue.state.collectAsState()
     val readerState by parts.reader.state.collectAsState()
@@ -222,6 +229,11 @@ private fun Shell(
                             parts.reader.closeCurrent()
                             reading = null
                         },
+                        onOpenRule = { rule ->
+                            parts.reader.dismissCard()
+                            reference = rule
+                            section = Section.More
+                        },
                     )
                 }
 
@@ -239,17 +251,28 @@ private fun Shell(
                     onRemoveWord = parts.library::removeWord,
                 )
 
-                Section.More -> SettingsScreen(
-                    theme = theme,
-                    onThemeChange = onThemeChange,
-                    fontScale = fontScale,
-                    onFontScaleChange = onFontScaleChange,
-                    sync = syncStatus,
-                    onSyncNow = { scope.launch { parts.sync.sync() } },
-                    coreVersion = remember { runCatching { parts.core.version() }.getOrElse { "?" } },
-                    serverUrl = serverUrl,
-                    signedIn = signedIn,
-                )
+                Section.More -> when (val rule = reference) {
+                    null -> SettingsScreen(
+                        theme = theme,
+                        onThemeChange = onThemeChange,
+                        fontScale = fontScale,
+                        onFontScaleChange = onFontScaleChange,
+                        sync = syncStatus,
+                        onSyncNow = { scope.launch { parts.sync.sync() } },
+                        coreVersion = remember {
+                            runCatching { parts.core.version() }.getOrElse { "?" }
+                        },
+                        serverUrl = serverUrl,
+                        signedIn = signedIn,
+                        onOpenReference = { reference = "" },
+                    )
+
+                    else -> ReferenceScreen(
+                        articles = articles,
+                        openAt = rule.takeIf { it.isNotEmpty() },
+                        onBack = { reference = null },
+                    )
+                }
             }
         }
 

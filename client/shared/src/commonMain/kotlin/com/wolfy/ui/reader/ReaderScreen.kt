@@ -53,6 +53,7 @@ fun ReaderScreen(
     onClose: () -> Unit,
     onScrolled: (Float) -> Unit,
     onChapter: (Int) -> Unit,
+    onOpenRule: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = WolfyTheme.colors
@@ -95,6 +96,7 @@ fun ReaderScreen(
             state = state.card,
             onDismiss = onDismissCard,
             onSave = onSaveWord,
+            onOpenRule = onOpenRule,
         )
     }
 }
