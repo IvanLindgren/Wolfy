@@ -1,6 +1,8 @@
 package com.wolfy.ui.settings
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -14,6 +16,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.wolfy.theme.ReadingTheme
 import com.wolfy.theme.WolfyTheme
@@ -34,6 +38,8 @@ import com.wolfy.widgets.WolfySticker
 fun SettingsScreen(
     theme: ReadingTheme,
     onThemeChange: (ReadingTheme) -> Unit,
+    fontScale: Float,
+    onFontScaleChange: (Float) -> Unit,
     coreVersion: String,
     serverUrl: String,
     signedIn: Boolean,
@@ -62,6 +68,16 @@ fun SettingsScreen(
         Text(
             text = "Тема меняет и страницу, и весь интерфейс: читалка не должна " +
                 "выглядеть гостем в собственном приложении.",
+            style = WolfyTheme.typography.caption,
+            color = colors.inkMuted,
+        )
+
+        Rule()
+        SectionLabel("Размер текста")
+        FontScale(scale = fontScale, onChange = onFontScaleChange)
+        Text(
+            text = "Меняется только текст книги. Подписи интерфейса остаются как " +
+                "были: растянутые, они полезли бы друг на друга.",
             style = WolfyTheme.typography.caption,
             color = colors.inkMuted,
         )
@@ -108,6 +124,51 @@ fun SettingsScreen(
             }
         }
     }
+}
+
+/**
+ * Кегль читалки — тремя кнопками, а не ползунком.
+ *
+ * Ползунок даёт бесконечно много промежуточных значений, из которых читателю
+ * нужно одно из пяти. Шаг в десять процентов заметен глазом и попадается с
+ * первого раза, а «чуть-чуть больше» ползунком приходится ловить.
+ */
+@Composable
+private fun FontScale(scale: Float, onChange: (Float) -> Unit) {
+    val colors = WolfyTheme.colors
+    val spacing = WolfyTheme.spacing
+
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(spacing.medium),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        ScaleStep(label = "Aa −", enabled = scale > 0.8f) { onChange(scale - 0.1f) }
+        Text(
+            text = "${(scale * 100).toInt()}%",
+            style = WolfyTheme.typography.body,
+            color = colors.ink,
+            modifier = Modifier.weight(1f),
+            textAlign = TextAlign.Center,
+        )
+        ScaleStep(label = "Aa +", enabled = scale < 1.6f) { onChange(scale + 0.1f) }
+    }
+}
+
+@Composable
+private fun ScaleStep(label: String, enabled: Boolean, onClick: () -> Unit) {
+    val colors = WolfyTheme.colors
+    val spacing = WolfyTheme.spacing
+
+    Text(
+        text = label,
+        style = WolfyTheme.typography.button,
+        color = if (enabled) colors.ink else colors.rule,
+        modifier = Modifier
+            .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.huge))
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = spacing.large, vertical = spacing.small),
+    )
 }
 
 @Composable

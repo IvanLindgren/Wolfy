@@ -144,11 +144,11 @@ class Library(
         val next = change(_state.value)
         val stamped = next.copy(revision = next.revision + 1)
         _state.value = stamped
-        store.save(json.encodeToString(stamped))
+        store.save(RECORD, json.encodeToString(stamped))
     }
 
     private fun read(): LibraryState {
-        val saved = store.load() ?: return LibraryState()
+        val saved = store.load(RECORD) ?: return LibraryState()
         return try {
             json.decodeFromString(saved)
         } catch (e: Exception) {
@@ -162,6 +162,11 @@ class Library(
     private fun newId(): String = "b" + now().toString(16) + "-" + (idCounter++).toString(16)
 
     private var idCounter = 0
+
+    private companion object {
+        /** Имя записи в хранилище. */
+        const val RECORD = "library"
+    }
 }
 
 /** Текущее время в миллисекундах — платформы берут его по-разному. */

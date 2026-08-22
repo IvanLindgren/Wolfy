@@ -10,10 +10,12 @@ import java.io.File
  */
 internal class FileLibraryStore(private val directory: File) : LibraryStore {
 
-    private val index = File(directory, "library.json")
     private val books = File(directory, "books")
 
-    override fun load(): String? = index.takeIf { it.isFile }?.readText(Charsets.UTF_8)
+    private fun file(name: String) = File(directory, "$name.json")
+
+    override fun load(name: String): String? =
+        file(name).takeIf { it.isFile }?.readText(Charsets.UTF_8)
 
     /**
      * Запись через временный файл.
@@ -22,9 +24,10 @@ internal class FileLibraryStore(private val directory: File) : LibraryStore {
      * закроют посреди неё: файл уже обрезан, а новое содержимое ещё не
      * дописано. Переименование же на всех поддерживаемых системах атомарно.
      */
-    override fun save(json: String) {
+    override fun save(name: String, json: String) {
         directory.mkdirs()
-        val temporary = File(directory, "library.json.tmp")
+        val index = file(name)
+        val temporary = File(directory, "$name.json.tmp")
         temporary.writeText(json, Charsets.UTF_8)
         if (!temporary.renameTo(index)) {
             // На Windows переименование поверх существующего файла срывается.

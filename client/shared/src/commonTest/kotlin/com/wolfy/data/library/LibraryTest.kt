@@ -13,14 +13,14 @@ import kotlin.test.assertTrue
  * этого достаточно — библиотека его только запоминает.
  */
 private class FakeStore : LibraryStore {
-    var saved: String? = null
+    val records = mutableMapOf<String, String>()
     val deleted = mutableListOf<String>()
     var imports = 0
 
-    override fun load(): String? = saved
+    override fun load(name: String): String? = records[name]
 
-    override fun save(json: String) {
-        saved = json
+    override fun save(name: String, json: String) {
+        records[name] = json
     }
 
     override fun importBook(sourcePath: String, fileName: String): String {
@@ -83,7 +83,7 @@ class LibraryTest {
         // Падение на старте не оставило бы пользователю ничего. Пустая
         // библиотека хотя бы позволяет добавить книги заново.
         val store = FakeStore()
-        store.saved = "{ это не json"
+        store.records["library"] = "{ это не json"
 
         val library = library(store, Clock())
 

@@ -13,8 +13,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.first
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
@@ -43,6 +47,7 @@ fun ReaderScreen(
     onPreviousChapter: () -> Unit,
     onNextChapter: () -> Unit,
     onClose: () -> Unit,
+    onScrolled: (Float) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = WolfyTheme.colors
@@ -59,6 +64,7 @@ fun ReaderScreen(
                     onWordTap = onWordTap,
                     onPreviousChapter = onPreviousChapter,
                     onNextChapter = onNextChapter,
+                    onScrolled = onScrolled,
                     modifier = Modifier.weight(1f),
                 )
             }
@@ -122,14 +128,43 @@ private fun ChapterBody(
     onWordTap: (com.wolfy.ffi.Token, com.wolfy.ffi.ParsedText) -> Unit,
     onPreviousChapter: () -> Unit,
     onNextChapter: () -> Unit,
+    onScrolled: (Float) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val spacing = WolfyTheme.spacing
+    // Состояние прокрутки заводится на каждую главу заново: иначе, перейдя к
+    // следующей, читатель оказался бы в её середине.
+    val scroll = rememberLazyListState()
+
+    // Возвращение на место: один раз на открытие книги. Ждём, пока список
+    // сообщит, сколько в нём блоков, — до первой раскладки их ноль, и
+    // прокручивать некуда.
+    LaunchedEffect(scroll, state.chapterIndex, state.startAt) {
+        if (state.startAt <= 0f) return@LaunchedEffect
+        snapshotFlow { scroll.layoutInfo.totalItemsCount }
+            .first { it > 1 }
+            .let { total ->
+                scroll.scrollToItem((state.startAt * (total - 1)).toInt().coerceIn(0, total - 1))
+            }
+    }
+
+    LaunchedEffect(scroll, state.chapterIndex) {
+        snapshotFlow { scroll.firstVisibleItemIndex }
+            .collect { first ->
+                val total = scroll.layoutInfo.totalItemsCount
+                // Доля считается по номеру первого видимого блока, а не по
+                // пикселям: блоки разной высоты, и точность в пикселях всё
+                // равно была бы обманчивой. Для «вернуться туда же» хватает
+                // и такой.
+                if (total > 1) onScrolled(first.toFloat() / (total - 1))
+            }
+    }
 
     // Ленивый список, а не прокручиваемая колонка: глава романа — это сотни
     // абзацев, и рисовать их все разом значит держать кадр несколько секунд.
     LazyColumn(
         modifier.fillMaxSize(),
+        state = scroll,
         contentPadding = PaddingValues(
             start = spacing.pageMargin,
             end = spacing.pageMargin,

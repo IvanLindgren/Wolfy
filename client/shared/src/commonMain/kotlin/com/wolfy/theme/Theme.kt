@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.ProvidableCompositionLocal
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -77,14 +78,21 @@ val LocalWolfySpacing: ProvidableCompositionLocal<WolfySpacing> =
  * Оборачивает интерфейс в выбранную тему.
  *
  * @param theme тема оформления, выбранная читателем в настройках.
+ * @param fontScale множитель кегля читалки. Растягивает только текст книги:
+ *   интерфейс от него не меняется, иначе подписи полезли бы друг на друга, а
+ *   читателю нужен крупнее именно текст.
  */
 @Composable
 fun WolfyTheme(
     theme: ReadingTheme = ReadingTheme.Paper,
+    fontScale: Float = 1f,
     content: @Composable () -> Unit,
 ) {
     val fonts = rememberWolfyFonts()
-    val typography = rememberWolfyTypography(fonts)
+    val base = rememberWolfyTypography(fonts)
+    val typography = remember(base, fontScale) {
+        if (fontScale == 1f) base else base.scaledForReading(fontScale)
+    }
 
     CompositionLocalProvider(
         LocalWolfyColors provides theme.colors,

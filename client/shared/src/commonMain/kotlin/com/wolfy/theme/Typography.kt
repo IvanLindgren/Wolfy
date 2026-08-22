@@ -162,3 +162,28 @@ fun rememberWolfyTypography(fonts: WolfyFonts): WolfyTypography = WolfyTypograph
         fontSize = 15.sp,
     ),
 )
+
+/**
+ * Тот же набор, но с укрупнённым текстом книги.
+ *
+ * Меняются три стиля: сам текст, буквица и перевод под ней. Заголовки и
+ * подписи интерфейса остаются как были — они и так подобраны под сетку, а
+ * растянутый заголовок главы просто перестал бы помещаться в строку.
+ *
+ * Межстрочный интервал умножается вместе с кеглем: набор, где вырос кегль, но
+ * не выросли пробелы между строками, читается хуже мелкого.
+ */
+internal fun WolfyTypography.scaledForReading(scale: Float): WolfyTypography = copy(
+    reader = reader.copy(
+        fontSize = reader.fontSize * scale,
+        lineHeight = reader.lineHeight * scale,
+    ),
+    translation = translation.copy(
+        fontSize = translation.fontSize * scale,
+        lineHeight = translation.lineHeight * scale,
+    ),
+    chapterTitle = chapterTitle.copy(
+        fontSize = chapterTitle.fontSize * scale,
+        lineHeight = chapterTitle.lineHeight * scale,
+    ),
+)

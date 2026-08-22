@@ -42,6 +42,13 @@ data class ReaderState(
     /** Начальные формы слов, уже сохранённых в колоду этой книги. */
     val savedLemmas: Set<String> = emptySet(),
     val card: WordCardState? = null,
+    /**
+     * Доля главы, с которой надо начать показ.
+     *
+     * Нужна ровно один раз — при открытии книги, чтобы вернуть читателя туда,
+     * где он остановился. Дальше прокруткой распоряжается он сам.
+     */
+    val startAt: Float = 0f,
     val error: String? = null,
 ) {
     val hasPrevious: Boolean get() = chapterIndex > 0
@@ -90,6 +97,9 @@ class ReaderViewModel(
     /** Запрос перевода для текущей карточки — новый тап отменяет предыдущий. */
     private var translationJob: Job? = null
 
+    /** Последняя записанная доля главы — по ней отсекается лишняя запись. */
+    private var lastReportedPlace: Float? = null
+
     /**
      * Открывает книгу библиотеки на том месте, где читатель остановился.
      *
@@ -103,7 +113,11 @@ class ReaderViewModel(
 
         viewModelScope.launch {
             _state.update {
-                ReaderState(loading = true, savedLemmas = book.deck.toSet())
+                ReaderState(
+                    loading = true,
+                    savedLemmas = book.deck.toSet(),
+                    startAt = book.progress.withinChapter,
+                )
             }
             try {
                 val opened = withContext(Dispatchers.Default) { core.openBook(book.path) }
@@ -152,7 +166,11 @@ class ReaderViewModel(
                 // Место в книге запоминается сразу, а не при выходе: приложение
                 // на телефоне закрывают свайпом, и «сохраню потом» означает
                 // «не сохраню».
-                bookId?.let { library.rememberProgress(it, index, 0f) }
+                // Переход к другой главе начинает её с начала: место внутри
+                // главы имеет смысл только для той главы, где его записали.
+                val restore = _state.value.startAt.takeIf { it > 0f } ?: 0f
+                lastReportedPlace = restore
+                bookId?.let { library.rememberProgress(it, index, restore) }
             } catch (e: CoreException) {
                 _state.update {
                     it.copy(loading = false, error = e.message ?: "глава не прочиталась")
@@ -243,11 +261,28 @@ class ReaderViewModel(
         }
     }
 
+    /**
+     * Запоминает, докуда читатель долистал главу.
+     *
+     * Зовётся при прокрутке, то есть часто, и потому не пишет ничего, пока
+     * доля не изменилась заметно. Без этого порога библиотека переписывалась
+     * бы на каждый кадр прокрутки — сотню раз в секунду ради значения,
+     * которое всё равно меняется медленно.
+     */
+    fun rememberPlace(withinChapter: Float) {
+        val id = bookId ?: return
+        val previous = lastReportedPlace
+        if (previous != null && kotlin.math.abs(previous - withinChapter) < 0.02f) return
+        lastReportedPlace = withinChapter
+        library.rememberProgress(id, _state.value.chapterIndex, withinChapter)
+    }
+
     /** Закрывает книгу, не закрывая экран, — перед открытием следующей. */
     fun closeCurrent() {
         handle?.let(core::closeBook)
         handle = null
         bookId = null
+        lastReportedPlace = null
     }
 
     override fun onCleared() {

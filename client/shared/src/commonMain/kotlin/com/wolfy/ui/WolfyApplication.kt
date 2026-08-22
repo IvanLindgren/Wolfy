@@ -16,6 +16,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import com.wolfy.data.Settings
 import com.wolfy.data.WolfyApi
 import com.wolfy.data.library.Library
 import com.wolfy.data.library.LibraryBook
@@ -56,38 +57,44 @@ import com.wolfy.ui.settings.SettingsScreen
 fun WolfyApplication(
     serverUrl: String = "http://localhost:8080",
     sessionToken: String? = null,
-    initialTheme: ReadingTheme = ReadingTheme.Paper,
 ) {
-    var theme by remember { mutableStateOf(initialTheme) }
+    var failure by remember { mutableStateOf<String?>(null) }
 
-    WolfyTheme(theme = theme) {
-        var failure by remember { mutableStateOf<String?>(null) }
-
-        val parts = remember {
-            try {
-                val core = createWolfyCore()
-                val library = Library(createLibraryStore())
-                Parts(
+    val parts = remember {
+        try {
+            val core = createWolfyCore()
+            val store = createLibraryStore()
+            val library = Library(store)
+            Parts(
+                core = core,
+                library = library,
+                settings = Settings(store),
+                reader = ReaderViewModel(
                     core = core,
+                    api = WolfyApi(baseUrl = serverUrl, tokenProvider = { sessionToken }),
                     library = library,
-                    reader = ReaderViewModel(
-                        core = core,
-                        api = WolfyApi(baseUrl = serverUrl, tokenProvider = { sessionToken }),
-                        library = library,
-                    ),
-                    catalogue = LibraryViewModel(library, core),
-                )
-            } catch (e: CoreException) {
-                failure = e.message
-                null
-            }
+                ),
+                catalogue = LibraryViewModel(library, core),
+            )
+        } catch (e: CoreException) {
+            failure = e.message
+            null
         }
+    }
 
-        val message = failure
-        if (parts == null || message != null) {
+    val message = failure
+    if (parts == null || message != null) {
+        // Тема здесь ещё не прочитана — хранилище могло не открыться вместе с
+        // ядром. Светлая подходит всем и не мешает прочитать сообщение.
+        WolfyTheme(theme = ReadingTheme.Paper) {
             CoreUnavailable(message ?: "ядро недоступно")
-            return@WolfyTheme
         }
+        return
+    }
+
+    val settings by parts.settings.state.collectAsState()
+
+    WolfyTheme(theme = settings.readingTheme, fontScale = settings.fontScale) {
 
         // Первый запуск: библиотека пуста, и вместо пустого экрана в неё
         // кладётся демо-глава. Она проходит ровно тот же путь, что настоящая
@@ -100,8 +107,15 @@ fun WolfyApplication(
             }
         }
 
-        Shell(parts, theme = theme, onThemeChange = { theme = it }, serverUrl = serverUrl,
-            signedIn = sessionToken != null)
+        Shell(
+            parts = parts,
+            theme = settings.readingTheme,
+            fontScale = settings.fontScale,
+            onThemeChange = parts.settings::setTheme,
+            onFontScaleChange = parts.settings::setFontScale,
+            serverUrl = serverUrl,
+            signedIn = sessionToken != null,
+        )
     }
 }
 
@@ -109,6 +123,7 @@ fun WolfyApplication(
 private class Parts(
     val core: WolfyCore,
     val library: Library,
+    val settings: Settings,
     val reader: ReaderViewModel,
     val catalogue: LibraryViewModel,
 )
@@ -117,7 +132,9 @@ private class Parts(
 private fun Shell(
     parts: Parts,
     theme: ReadingTheme,
+    fontScale: Float,
     onThemeChange: (ReadingTheme) -> Unit,
+    onFontScaleChange: (Float) -> Unit,
     serverUrl: String,
     signedIn: Boolean,
 ) {
@@ -162,6 +179,7 @@ private fun Shell(
                         onSaveWord = parts.reader::saveWord,
                         onPreviousChapter = parts.reader::previousChapter,
                         onNextChapter = parts.reader::nextChapter,
+                        onScrolled = parts.reader::rememberPlace,
                         onClose = {
                             parts.reader.closeCurrent()
                             reading = null
@@ -185,6 +203,8 @@ private fun Shell(
                 Section.More -> SettingsScreen(
                     theme = theme,
                     onThemeChange = onThemeChange,
+                    fontScale = fontScale,
+                    onFontScaleChange = onFontScaleChange,
                     coreVersion = remember { runCatching { parts.core.version() }.getOrElse { "?" } },
                     serverUrl = serverUrl,
                     signedIn = signedIn,
