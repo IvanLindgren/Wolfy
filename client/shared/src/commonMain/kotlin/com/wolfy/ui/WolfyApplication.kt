@@ -34,10 +34,13 @@ import com.wolfy.platform.fileDropTarget
 import com.wolfy.platform.fileNameOf
 import com.wolfy.platform.looksLikePhoto
 import com.wolfy.platform.readBytes
+import com.wolfy.platform.rememberReminderPermission
 import com.wolfy.platform.rememberBookPicker
 import com.wolfy.platform.rememberPhotoPicker
 import com.wolfy.theme.ReadingTheme
 import com.wolfy.theme.WolfyTheme
+import com.wolfy.srs.Deck
+import com.wolfy.srs.TrainingViewModel
 import com.wolfy.ui.decks.DecksScreen
 import com.wolfy.ui.library.LibraryScreen
 import com.wolfy.ui.library.LibraryViewModel
@@ -48,6 +51,8 @@ import com.wolfy.ui.reader.ReaderScreen
 import com.wolfy.ui.reader.ReaderViewModel
 import com.wolfy.ui.reference.ReferenceScreen
 import com.wolfy.ui.settings.SettingsScreen
+import com.wolfy.ui.srs.SrsScreen
+import com.wolfy.ui.srs.TrainingScreen
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -94,6 +99,7 @@ fun WolfyApplication(
                 sync = SyncService(library, settings, api),
                 reader = ReaderViewModel(core = core, api = api, library = library),
                 catalogue = LibraryViewModel(library, core, api),
+                training = TrainingViewModel(library, settings, core),
             )
         } catch (e: CoreException) {
             failure = e.message
@@ -148,6 +154,7 @@ private class Parts(
     val sync: SyncService,
     val reader: ReaderViewModel,
     val catalogue: LibraryViewModel,
+    val training: TrainingViewModel,
 )
 
 @Composable
@@ -176,6 +183,14 @@ private fun Shell(
 
     val catalogue by parts.catalogue.state.collectAsState()
     val readerState by parts.reader.state.collectAsState()
+    val hub by parts.training.hub.collectAsState()
+    val training by parts.training.training.collectAsState()
+    // Разрешение на уведомления спрашивается перед первой тренировкой, а не
+    // при запуске: системный диалог показывают один раз за установку, и
+    // потратить его на пустой экран — значит не получить разрешения никогда.
+    val askForNotifications = rememberReminderPermission()
+    // Список слов по книгам: он подробнее хаба и потому лежит под ним.
+    var decksOpen by remember { mutableStateOf(false) }
 
     // Книга, которой не хватает файла: она приехала синхронизацией, и читатель
     // сейчас покажет, где держит его на этом устройстве.
@@ -257,6 +272,7 @@ private fun Shell(
                         onWordTap = parts.reader::onWordTap,
                         onDismissCard = parts.reader::dismissCard,
                         onSaveWord = parts.reader::toggleWord,
+                        onSavePhrase = parts.reader::savePhrase,
                         onPreviousChapter = parts.reader::previousChapter,
                         onNextChapter = parts.reader::nextChapter,
                         onScrolled = parts.reader::rememberPlace,
@@ -281,11 +297,31 @@ private fun Shell(
                     onMove = parts.catalogue::moveToShelf,
                 )
 
-                Section.Srs -> DecksScreen(
-                    state = catalogue,
-                    onOpenBook = open,
-                    onRemoveWord = parts.library::removeWord,
-                )
+                Section.Srs -> when {
+                    training.running -> TrainingScreen(
+                        state = training,
+                        onAnswer = parts.training::answer,
+                        onNext = parts.training::next,
+                        onClose = parts.training::stop,
+                    )
+
+                    decksOpen -> DecksScreen(
+                        state = catalogue,
+                        onOpenBook = open,
+                        onRemoveWord = parts.library::removeWord,
+                        onBack = { decksOpen = false },
+                    )
+
+                    else -> SrsScreen(
+                        state = hub,
+                        onTrain = { deck: Deck ->
+                            askForNotifications()
+                            parts.training.start(deck)
+                        },
+                        onIntensity = parts.training::setIntensity,
+                        onOpenDecks = { decksOpen = true },
+                    )
+                }
 
                 Section.More -> when (val rule = reference) {
                     null -> SettingsScreen(

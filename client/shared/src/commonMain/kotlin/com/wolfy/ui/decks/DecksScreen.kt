@@ -45,15 +45,16 @@ import com.wolfy.widgets.WolfySticker
  * вспоминаются вместе с «Гэтсби», и повторять их вперемешку со словами из
  * учебника — значит лишить их единственной зацепки, которая у них есть.
  *
- * Механика повторений появится здесь же. Пока экран отвечает на вопрос
- * «сколько я набрал и из чего» — и этого достаточно, чтобы захотеть набрать
- * ещё.
+ * Экран отвечает на вопрос «сколько я набрал и из чего». Тренировка живёт
+ * этажом выше, в [com.wolfy.ui.srs.SrsScreen]: туда заходят заниматься, сюда —
+ * посмотреть на собранное и убрать лишнее.
  */
 @Composable
 fun DecksScreen(
     state: LibraryUiState,
     onOpenBook: (LibraryBook) -> Unit,
     onRemoveWord: (bookId: String, lemma: String) -> Unit,
+    onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = WolfyTheme.colors
@@ -74,7 +75,13 @@ fun DecksScreen(
         item {
             Column(verticalArrangement = Arrangement.spacedBy(spacing.small)) {
                 Text(
-                    text = "Повторения",
+                    text = "← К повторениям",
+                    style = WolfyTheme.typography.caption,
+                    color = colors.accent,
+                    modifier = Modifier.clickable(onClick = onBack),
+                )
+                Text(
+                    text = "Слова по книгам",
                     style = WolfyTheme.typography.screenTitle,
                     color = colors.ink,
                 )

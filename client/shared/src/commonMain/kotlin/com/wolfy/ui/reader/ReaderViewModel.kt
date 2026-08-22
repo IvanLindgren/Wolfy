@@ -315,6 +315,27 @@ class ReaderViewModel(
     }
 
     /**
+     * Кладёт в колоду всё предложение.
+     *
+     * Фраза сохраняется вместе со своим переводом — тем самым, что уже пришёл
+     * с сервера для контекста. Без перевода конструктор фраз показывать нечего:
+     * задание в нём начинается с русской строки, и собрать английскую «по
+     * памяти о том, что там было» нельзя.
+     *
+     * Поэтому кнопка и не предлагается, пока перевод предложения не приехал, —
+     * см. [WordCardState.translation].
+     */
+    fun savePhrase() {
+        val card = _state.value.card ?: return
+        val id = bookId ?: return
+        val translation = (card.translation as? TranslationState.Ready)?.context.orEmpty()
+        if (translation.isBlank()) return
+
+        library.savePhrase(bookId = id, sentence = card.context, translation = translation)
+        _state.update { it.copy(card = card.copy(phraseSaved = true)) }
+    }
+
+    /**
      * Запоминает, докуда читатель долистал главу.
      *
      * Зовётся при прокрутке, то есть часто, и потому не пишет ничего, пока

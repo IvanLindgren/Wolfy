@@ -48,6 +48,7 @@ fun ReaderScreen(
     onWordTap: (com.wolfy.ffi.Token, com.wolfy.ffi.ParsedText) -> Unit,
     onDismissCard: () -> Unit,
     onSaveWord: () -> Unit,
+    onSavePhrase: () -> Unit,
     onPreviousChapter: () -> Unit,
     onNextChapter: () -> Unit,
     onClose: () -> Unit,
@@ -96,6 +97,7 @@ fun ReaderScreen(
             state = state.card,
             onDismiss = onDismissCard,
             onSave = onSaveWord,
+            onSavePhrase = onSavePhrase,
             onOpenRule = onOpenRule,
         )
     }

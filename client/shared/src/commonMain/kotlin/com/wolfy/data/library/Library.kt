@@ -225,6 +225,90 @@ class Library(
         return card
     }
 
+    /**
+     * Кладёт в колоду фразу целиком.
+     *
+     * Фраза хранится той же карточкой, что слово: у неё те же прочность, срок
+     * и серия, и заводить ради неё вторую сущность значит писать вторую
+     * синхронизацию, вторую миграцию и второй экран. Отличает её `kind`.
+     *
+     * Ключ — сама фраза: одно и то же предложение из одной книги сохраняется
+     * один раз, сколько бы раз читатель по нему ни нажал.
+     */
+    fun savePhrase(bookId: String, sentence: String, translation: String): Card? {
+        val text = sentence.trim()
+        if (text.isEmpty()) return null
+
+        val existing = _state.value.cards.firstOrNull {
+            it.bookId == bookId && it.kind == PHRASE && it.surface == text
+        }
+        if (existing != null) {
+            if (existing.deleted) {
+                editCard(existing.id) { it.copy(deleted = false) }
+                return existing.copy(deleted = false)
+            }
+            return existing
+        }
+
+        val card = Card(
+            id = newId(),
+            bookId = bookId,
+            kind = PHRASE,
+            surface = text,
+            // Начальная форма у фразы — она сама: искать её не по чему, а
+            // пустое поле сломало бы всех, кто по нему показывает карточку.
+            lemma = text,
+            translation = translation.trim(),
+            context = text,
+            dueAt = now(),
+            addedAt = now(),
+        )
+        update { it.copy(cards = it.cards + card) }
+        return card
+    }
+
+    /**
+     * Карточка правила — заводится в тот момент, когда правило впервые
+     * спросили.
+     *
+     * Заранее их не создают: правил под шесть десятков, и завести все разом
+     * значило бы отправить на сервер колоду, которой читатель не заказывал, и
+     * показать ему шесть десятков «к повторению» в первый же день.
+     */
+    fun ruleCard(rule: String, title: String): Card {
+        val existing = _state.value.cards.firstOrNull { it.kind == RULE && it.lemma == rule }
+        if (existing != null) {
+            if (existing.deleted) {
+                editCard(existing.id) { it.copy(deleted = false) }
+                return existing.copy(deleted = false)
+            }
+            return existing
+        }
+
+        val card = Card(
+            id = newId(),
+            kind = RULE,
+            surface = title,
+            lemma = rule,
+            dueAt = now(),
+            addedAt = now(),
+        )
+        update { it.copy(cards = it.cards + card) }
+        return card
+    }
+
+    /**
+     * Меняет карточку после ответа.
+     *
+     * Само расписание живёт в [com.wolfy.srs.Scheduler] и о библиотеке не
+     * знает — оно чистое и потому проверяемое. Библиотека же не знает о
+     * расписании: её дело — записать то, что посчитали, и разослать
+     * подписчикам.
+     */
+    fun updateCard(id: String, change: (Card) -> Card) {
+        editCard(id, change)
+    }
+
     fun removeWord(bookId: String, lemma: String) {
         val card = _state.value.cards
             .firstOrNull { it.bookId == bookId && it.lemma == lemma && !it.deleted }
@@ -447,6 +531,9 @@ class Library(
         id.length == 36 && id.count { it == '-' } == 4
 
     private companion object {
+        const val PHRASE = "phrase"
+        const val RULE = "rule"
+
         /** Имя записи в хранилище. */
         const val RECORD = "library"
 

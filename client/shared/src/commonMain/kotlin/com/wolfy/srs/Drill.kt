@@ -3,11 +3,19 @@ package com.wolfy.srs
 import com.wolfy.data.library.Card
 import com.wolfy.ffi.Exercise
 
-/** Три колоды хаба повторений. */
-enum class Deck(val title: String, val subtitle: String) {
-    Words("Слова", "из книг, которые вы читаете"),
-    Phrases("Фразы", "устойчивые обороты"),
-    Rules("Грамматика", "правила и конструкции"),
+/**
+ * Три колоды хаба повторений.
+ *
+ * @param kind значение `kind` карточки — по нему колода и набирается. Имя
+ *   хранится строкой в самой карточке и уезжает на сервер, поэтому оно задано
+ *   здесь рядом с колодой, а не выводится из имени элемента перечисления:
+ *   переименовать `Words` в коде можно, а переименовать `word` в чужой базе —
+ *   уже нет.
+ */
+enum class Deck(val title: String, val subtitle: String, val kind: String) {
+    Words("Слова", "к повторению сегодня", "word"),
+    Phrases("Фразы", "устойчивые обороты", "phrase"),
+    Rules("Грамматика", "правила и конструкции", "rule"),
 }
 
 /**

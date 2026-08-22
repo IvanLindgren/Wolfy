@@ -53,6 +53,7 @@ fun WordCardSheet(
     state: WordCardState?,
     onDismiss: () -> Unit,
     onSave: () -> Unit,
+    onSavePhrase: () -> Unit,
     onOpenRule: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -94,7 +95,14 @@ fun WordCardSheet(
             exit = slideOutVertically(targetOffsetY = { it }),
         ) {
             if (state != null) {
-                CardBody(state, onSave, onDismiss, onOpenRule, maxHeight = maxCardHeight)
+                CardBody(
+                    state = state,
+                    onSave = onSave,
+                    onSavePhrase = onSavePhrase,
+                    onDismiss = onDismiss,
+                    onOpenRule = onOpenRule,
+                    maxHeight = maxCardHeight,
+                )
             }
         }
     }
@@ -104,6 +112,7 @@ fun WordCardSheet(
 private fun CardBody(
     state: WordCardState,
     onSave: () -> Unit,
+    onSavePhrase: () -> Unit,
     onDismiss: () -> Unit,
     onOpenRule: (String) -> Unit,
     maxHeight: Dp,
@@ -172,6 +181,7 @@ private fun CardBody(
             FrequencyBar(state.analysis.zipf)
 
             SaveButton(saved = state.saved, onSave = onSave)
+            PhraseButton(state = state, onSave = onSavePhrase)
         }
     }
 }
@@ -355,6 +365,34 @@ private fun FrequencyBar(zipf: Float) {
             Text("часто", style = WolfyTheme.typography.caption, color = colors.inkMuted)
         }
     }
+}
+
+/**
+ * Сохранить всё предложение в колоду фраз.
+ *
+ * Появляется только когда перевод предложения уже пришёл: конструктор фраз
+ * спрашивает по-русски, и фраза без русской строки была бы карточкой, которую
+ * невозможно показать.
+ *
+ * Строкой, а не второй чёрной кнопкой: главное действие карточки одно — «в
+ * колоду книги», — и две одинаковые кнопки подряд заставляли бы выбирать там,
+ * где выбирать не нужно.
+ */
+@Composable
+private fun PhraseButton(state: WordCardState, onSave: () -> Unit) {
+    val colors = WolfyTheme.colors
+    val ready = (state.translation as? TranslationState.Ready)?.context.orEmpty()
+    if (ready.isBlank()) return
+
+    Text(
+        text = if (state.phraseSaved) "Фраза в колоде ✓" else "+ Сохранить фразу целиком",
+        style = WolfyTheme.typography.caption,
+        color = if (state.phraseSaved) colors.inkMuted else colors.accent,
+        textAlign = TextAlign.Center,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = !state.phraseSaved, onClick = onSave),
+    )
 }
 
 @Composable

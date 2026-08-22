@@ -6,6 +6,14 @@
          на устройстве. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Напоминание о повторении. С Android 13 показ уведомлений спрашивают
+         у пользователя, и спрашиваем мы перед первой тренировкой, а не при
+         запуске: до неё напоминать не о чем. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Будильник переживает перезагрузку только если его поставить заново, а
+         узнать о ней можно единственным способом. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
     <application
         android:name=".WolfyApp"
         android:allowBackup="true"
@@ -34,6 +42,18 @@
                 <data android:mimeType="text/plain" />
             </intent-filter>
         </activity>
+
+        <!-- Будильник напоминания и восстановление его после перезагрузки.
+             Точный будильник не используется: он требует отдельного
+             разрешения, которое система выдаёт таймерам, а не напоминаниям, —
+             и разброс в несколько минут здесь ничего не стоит. -->
+        <receiver
+            android:name="com.wolfy.platform.ReminderReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
 
         <!-- Снимок страницы делает системная камера, и файл ей надо передать
              ссылкой. С Android 7 передача file-ссылки чужому приложению роняет
