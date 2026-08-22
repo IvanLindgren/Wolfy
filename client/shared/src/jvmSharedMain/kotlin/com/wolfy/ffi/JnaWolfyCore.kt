@@ -38,6 +38,7 @@ internal interface CoreLibrary : Library {
     fun wolfy_tokenize(text: ByteArray): Pointer?
     fun wolfy_explain(text: ByteArray): Pointer?
     fun wolfy_grammar_reference(): Pointer?
+    fun wolfy_grammar_exercises(): Pointer?
 
     fun wolfy_book_open(path: ByteArray): Long
     fun wolfy_book_metadata(handle: Long): Pointer?
@@ -80,6 +81,11 @@ internal class JnaWolfyCore(private val library: CoreLibrary) : WolfyCore {
     override fun reference(): List<Article> {
         val raw = library.wolfy_grammar_reference().takeString("справочник грамматики")
         return json.decodeFromString<ReferenceResult>(raw).articles
+    }
+
+    override fun exercises(): List<Exercise> {
+        val raw = library.wolfy_grammar_exercises().takeString("упражнения по грамматике")
+        return json.decodeFromString<ExercisesResult>(raw).exercises
     }
 
     override fun openBook(path: String): OpenBook {

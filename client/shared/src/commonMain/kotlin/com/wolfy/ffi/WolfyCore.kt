@@ -48,6 +48,15 @@ interface WolfyCore {
     fun reference(): List<Article>
 
     /**
+     * Микро-упражнения по грамматике.
+     *
+     * Верный ответ в них — то, что находит в примере тот же разбор, что
+     * работает в читалке. Поэтому упражнение не может научить одному, а
+     * разбор в книге показать другое.
+     */
+    fun exercises(): List<Exercise>
+
+    /**
      * Открывает книгу и возвращает её описание вместе с номером.
      *
      * Номер обязателен к закрытию через [closeBook]: пока книга открыта, ядро
@@ -167,6 +176,32 @@ data class Article(
 
 @Serializable
 internal data class ReferenceResult(val articles: List<Article> = emptyList())
+
+/**
+ * Микро-упражнение по грамматике.
+ *
+ * Задания два. `form` — правило названо, в предложении пропуск `___`, надо
+ * поставить форму. `name` — предложение целиком, надо назвать правило; это
+ * ровно то, что делает читалка, когда читатель тыкает в предложение.
+ */
+@Serializable
+data class Exercise(
+    val rule: String,
+    val topic: String,
+    /** `form` или `name`. */
+    val task: String,
+    val sentence: String,
+    val translation: String,
+    /** Название правила в задании на форму; в задании на узнавание пусто. */
+    val question: String,
+    val options: List<String>,
+    val answer: Int,
+    val formula: String,
+    val explanation: String,
+)
+
+@Serializable
+internal data class ExercisesResult(val exercises: List<Exercise> = emptyList())
 
 /** Факт о форме слова: «Число» — «множественное, окончание -s». */
 @Serializable
