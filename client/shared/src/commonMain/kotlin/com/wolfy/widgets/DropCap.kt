@@ -63,7 +63,15 @@ fun DropCapParagraph(
     // кеглем в три строки выглядит опечаткой, а не приёмом.
     val capChar = fullText.firstOrNull()
     if (capChar == null || !capChar.isLetter()) {
-        ReaderParagraph(parsed, modifier, typography.reader, saved, savedLemmaOf, selected, onWordTap)
+        ReaderParagraph(
+            parsed = parsed,
+            modifier = modifier,
+            style = typography.reader,
+            saved = saved,
+            savedLemmaOf = savedLemmaOf,
+            selected = selected,
+            onWordTap = onWordTap,
+        )
         return
     }
 

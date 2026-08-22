@@ -107,6 +107,10 @@ compose.desktop {
                 // рядом со старой вместо обновления.
                 upgradeUuid = "8f2b4c31-9d5e-4a7f-b6c8-1e3d5a7f9b2c"
                 menuGroup = "Wolfy"
+                // Иконка нужна в .ico, а не в png: Windows берёт из файла
+                // размер под место, где рисует, — 16 точек в углу окна и 256
+                // в проводнике. Один png она растянула бы в оба конца.
+                iconFile.set(project.file("icons/wolfy.ico"))
             }
         }
     }

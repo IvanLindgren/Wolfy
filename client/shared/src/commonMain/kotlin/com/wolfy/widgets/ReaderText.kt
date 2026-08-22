@@ -1,6 +1,10 @@
 package com.wolfy.widgets
 
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitHorizontalTouchSlopOrCancellation
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -35,6 +39,11 @@ import com.wolfy.theme.WolfyTheme
  *   маркером прямо в тексте, чтобы читатель видел свой словарь на странице.
  * @param selected слово, по которому только что нажали — под ним держится фон,
  *   пока открыта карточка.
+ * @param selection выделенный кусок абзаца в тех же смещениях, что и токены.
+ * @param onPhrase зовётся, пока палец ведут по строке: по нему держится
+ *   подсветка выделения.
+ * @param onPhraseDone зовётся, когда палец подняли, — здесь открывается
+ *   карточка фразы.
  */
 @Composable
 fun ReaderParagraph(
@@ -44,14 +53,17 @@ fun ReaderParagraph(
     saved: Set<String> = emptySet(),
     savedLemmaOf: (Token) -> String = { it.text.lowercase() },
     selected: Token? = null,
+    selection: IntRange? = null,
     onWordTap: (Token) -> Unit = {},
+    onPhrase: (IntRange) -> Unit = {},
+    onPhraseDone: (IntRange) -> Unit = {},
 ) {
     val colors = WolfyTheme.colors
     // Раскладка нужна, чтобы перевести точку касания в смещение внутри
     // строки. Пока абзац не отрисован, её нет — и тапы просто игнорируются.
     var layout by remember(parsed) { mutableStateOf<TextLayoutResult?>(null) }
 
-    val text: AnnotatedString = remember(parsed, saved, selected, colors) {
+    val text: AnnotatedString = remember(parsed, saved, selected, selection, colors) {
         buildAnnotatedString {
             parsed.tokens.forEach { token ->
                 val start = length
@@ -62,8 +74,17 @@ fun ReaderParagraph(
                 val isSelected = selected != null &&
                     token.start == selected.start && token.end == selected.end
                 val isSaved = savedLemmaOf(token) in saved
+                val inPhrase = selection != null &&
+                    token.start >= selection.first && token.end <= selection.last + 1
 
                 when {
+                    // Выделение фразы поверх всего: пока палец ведут по
+                    // строке, читатель должен видеть ровно то, что он взял.
+                    inPhrase -> addStyle(
+                        SpanStyle(background = colors.accent.copy(alpha = 0.18f)),
+                        start,
+                        length,
+                    )
                     // Выбранное слово важнее сохранённого: читатель только что
                     // на него нажал и должен видеть, куда именно попал.
                     isSelected -> addStyle(
@@ -101,8 +122,53 @@ fun ReaderParagraph(
                         onWordTap(token)
                     }
                 }
+            }
+            // Выделение фразы. Порог берётся горизонтальный, а не общий, и это
+            // главное здесь: вертикальное движение по абзацу — это прокрутка
+            // книги, и перехватывать его нельзя. Проведённая же по строке рука
+            // ничего, кроме выделения, значить не может.
+            .pointerInput(parsed) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val started = awaitHorizontalTouchSlopOrCancellation(down.id) { change, _ ->
+                        change.consume()
+                    } ?: return@awaitEachGesture
+
+                    val result = layout ?: return@awaitEachGesture
+                    val anchor = result.getOffsetForPosition(down.position)
+                    var range = parsed.spanBetween(
+                        anchor,
+                        result.getOffsetForPosition(started.position),
+                    )
+                    onPhrase(range)
+
+                    drag(started.id) { change ->
+                        change.consume()
+                        range = parsed.spanBetween(
+                            anchor,
+                            result.getOffsetForPosition(change.position),
+                        )
+                        onPhrase(range)
+                    }
+                    onPhraseDone(range)
+                }
             },
     )
+}
+
+/**
+ * Кусок текста между двумя точками касания, растянутый до границ слов.
+ *
+ * Растянутый — потому что палец опускают на середину слова, а взять половину
+ * слова нельзя: «he was rea» не переводится и не сохраняется. Границы берутся
+ * у токенов, то есть у того же разбора, который нарисовал абзац.
+ */
+private fun ParsedText.spanBetween(from: Int, to: Int): IntRange {
+    val left = minOf(from, to)
+    val right = maxOf(from, to)
+    val start = tokenAt(left)?.start ?: left
+    val end = tokenAt(right)?.end ?: right
+    return start until maxOf(end, start + 1)
 }
 
 /** Заголовок главы с линейками сверху и снизу, как в печатной полосе. */
