@@ -1,7 +1,6 @@
 package com.wolfy.ui.reader
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,6 +21,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import com.wolfy.widgets.pressable
 import kotlinx.coroutines.flow.first
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,7 +45,7 @@ import com.wolfy.widgets.SectionLabel
 @Composable
 fun ReaderScreen(
     state: ReaderState,
-    onWordTap: (com.wolfy.ffi.Token, com.wolfy.ffi.ParsedText) -> Unit,
+    onWordTap: (Int, com.wolfy.ffi.Token, com.wolfy.ffi.ParsedText) -> Unit,
     onDismissCard: () -> Unit,
     onSaveWord: () -> Unit,
     onSavePhrase: () -> Unit,
@@ -126,13 +126,13 @@ private fun ReaderTopBar(state: ReaderState, onClose: () -> Unit, onOpenContents
             // предыдущую страницу, и промах стоит потерянного места в книге.
             SectionLabel(
                 text = "‹ библиотека",
-                modifier = Modifier.clickable(onClick = onClose),
+                modifier = Modifier.pressable(onClick = onClose),
             )
             // Название главы — вход в оглавление. Отдельный значок для этого
             // не нужен: читатель и так смотрит сюда, чтобы понять, где он.
             SectionLabel(
                 text = state.chapterTitle.ifBlank { state.bookTitle } + " ▾",
-                modifier = Modifier.clickable(onClick = onOpenContents),
+                modifier = Modifier.pressable(onClick = onOpenContents),
             )
             SectionLabel("${(progress * 100).toInt()}%")
         }
@@ -155,7 +155,7 @@ private fun ReaderTopBar(state: ReaderState, onClose: () -> Unit, onOpenContents
 @Composable
 private fun ChapterBody(
     state: ReaderState,
-    onWordTap: (com.wolfy.ffi.Token, com.wolfy.ffi.ParsedText) -> Unit,
+    onWordTap: (Int, com.wolfy.ffi.Token, com.wolfy.ffi.ParsedText) -> Unit,
     onPreviousChapter: () -> Unit,
     onNextChapter: () -> Unit,
     onScrolled: (Float) -> Unit,
@@ -192,6 +192,12 @@ private fun ChapterBody(
 
     // Ленивый список, а не прокручиваемая колонка: глава романа — это сотни
     // абзацев, и рисовать их все разом значит держать кадр несколько секунд.
+    // Буквица открывает главу, а не каждый абзац: ищем первый текстовый блок
+    // один раз на главу. Внутри itemsIndexed этот поиск шёл бы заново для
+    // каждого блока — сотня линейных проходов по сотне блоков на каждый кадр
+    // прокрутки.
+    val dropCapAt = remember(state.blocks) { state.blocks.indexOfFirst { it.kind == "paragraph" } }
+
     LazyColumn(
         modifier.fillMaxSize(),
         state = scroll,
@@ -205,12 +211,14 @@ private fun ChapterBody(
     ) {
         itemsIndexed(state.blocks) { index, block ->
             BlockView(
+                index = index,
                 block = block,
-                // Буквица ставится только у первого текстового абзаца главы:
-                // в печати она открывает главу, а не каждый абзац подряд.
-                withDropCap = index == state.blocks.indexOfFirst { it.kind == "paragraph" },
+                withDropCap = index == dropCapAt,
                 savedLemmas = state.savedLemmas,
-                selected = state.card?.token,
+                // Подсвечивается только тот блок, в котором нашлось слово.
+                // Иначе абзац с тем же смещением подсветит своё слово заодно —
+                // смещения у блоков считаются каждое от своего начала.
+                selected = state.card?.token?.takeIf { index == state.selectedBlock },
                 onWordTap = onWordTap,
             )
         }
@@ -228,11 +236,12 @@ private fun ChapterBody(
 
 @Composable
 private fun BlockView(
+    index: Int,
     block: ReaderBlock,
     withDropCap: Boolean,
     savedLemmas: Set<String>,
     selected: com.wolfy.ffi.Token?,
-    onWordTap: (com.wolfy.ffi.Token, com.wolfy.ffi.ParsedText) -> Unit,
+    onWordTap: (Int, com.wolfy.ffi.Token, com.wolfy.ffi.ParsedText) -> Unit,
 ) {
     val parsed = block.parsed
 
@@ -246,7 +255,7 @@ private fun BlockView(
                     saved = savedLemmas,
                     savedLemmaOf = { it.text.lowercase() },
                     selected = selected,
-                    onWordTap = { onWordTap(it, parsed) },
+                    onWordTap = { onWordTap(index, it, parsed) },
                 )
             } else {
                 ReaderParagraph(
@@ -254,7 +263,7 @@ private fun BlockView(
                     saved = savedLemmas,
                     savedLemmaOf = { it.text.lowercase() },
                     selected = selected,
-                    onWordTap = { onWordTap(it, parsed) },
+                    onWordTap = { onWordTap(index, it, parsed) },
                 )
             }
         }
@@ -268,7 +277,7 @@ private fun BlockView(
                     parsed = parsed,
                     saved = savedLemmas,
                     selected = selected,
-                    onWordTap = { onWordTap(it, parsed) },
+                    onWordTap = { onWordTap(index, it, parsed) },
                 )
             }
         }
@@ -305,13 +314,13 @@ private fun ChapterNavigation(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             if (state.hasPrevious) {
-                SectionLabel("← предыдущая", Modifier.clickable(onClick = onPrevious))
+                SectionLabel("← предыдущая", Modifier.pressable(onClick = onPrevious))
             } else {
                 SectionLabel(" ")
             }
             SectionLabel("${state.chapterIndex + 1} / ${state.chapterCount}")
             if (state.hasNext) {
-                SectionLabel("следующая →", Modifier.clickable(onClick = onNext))
+                SectionLabel("следующая →", Modifier.pressable(onClick = onNext))
             } else {
                 SectionLabel(" ")
             }

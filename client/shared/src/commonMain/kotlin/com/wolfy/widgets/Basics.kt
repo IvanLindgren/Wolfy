@@ -2,7 +2,6 @@ package com.wolfy.widgets
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -228,7 +227,7 @@ fun ThemePicker(
             Column(
                 Modifier
                     .weight(1f)
-                    .clickable { onSelect(theme) }
+                    .pressable { onSelect(theme) }
                     .background(theme.colors.paper, RoundedCornerShape(WolfyTheme.spacing.small))
                     .border(
                         width = if (active) 2.dp else WolfyTheme.spacing.rule,

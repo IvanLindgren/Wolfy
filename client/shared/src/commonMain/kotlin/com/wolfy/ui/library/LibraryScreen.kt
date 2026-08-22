@@ -3,7 +3,6 @@ package com.wolfy.ui.library
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -38,6 +37,7 @@ import com.wolfy.widgets.Rule
 import com.wolfy.widgets.SectionLabel
 import com.wolfy.widgets.Sticker
 import com.wolfy.widgets.WolfySticker
+import com.wolfy.widgets.pressable
 
 /**
  * Главный экран: книга, к которой стоит вернуться, и вся библиотека сеткой.
@@ -129,7 +129,7 @@ private fun ContinueCard(book: LibraryBook, savedWords: Int, onOpen: () -> Unit)
             .fillMaxWidth()
             .background(colors.surface, RoundedCornerShape(spacing.small))
             .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.small))
-            .clickable(onClick = onOpen)
+            .pressable(onClick = onOpen)
             .padding(spacing.large),
         horizontalArrangement = Arrangement.spacedBy(spacing.large),
     ) {
@@ -187,7 +187,7 @@ private fun LibraryHeader(
                     text = "+ добавить",
                     style = WolfyTheme.typography.button,
                     color = colors.accent,
-                    modifier = Modifier.clickable(onClick = onImport),
+                    modifier = Modifier.pressable(onClick = onImport),
                 )
                 // Съёмка страницы бумажной книги. Стоит рядом с добавлением
                 // файла, а не в отдельном разделе: и то, и другое отвечает на
@@ -196,7 +196,7 @@ private fun LibraryHeader(
                     text = if (recognizing) "распознаётся…" else "снять страницу",
                     style = WolfyTheme.typography.button,
                     color = if (recognizing) colors.inkMuted else colors.accent,
-                    modifier = Modifier.clickable(enabled = !recognizing, onClick = onShoot),
+                    modifier = Modifier.pressable(enabled = !recognizing, onClick = onShoot),
                 )
             }
         }
@@ -328,13 +328,13 @@ private fun RemoveConfirmation(savedWords: Int, onConfirm: () -> Unit, onCancel:
             text = "удалить",
             style = WolfyTheme.typography.button,
             color = colors.accent,
-            modifier = Modifier.clickable(onClick = onConfirm),
+            modifier = Modifier.pressable(onClick = onConfirm),
         )
         Text(
             text = "отмена",
             style = WolfyTheme.typography.caption,
             color = colors.inkMuted,
-            modifier = Modifier.clickable(onClick = onCancel),
+            modifier = Modifier.pressable(onClick = onCancel),
         )
     }
 }
@@ -390,14 +390,14 @@ private fun EmptyLibrary(onImport: () -> Unit) {
         )
         Box(
             Modifier
-                .background(colors.ink, RoundedCornerShape(spacing.huge))
-                .clickable(onClick = onImport)
+                .background(colors.inverse, RoundedCornerShape(spacing.huge))
+                .pressable(onClick = onImport)
                 .padding(horizontal = spacing.xlarge, vertical = spacing.medium),
         ) {
             Text(
                 text = "+ Выбрать файл",
                 style = WolfyTheme.typography.button,
-                color = colors.paper,
+                color = colors.onInverse,
             )
         }
     }

@@ -1,7 +1,6 @@
 package com.wolfy.ui.nav
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,6 +14,7 @@ import com.wolfy.theme.WolfyTheme
 import com.wolfy.widgets.NavGlyph
 import com.wolfy.widgets.NavIcon
 import com.wolfy.widgets.Rule
+import com.wolfy.widgets.pressable
 
 /**
  * Раздел приложения.
@@ -30,8 +30,13 @@ enum class Section(val title: String, val icon: NavIcon) {
     /** Полки: как читатель разложил свои книги. */
     Shelves("Полки", NavIcon.Shelves),
 
-    /** Повторения: колоды слов из прочитанного. */
-    Srs("SRS", NavIcon.Srs),
+    /**
+     * Карточки: колоды слов, фраз и правил из прочитанного.
+     *
+     * Не «SRS»: аббревиатура называет механизм интервальных повторений, а
+     * читателю в нижней панели нужно название того, что он там найдёт.
+     */
+    Cards("Карточки", NavIcon.Cards),
 
     /** Настройки и всё остальное. */
     More("Ещё", NavIcon.More),
@@ -70,7 +75,7 @@ fun BottomBar(
 
                 Column(
                     Modifier
-                        .clickable { onSelect(section) }
+                        .pressable { onSelect(section) }
                         .padding(horizontal = spacing.medium, vertical = spacing.tight),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(spacing.tight),

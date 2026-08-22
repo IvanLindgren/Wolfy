@@ -38,6 +38,7 @@ import com.wolfy.theme.WolfyTheme
 import com.wolfy.widgets.CefrBadge
 import com.wolfy.widgets.Rule
 import com.wolfy.widgets.SectionLabel
+import com.wolfy.widgets.pressable
 
 /**
  * Карточка слова, всплывающая снизу.
@@ -139,7 +140,7 @@ private fun CardBody(
                 .width(36.dp)
                 .height(spacing.tight)
                 .background(colors.rule, CircleShape)
-                .clickable(onClick = onDismiss),
+                .pressable(onClick = onDismiss),
         )
 
         Column(
@@ -309,7 +310,7 @@ private fun GrammarNote(finding: Finding, onOpen: () -> Unit) {
         Modifier
             .fillMaxWidth()
             .background(colors.paper, RoundedCornerShape(spacing.small))
-            .clickable(onClick = onOpen)
+            .pressable(onClick = onOpen)
             .padding(spacing.small),
         verticalArrangement = Arrangement.spacedBy(spacing.tight),
     ) {
@@ -391,7 +392,7 @@ private fun PhraseButton(state: WordCardState, onSave: () -> Unit) {
         textAlign = TextAlign.Center,
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(enabled = !state.phraseSaved, onClick = onSave),
+            .pressable(enabled = !state.phraseSaved, onClick = onSave),
     )
 }
 
@@ -404,21 +405,21 @@ private fun SaveButton(saved: Boolean, onSave: () -> Unit) {
         Modifier
             .fillMaxWidth()
             .background(
-                if (saved) colors.surface else colors.ink,
+                if (saved) colors.surface else colors.inverse,
                 RoundedCornerShape(spacing.huge),
             )
             .border(
                 spacing.rule,
-                if (saved) colors.rule else colors.ink,
+                if (saved) colors.rule else colors.inverse,
                 RoundedCornerShape(spacing.huge),
             )
-            .clickable(onClick = onSave)
+            .pressable(onClick = onSave)
             .padding(vertical = spacing.medium),
     ) {
         Text(
             text = if (saved) "В колоде книги ✓ · убрать" else "+ В колоду книги",
             style = WolfyTheme.typography.button,
-            color = if (saved) colors.inkMuted else colors.paper,
+            color = if (saved) colors.inkMuted else colors.onInverse,
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth(),
         )

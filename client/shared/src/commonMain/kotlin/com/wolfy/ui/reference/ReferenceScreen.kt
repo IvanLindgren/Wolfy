@@ -2,7 +2,6 @@ package com.wolfy.ui.reference
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -32,6 +31,7 @@ import com.wolfy.widgets.Rule
 import com.wolfy.widgets.SectionLabel
 import com.wolfy.widgets.Sticker
 import com.wolfy.widgets.WolfySticker
+import com.wolfy.widgets.pressable
 
 /**
  * Справочник грамматики.
@@ -81,7 +81,7 @@ fun ReferenceScreen(
                     text = "‹ назад",
                     style = WolfyTheme.typography.caption,
                     color = colors.inkMuted,
-                    modifier = Modifier.clickable(onClick = onBack),
+                    modifier = Modifier.pressable(onClick = onBack),
                 )
                 Text(
                     text = "Справочник",
@@ -146,7 +146,7 @@ private fun ArticleCard(
                     if (expanded) colors.accent else colors.rule,
                     RoundedCornerShape(spacing.small),
                 )
-                .clickable(onClick = onToggle)
+                .pressable(onClick = onToggle)
                 .padding(spacing.large),
             verticalArrangement = Arrangement.spacedBy(spacing.small),
         ) {
@@ -243,7 +243,7 @@ private fun SearchRow(query: String, onChange: (String) -> Unit) {
                 text = "×",
                 style = WolfyTheme.typography.screenTitle,
                 color = colors.inkMuted,
-                modifier = Modifier.clickable { onChange("") },
+                modifier = Modifier.pressable { onChange("") },
             )
         }
     }

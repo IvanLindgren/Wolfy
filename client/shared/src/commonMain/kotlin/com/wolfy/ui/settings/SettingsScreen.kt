@@ -2,7 +2,6 @@ package com.wolfy.ui.settings
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -27,6 +26,7 @@ import com.wolfy.widgets.SectionLabel
 import com.wolfy.widgets.Sticker
 import com.wolfy.widgets.ThemePicker
 import com.wolfy.widgets.WolfySticker
+import com.wolfy.widgets.pressable
 
 /**
  * Настройки и всё, чему не нашлось своего раздела.
@@ -74,7 +74,7 @@ fun SettingsScreen(
             color = colors.accent,
             modifier = Modifier
                 .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.huge))
-                .clickable(onClick = onOpenReference)
+                .pressable(onClick = onOpenReference)
                 .padding(horizontal = spacing.large, vertical = spacing.small),
         )
         Text(
@@ -199,7 +199,7 @@ private fun SyncBlock(status: SyncStatus, signedIn: Boolean, onSyncNow: () -> Un
                 color = if (status.running) colors.inkMuted else colors.accent,
                 modifier = Modifier
                     .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.huge))
-                    .clickable(enabled = !status.running, onClick = onSyncNow)
+                    .pressable(enabled = !status.running, onClick = onSyncNow)
                     .padding(horizontal = spacing.large, vertical = spacing.small),
             )
         }
@@ -246,7 +246,7 @@ private fun ScaleStep(label: String, enabled: Boolean, onClick: () -> Unit) {
         color = if (enabled) colors.ink else colors.rule,
         modifier = Modifier
             .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.huge))
-            .clickable(enabled = enabled, onClick = onClick)
+            .pressable(enabled = enabled, onClick = onClick)
             .padding(horizontal = spacing.large, vertical = spacing.small),
     )
 }

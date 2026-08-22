@@ -4,6 +4,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -14,7 +15,7 @@ import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.unit.dp
 
 /** Значки нижней навигации. */
-enum class NavIcon { Books, Shelves, Srs, More }
+enum class NavIcon { Books, Shelves, Cards, More }
 
 /**
  * Значок нижней навигации, нарисованный кодом.
@@ -30,7 +31,7 @@ fun NavGlyph(icon: NavIcon, tint: Color, modifier: Modifier = Modifier) {
         when (icon) {
             NavIcon.Books -> drawBook(tint)
             NavIcon.Shelves -> drawShelves(tint)
-            NavIcon.Srs -> drawCycle(tint)
+            NavIcon.Cards -> drawCards(tint)
             NavIcon.More -> drawGear(tint)
         }
     }
@@ -77,30 +78,37 @@ private fun DrawScope.drawShelves(tint: Color) {
     }
 }
 
-/** Повторение: круговая стрелка. */
-private fun DrawScope.drawCycle(tint: Color) {
-    val line = size.minDimension * 0.1f
-    val inset = line * 1.6f
-    drawArc(
-        color = tint,
-        startAngle = 40f,
-        sweepAngle = 280f,
-        useCenter = false,
-        topLeft = Offset(inset, inset),
-        size = Size(size.width - inset * 2, size.height - inset * 2),
-        style = Stroke(width = line),
-    )
+/**
+ * Колода: две карты веером.
+ *
+ * Была круговая стрелка — знак повторения. Но раздел называется «Карточки», и
+ * стрелка обещала механизм, а не содержимое: человек ищет глазами свои
+ * карточки, а находит значок обновления.
+ */
+private fun DrawScope.drawCards(tint: Color) {
+    val line = size.minDimension * 0.09f
+    val stroke = Stroke(width = line)
+    val width = size.width * 0.52f
+    val height = size.height * 0.72f
 
-    // Остриё стрелки на разомкнутом конце дуги — без него круг читается как
-    // буква «C», а не как повторение.
-    val tip = size.minDimension * 0.22f
-    val head = Path().apply {
-        moveTo(size.width * 0.78f, size.height * 0.16f)
-        lineTo(size.width * 0.78f + tip, size.height * 0.16f + tip * 0.5f)
-        lineTo(size.width * 0.78f - tip * 0.1f, size.height * 0.16f + tip)
-        close()
+    // Задняя карта завалена влево — из-за наклона стопка и читается стопкой.
+    rotate(degrees = -14f, pivot = Offset(size.width * 0.5f, size.height * 0.9f)) {
+        drawRoundRect(
+            color = tint,
+            topLeft = Offset(size.width * 0.16f, size.height * 0.16f),
+            size = Size(width, height),
+            cornerRadius = CornerRadius(line, line),
+            style = stroke,
+        )
     }
-    drawPath(head, tint)
+
+    drawRoundRect(
+        color = tint,
+        topLeft = Offset(size.width * 0.34f, size.height * 0.2f),
+        size = Size(width, height),
+        cornerRadius = CornerRadius(line, line),
+        style = stroke,
+    )
 }
 
 /** Шестерёнка: кольцо и восемь зубцов. */

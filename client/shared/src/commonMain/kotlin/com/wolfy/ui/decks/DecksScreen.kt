@@ -4,7 +4,6 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -37,6 +36,7 @@ import com.wolfy.widgets.Rule
 import com.wolfy.widgets.SectionLabel
 import com.wolfy.widgets.Sticker
 import com.wolfy.widgets.WolfySticker
+import com.wolfy.widgets.pressable
 
 /**
  * Колоды: слова, сохранённые при чтении.
@@ -78,7 +78,7 @@ fun DecksScreen(
                     text = "← К повторениям",
                     style = WolfyTheme.typography.caption,
                     color = colors.accent,
-                    modifier = Modifier.clickable(onClick = onBack),
+                    modifier = Modifier.pressable(onClick = onBack),
                 )
                 Text(
                     text = "Слова по книгам",
@@ -137,7 +137,7 @@ private fun DeckCard(
         verticalArrangement = Arrangement.spacedBy(spacing.medium),
     ) {
         Row(
-            Modifier.fillMaxWidth().clickable(onClick = onToggle),
+            Modifier.fillMaxWidth().pressable(onClick = onToggle),
             horizontalArrangement = Arrangement.spacedBy(spacing.large),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -182,7 +182,7 @@ private fun DeckCard(
                 text = "Открыть книгу →",
                 style = WolfyTheme.typography.caption,
                 color = colors.accent,
-                modifier = Modifier.clickable(onClick = onOpenBook),
+                modifier = Modifier.pressable(onClick = onOpenBook),
             )
         }
     }

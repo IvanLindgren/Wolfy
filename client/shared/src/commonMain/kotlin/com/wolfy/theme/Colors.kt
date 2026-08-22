@@ -35,6 +35,19 @@ data class WolfyColors(
     val highlight: Color,
     /** Текст поверх акцентной заливки. */
     val onAccent: Color,
+    /**
+     * Выворотная плашка: чёрная полоса баннера, главная кнопка, активная
+     * таблетка переключателя.
+     *
+     * Отдельный цвет, а не `ink`. Чернила в тёмных темах светлые — это верно
+     * для текста и неверно для плашки: баннер серии, задуманный как
+     * единственное тёмное пятно на полосе, в тёмной теме превращался в
+     * светлое, то есть ровно в свою противоположность. Плашка обязана
+     * оставаться плашкой во всех четырёх темах.
+     */
+    val inverse: Color,
+    /** Текст на выворотной плашке. */
+    val onInverse: Color,
     /** Палитра частей речи для грамматической подсветки. */
     val partsOfSpeech: PartOfSpeechColors,
     /** Тёмная ли тема — нужно для системных панелей и статус-бара. */
@@ -93,6 +106,8 @@ val PaperColors = WolfyColors(
     gold = Color(0xFFB08A3C),
     highlight = Color(0xFFF7E27A),
     onAccent = Color(0xFFFFFFFF),
+    inverse = Color(0xFF111111),
+    onInverse = Color(0xFFF7F7F4),
     partsOfSpeech = partsOfSpeech,
     dark = false,
 )
@@ -108,6 +123,8 @@ val SepiaColors = WolfyColors(
     gold = Color(0xFFD4A855),
     highlight = Color(0x66D4A855),
     onAccent = Color(0xFF2A2018),
+    inverse = Color(0xFF241B12),
+    onInverse = Color(0xFFEFE2CB),
     partsOfSpeech = PartOfSpeechColors(
         // На тёмной бумаге те же цвета выглядят грязными, поэтому они
         // осветлены: тон сохранён, светлота поднята.
@@ -131,6 +148,8 @@ val DarkColors = WolfyColors(
     gold = Color(0xFFD4A855),
     highlight = Color(0x66D4A855),
     onAccent = Color(0xFF17140F),
+    inverse = Color(0xFF070605),
+    onInverse = Color(0xFFE6E1D5),
     partsOfSpeech = PartOfSpeechColors(
         noun = Color(0xFF7FA6DC),
         verb = Color(0xFFE07A64),
@@ -158,6 +177,11 @@ val OledColors = WolfyColors(
     gold = Color(0xFFD4A855),
     highlight = Color(0x66D4A855),
     onAccent = Color(0xFF000000),
+    // Не чистый чёрный: на OLED фон и есть чистый чёрный, и плашка на нём
+    // просто исчезла бы. Кромка светлее фона — единственное, чем она здесь
+    // может себя обозначить.
+    inverse = Color(0xFF1A1A1A),
+    onInverse = Color(0xFFFFFFFF),
     partsOfSpeech = PartOfSpeechColors(
         noun = Color(0xFF8FB4E8),
         verb = Color(0xFFF08A72),

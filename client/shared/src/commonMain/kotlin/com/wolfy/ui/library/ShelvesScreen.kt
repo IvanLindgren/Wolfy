@@ -2,7 +2,6 @@ package com.wolfy.ui.library
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -44,6 +43,7 @@ import com.wolfy.widgets.Rule
 import com.wolfy.widgets.SectionLabel
 import com.wolfy.widgets.Sticker
 import com.wolfy.widgets.WolfySticker
+import com.wolfy.widgets.pressable
 import kotlin.math.roundToInt
 
 /**
@@ -166,7 +166,7 @@ private fun BoxScope.DragGhost(board: DragBoard) {
     Text(
         text = dragged.label,
         style = WolfyTheme.typography.caption,
-        color = colors.paper,
+        color = colors.onInverse,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
         modifier = Modifier
@@ -178,7 +178,7 @@ private fun BoxScope.DragGhost(board: DragBoard) {
                     y = dragged.position.y.roundToInt() - 80,
                 )
             }
-            .background(colors.ink, RoundedCornerShape(spacing.tight))
+            .background(colors.inverse, RoundedCornerShape(spacing.tight))
             .padding(horizontal = spacing.small, vertical = spacing.tight),
     )
 }
@@ -220,7 +220,7 @@ private fun ShelfCard(
         verticalArrangement = Arrangement.spacedBy(spacing.medium),
     ) {
         Row(
-            Modifier.fillMaxWidth().clickable(onClick = onToggle),
+            Modifier.fillMaxWidth().pressable(onClick = onToggle),
             horizontalArrangement = Arrangement.spacedBy(spacing.large),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -271,13 +271,13 @@ private fun ShelfCard(
                                         // полку, никуда не переезжает.
                                         if (target != shelf.name) onDropped(book.id)
                                     }
-                                    .clickable { onOpen(book) },
+                                    .pressable { onOpen(book) },
                             )
                             Text(
                                 text = "снять с полки",
                                 style = WolfyTheme.typography.caption,
                                 color = colors.inkMuted,
-                                modifier = Modifier.clickable { onTakeOff(book) },
+                                modifier = Modifier.pressable { onTakeOff(book) },
                             )
                         }
                     }
@@ -287,7 +287,7 @@ private fun ShelfCard(
                 text = "Удалить полку",
                 style = WolfyTheme.typography.caption,
                 color = colors.accent,
-                modifier = Modifier.clickable(onClick = onRemove),
+                modifier = Modifier.pressable(onClick = onRemove),
             )
         }
     }
@@ -350,7 +350,7 @@ private fun UnshelvedBook(
             modifier = Modifier
                 .width(48.dp)
                 .dragSource(board, book.id, book.title, onDropped = onDropped)
-                .clickable(onClick = onOpen),
+                .pressable(onClick = onOpen),
         )
         Column(
             Modifier.weight(1f),
@@ -383,7 +383,7 @@ private fun UnshelvedBook(
                                     colors.rule,
                                     RoundedCornerShape(spacing.huge),
                                 )
-                                .clickable { onMove(shelf.name) }
+                                .pressable { onMove(shelf.name) }
                                 .padding(horizontal = spacing.small, vertical = spacing.tight),
                         )
                     }
@@ -430,7 +430,7 @@ private fun NewShelfRow(onCreate: (String) -> Unit) {
             text = "+ создать",
             style = WolfyTheme.typography.button,
             color = if (name.isBlank()) colors.inkMuted else colors.accent,
-            modifier = Modifier.clickable(enabled = name.isNotBlank()) {
+            modifier = Modifier.pressable(enabled = name.isNotBlank()) {
                 onCreate(name)
                 name = ""
             },

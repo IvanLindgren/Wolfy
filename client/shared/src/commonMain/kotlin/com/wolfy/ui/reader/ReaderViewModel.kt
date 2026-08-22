@@ -7,6 +7,7 @@ import com.wolfy.data.TranslateResult
 import com.wolfy.data.WolfyApi
 import com.wolfy.data.library.Library
 import com.wolfy.data.library.LibraryBook
+import com.wolfy.data.library.currentTimeMillis
 import com.wolfy.ffi.Chapter
 import com.wolfy.ffi.CoreException
 import com.wolfy.ffi.ParsedText
@@ -50,6 +51,15 @@ data class ReaderState(
     val savedLemmas: Set<String> = emptySet(),
     val card: WordCardState? = null,
     /**
+     * Номер блока, в котором стоит открытое слово.
+     *
+     * Без него подсветку пришлось бы искать по смещениям, а смещения у каждого
+     * блока свои: слово с позиции 10 есть и в третьем абзаце, и в седьмом, и
+     * подсвечивались бы оба. Заодно это избавляет от перерисовки всех видимых
+     * абзацев на каждый тап — меняется ровно тот, где нашлось слово.
+     */
+    val selectedBlock: Int = -1,
+    /**
      * Доля главы, с которой надо начать показ.
      *
      * Нужна ровно один раз — при открытии книги, чтобы вернуть читателя туда,
@@ -91,6 +101,7 @@ class ReaderViewModel(
     private val core: WolfyCore,
     private val api: WolfyApi,
     private val library: Library,
+    private val clock: () -> Long = { currentTimeMillis() },
 ) : ViewModel() {
 
     /** Книга, открытая сейчас. По ней читалка отчитывается библиотеке. */
@@ -107,6 +118,10 @@ class ReaderViewModel(
 
     /** Последняя записанная доля главы — по ней отсекается лишняя запись. */
     private var lastReportedPlace: Float? = null
+
+    /** Момент последней записи и доля, которую ещё не записали. */
+    private var lastWriteAt: Long = 0
+    private var pendingPlace: Float? = null
 
     /** Подписка на колоду книги. Живёт, пока книга открыта. */
     private var deckJob: Job? = null
@@ -173,6 +188,7 @@ class ReaderViewModel(
     /** Читает главу и разбирает её текст. */
     fun loadChapter(index: Int) {
         val handle = handle ?: return
+        flushPlace()
         viewModelScope.launch {
             _state.update { it.copy(loading = true, card = null) }
             try {
@@ -220,7 +236,7 @@ class ReaderViewModel(
      * микросекунды. Перевод уходит запросом и приезжает в уже открытую
      * карточку — ждать сеть, чтобы показать слово, нельзя.
      */
-    fun onWordTap(token: Token, parsed: ParsedText) {
+    fun onWordTap(block: Int, token: Token, parsed: ParsedText) {
         val context = parsed.sentenceAt(token.start)?.text ?: token.text
         val analysis = core.analyzeWord(token.text)
         // Грамматика считается здесь же, а не отдельным запросом: она про то
@@ -230,6 +246,7 @@ class ReaderViewModel(
 
         _state.update {
             it.copy(
+                selectedBlock = block,
                 card = WordCardState(
                     token = token,
                     analysis = analysis,
@@ -266,7 +283,7 @@ class ReaderViewModel(
 
     fun dismissCard() {
         translationJob?.cancel()
-        _state.update { it.copy(card = null) }
+        _state.update { it.copy(card = null, selectedBlock = -1) }
     }
 
     /**
@@ -348,17 +365,46 @@ class ReaderViewModel(
         val previous = lastReportedPlace
         if (previous != null && kotlin.math.abs(previous - withinChapter) < 0.02f) return
         lastReportedPlace = withinChapter
+
+        // Запись библиотеки — это сериализация всего списка книг и карточек и
+        // поход на диск. Во время быстрой прокрутки доля меняется десятки раз
+        // в секунду, и запись на каждое изменение подвешивала бы палец на
+        // ровном месте. Поэтому не чаще раза в три секунды, а отложенное
+        // значение дописывается при закрытии книги и при смене главы.
+        val now = clock()
+        if (now - lastWriteAt < WRITE_EVERY) {
+            pendingPlace = withinChapter
+            return
+        }
+        lastWriteAt = now
+        pendingPlace = null
         library.rememberProgress(id, _state.value.chapterIndex, withinChapter)
+    }
+
+    /** Дописывает отложенную долю главы: при смене главы и при закрытии книги. */
+    private fun flushPlace() {
+        val id = bookId ?: return
+        val place = pendingPlace ?: return
+        pendingPlace = null
+        lastWriteAt = clock()
+        library.rememberProgress(id, _state.value.chapterIndex, place)
     }
 
     /** Закрывает книгу, не закрывая экран, — перед открытием следующей. */
     fun closeCurrent() {
+        flushPlace()
         deckJob?.cancel()
         deckJob = null
         handle?.let(core::closeBook)
         handle = null
         bookId = null
         lastReportedPlace = null
+        pendingPlace = null
+    }
+
+    private companion object {
+        /** Как редко место в книге доходит до диска. */
+        const val WRITE_EVERY = 3_000L
     }
 
     override fun onCleared() {

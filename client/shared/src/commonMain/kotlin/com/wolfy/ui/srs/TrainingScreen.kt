@@ -2,7 +2,6 @@ package com.wolfy.ui.srs
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -47,6 +46,7 @@ import com.wolfy.theme.WolfyTheme
 import com.wolfy.widgets.SectionLabel
 import com.wolfy.widgets.Sticker
 import com.wolfy.widgets.WolfySticker
+import com.wolfy.widgets.pressable
 
 /**
  * Тренировка.
@@ -177,7 +177,7 @@ private fun Header(title: String, subtitle: String, onClose: () -> Unit) {
             text = "×",
             style = WolfyTheme.typography.screenTitle,
             color = colors.inkMuted,
-            modifier = Modifier.clickable(onClick = onClose),
+            modifier = Modifier.pressable(onClick = onClose),
         )
     }
 }
@@ -241,7 +241,7 @@ private fun ChoiceDrill(drill: Drill, answered: Boolean, onAnswer: (String) -> U
                         color = border,
                         shape = RoundedCornerShape(spacing.small),
                     )
-                    .clickable(enabled = !answered) {
+                    .pressable(enabled = !answered) {
                         chosen = option
                         onAnswer(option)
                     }
@@ -372,7 +372,7 @@ private fun LetterTile(
             .background(
                 when {
                     faded -> colors.rule
-                    dark -> colors.ink
+                    dark -> colors.inverse
                     else -> colors.surface
                 },
                 RoundedCornerShape(spacing.tight),
@@ -384,13 +384,13 @@ private fun LetterTile(
                 color = if (empty) colors.accent else colors.rule,
                 shape = RoundedCornerShape(spacing.tight),
             )
-            .clickable(onClick = onClick),
+            .pressable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             text = letter,
             style = WolfyTheme.typography.bookTitle,
-            color = if (dark) colors.paper else colors.ink,
+            color = if (dark) colors.onInverse else colors.ink,
         )
     }
 }
@@ -510,14 +510,14 @@ private fun Chip(text: String, dark: Boolean, onClick: () -> Unit) {
     Text(
         text = text,
         style = WolfyTheme.typography.body,
-        color = if (dark) colors.paper else colors.ink,
+        color = if (dark) colors.onInverse else colors.ink,
         modifier = Modifier
             .background(
-                if (dark) colors.ink else colors.surface,
+                if (dark) colors.inverse else colors.surface,
                 RoundedCornerShape(spacing.tight),
             )
             .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.tight))
-            .clickable(onClick = onClick)
+            .pressable(onClick = onClick)
             .padding(horizontal = spacing.medium, vertical = spacing.small),
     )
 }
@@ -630,14 +630,14 @@ private fun PrimaryButton(text: String, onClick: () -> Unit) {
     Box(
         Modifier
             .fillMaxWidth()
-            .background(colors.ink, RoundedCornerShape(spacing.huge))
-            .clickable(onClick = onClick)
+            .background(colors.inverse, RoundedCornerShape(spacing.huge))
+            .pressable(onClick = onClick)
             .padding(vertical = spacing.medium),
     ) {
         Text(
             text = text,
             style = WolfyTheme.typography.button,
-            color = colors.paper,
+            color = colors.onInverse,
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth(),
         )

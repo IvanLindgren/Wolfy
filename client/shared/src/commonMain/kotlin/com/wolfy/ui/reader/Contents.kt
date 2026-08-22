@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import com.wolfy.theme.WolfyTheme
 import com.wolfy.widgets.Rule
 import com.wolfy.widgets.SectionLabel
+import com.wolfy.widgets.pressable
 
 /**
  * Оглавление книги.
@@ -107,7 +108,7 @@ fun ContentsSheet(
                         .width(36.dp)
                         .height(spacing.tight)
                         .background(colors.rule, CircleShape)
-                        .clickable(onClick = onDismiss),
+                        .pressable(onClick = onDismiss),
                 )
                 SectionLabel("Оглавление")
                 Rule()
@@ -138,7 +139,7 @@ private fun ChapterRow(number: Int, title: String, current: Boolean, onClick: ()
     Row(
         Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .pressable(onClick = onClick)
             .padding(vertical = spacing.small),
         horizontalArrangement = Arrangement.spacedBy(spacing.medium),
         verticalAlignment = Alignment.CenterVertically,

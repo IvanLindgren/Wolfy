@@ -1,5 +1,12 @@
 package com.wolfy.ui
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -8,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -17,6 +25,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.IntOffset
 import com.wolfy.data.Settings
 import com.wolfy.data.SyncService
 import com.wolfy.data.WolfyApi
@@ -244,6 +253,20 @@ private fun Shell(
         }
     }
 
+    // Экран, который сейчас показан. Отдельным значением, а не набором
+    // переменных: анимации перехода нужно знать не только куда идём, но и
+    // откуда, а «откуда» к моменту перехода из переменных уже стёрто.
+    val route: Route = when (section) {
+        Section.Books -> reading?.let(Route::Reader) ?: Route.Library
+        Section.Shelves -> Route.Shelves
+        Section.Cards -> when {
+            training.running -> Route.Training
+            decksOpen -> Route.WordList
+            else -> Route.Cards
+        }
+        Section.More -> reference?.let(Route::Reference) ?: Route.Settings
+    }
+
     Column(
         Modifier
             .fillMaxSize()
@@ -256,40 +279,47 @@ private fun Shell(
             // диалог выбора после этого — лишний шаг.
             .fileDropTarget { paths -> paths.forEach { drop(parts, it) } },
     ) {
-        Box(Modifier.weight(1f)) {
-            when (section) {
-                Section.Books -> when (reading) {
-                    null -> LibraryScreen(
-                        state = catalogue,
-                        onOpen = open,
-                        onImport = pick,
-                        onShoot = shoot,
-                        onRemove = { parts.catalogue.remove(it.id) },
-                    )
+        // Переход между экранами показывается движением, а не подменой.
+        // Мгновенная замена содержимого не отвечает на вопрос, что случилось:
+        // открылся другой раздел или перерисовался этот. Направление отвечает
+        // без единого слова — вглубь приходит справа, назад уходит туда же.
+        AnimatedContent(
+            targetState = route,
+            transitionSpec = { screenTransition(initialState.depth, targetState.depth) },
+            label = "screen",
+            modifier = Modifier.weight(1f),
+        ) { screen ->
+            when (screen) {
+                Route.Library -> LibraryScreen(
+                    state = catalogue,
+                    onOpen = open,
+                    onImport = pick,
+                    onShoot = shoot,
+                    onRemove = { parts.catalogue.remove(it.id) },
+                )
 
-                    else -> ReaderScreen(
-                        state = readerState,
-                        onWordTap = parts.reader::onWordTap,
-                        onDismissCard = parts.reader::dismissCard,
-                        onSaveWord = parts.reader::toggleWord,
-                        onSavePhrase = parts.reader::savePhrase,
-                        onPreviousChapter = parts.reader::previousChapter,
-                        onNextChapter = parts.reader::nextChapter,
-                        onScrolled = parts.reader::rememberPlace,
-                        onChapter = parts.reader::loadChapter,
-                        onClose = {
-                            parts.reader.closeCurrent()
-                            reading = null
-                        },
-                        onOpenRule = { rule ->
-                            parts.reader.dismissCard()
-                            reference = rule
-                            section = Section.More
-                        },
-                    )
-                }
+                is Route.Reader -> ReaderScreen(
+                    state = readerState,
+                    onWordTap = parts.reader::onWordTap,
+                    onDismissCard = parts.reader::dismissCard,
+                    onSaveWord = parts.reader::toggleWord,
+                    onSavePhrase = parts.reader::savePhrase,
+                    onPreviousChapter = parts.reader::previousChapter,
+                    onNextChapter = parts.reader::nextChapter,
+                    onScrolled = parts.reader::rememberPlace,
+                    onChapter = parts.reader::loadChapter,
+                    onClose = {
+                        parts.reader.closeCurrent()
+                        reading = null
+                    },
+                    onOpenRule = { rule ->
+                        parts.reader.dismissCard()
+                        reference = rule
+                        section = Section.More
+                    },
+                )
 
-                Section.Shelves -> ShelvesScreen(
+                Route.Shelves -> ShelvesScreen(
                     state = catalogue,
                     onOpen = open,
                     onCreateShelf = parts.catalogue::addShelf,
@@ -297,59 +327,134 @@ private fun Shell(
                     onMove = parts.catalogue::moveToShelf,
                 )
 
-                Section.Srs -> when {
-                    training.running -> TrainingScreen(
-                        state = training,
-                        onAnswer = parts.training::answer,
-                        onNext = parts.training::next,
-                        onClose = parts.training::stop,
-                    )
+                Route.Training -> TrainingScreen(
+                    state = training,
+                    onAnswer = parts.training::answer,
+                    onNext = parts.training::next,
+                    onClose = parts.training::stop,
+                )
 
-                    decksOpen -> DecksScreen(
-                        state = catalogue,
-                        onOpenBook = open,
-                        onRemoveWord = parts.library::removeWord,
-                        onBack = { decksOpen = false },
-                    )
+                Route.WordList -> DecksScreen(
+                    state = catalogue,
+                    onOpenBook = open,
+                    onRemoveWord = parts.library::removeWord,
+                    onBack = { decksOpen = false },
+                )
 
-                    else -> SrsScreen(
-                        state = hub,
-                        onTrain = { deck: Deck ->
-                            askForNotifications()
-                            parts.training.start(deck)
-                        },
-                        onIntensity = parts.training::setIntensity,
-                        onOpenDecks = { decksOpen = true },
-                    )
-                }
+                Route.Cards -> SrsScreen(
+                    state = hub,
+                    onTrain = { deck: Deck ->
+                        askForNotifications()
+                        parts.training.start(deck)
+                    },
+                    onIntensity = parts.training::setIntensity,
+                    onOpenDecks = { decksOpen = true },
+                )
 
-                Section.More -> when (val rule = reference) {
-                    null -> SettingsScreen(
-                        theme = theme,
-                        onThemeChange = onThemeChange,
-                        fontScale = fontScale,
-                        onFontScaleChange = onFontScaleChange,
-                        sync = syncStatus,
-                        onSyncNow = { scope.launch { parts.sync.sync() } },
-                        coreVersion = remember {
-                            runCatching { parts.core.version() }.getOrElse { "?" }
-                        },
-                        serverUrl = serverUrl,
-                        signedIn = signedIn,
-                        onOpenReference = { reference = "" },
-                    )
+                Route.Settings -> SettingsScreen(
+                    theme = theme,
+                    onThemeChange = onThemeChange,
+                    fontScale = fontScale,
+                    onFontScaleChange = onFontScaleChange,
+                    sync = syncStatus,
+                    onSyncNow = { scope.launch { parts.sync.sync() } },
+                    coreVersion = remember {
+                        runCatching { parts.core.version() }.getOrElse { "?" }
+                    },
+                    serverUrl = serverUrl,
+                    signedIn = signedIn,
+                    onOpenReference = { reference = "" },
+                )
 
-                    else -> ReferenceScreen(
-                        articles = articles,
-                        openAt = rule.takeIf { it.isNotEmpty() },
-                        onBack = { reference = null },
-                    )
-                }
+                is Route.Reference -> ReferenceScreen(
+                    articles = articles,
+                    openAt = screen.rule.takeIf { it.isNotEmpty() },
+                    onBack = { reference = null },
+                )
             }
         }
 
         BottomBar(selected = section, onSelect = { section = it })
     }
+}
+
+/**
+ * Экран, показанный сейчас.
+ *
+ * Не «раздел»: разделов четыре, а экранов восемь — внутри раздела бывает
+ * читалка поверх библиотеки, тренировка поверх колод, статья поверх настроек.
+ * Анимации перехода нужен именно экран, и вместе с ним — глубина.
+ *
+ * Глубина говорит, в какую сторону ехать. Библиотека и читалка — не соседи:
+ * из первой во вторую входят, и движение обязано это показывать. А два
+ * раздела нижней панели равны, между ними никакого «глубже» нет, и подмена
+ * там честнее всего выглядит простым проявлением.
+ */
+@Immutable
+private sealed interface Route {
+    val depth: Int
+
+    data object Library : Route {
+        override val depth: Int get() = 0
+    }
+
+    data class Reader(val book: LibraryBook) : Route {
+        override val depth: Int get() = 1
+    }
+
+    data object Shelves : Route {
+        override val depth: Int get() = 0
+    }
+
+    data object Cards : Route {
+        override val depth: Int get() = 0
+    }
+
+    data object WordList : Route {
+        override val depth: Int get() = 1
+    }
+
+    data object Training : Route {
+        override val depth: Int get() = 1
+    }
+
+    data object Settings : Route {
+        override val depth: Int get() = 0
+    }
+
+    data class Reference(val rule: String) : Route {
+        override val depth: Int get() = 1
+    }
+}
+
+/**
+ * Как один экран сменяет другой.
+ *
+ * Уходящий гасится быстрее, чем приходит новый, и это намеренно: если оба
+ * длятся одинаково, посередине перехода видно оба сразу и получается каша.
+ * Сдвиг — шестая часть ширины, не вся: экран должен подъехать, а не
+ * пролететь. Целая ширина на большом окне превращается в заметную поездку,
+ * которую приходится пережидать.
+ */
+private fun screenTransition(from: Int, to: Int): ContentTransform {
+    val appear = tween<Float>(durationMillis = 220)
+    val vanish = tween<Float>(durationMillis = 120)
+    val slide = tween<IntOffset>(durationMillis = 220)
+
+    val enter = when {
+        to > from -> slideInHorizontally(slide) { width -> width / 6 } + fadeIn(appear)
+        to < from -> slideInHorizontally(slide) { width -> -width / 6 } + fadeIn(appear)
+        else -> fadeIn(appear)
+    }
+
+    return ContentTransform(
+        targetContentEnter = enter,
+        initialContentExit = fadeOut(vanish),
+        // Без обрезки по размеру: экраны занимают всё доступное место, и
+        // подгонять его анимацией не нужно — иначе содержимое дёргается, пока
+        // размер едет от старого к новому.
+        sizeTransform = SizeTransform(clip = false),
+    )
 }
 
 /**
