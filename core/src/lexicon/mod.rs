@@ -10,9 +10,11 @@
 
 mod morphology;
 mod pos;
+mod verbs;
 
 pub use morphology::{analyze, Fact, FormKind, WordAnalysis};
 pub use pos::{Cefr, Pos, PosSet};
+pub use verbs::{verb_roles, FormSet, IrregularVerbs, VerbForm, VerbRole};
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
