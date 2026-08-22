@@ -57,7 +57,7 @@ fun ShelvesScreen(
     onOpen: (LibraryBook) -> Unit,
     onCreateShelf: (String) -> Unit,
     onRemoveShelf: (String) -> Unit,
-    onMove: (bookId: String, shelfId: String?) -> Unit,
+    onMove: (bookId: String, shelf: String?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = WolfyTheme.colors
@@ -93,15 +93,15 @@ fun ShelvesScreen(
             item { NoShelves() }
         }
 
-        items(state.shelves, key = { it.id }) { shelf ->
-            val books = state.books.filter { it.shelf == shelf.id }
+        items(state.shelves, key = { it.name }) { shelf ->
+            val books = state.books.filter { it.shelf == shelf.name }
             ShelfCard(
                 shelf = shelf,
                 books = books,
-                expanded = expanded == shelf.id,
-                onToggle = { expanded = if (expanded == shelf.id) null else shelf.id },
+                expanded = expanded == shelf.name,
+                onToggle = { expanded = if (expanded == shelf.name) null else shelf.name },
                 onOpen = onOpen,
-                onRemove = { onRemoveShelf(shelf.id) },
+                onRemove = { onRemoveShelf(shelf.name) },
                 onTakeOff = { onMove(it.id, null) },
             )
         }
@@ -118,7 +118,7 @@ fun ShelvesScreen(
                     book = book,
                     shelves = state.shelves,
                     onOpen = { onOpen(book) },
-                    onMove = { shelfId -> onMove(book.id, shelfId) },
+                    onMove = { shelf -> onMove(book.id, shelf) },
                 )
             }
         }
@@ -309,7 +309,7 @@ private fun UnshelvedBook(
                                     colors.rule,
                                     RoundedCornerShape(spacing.huge),
                                 )
-                                .clickable { onMove(shelf.id) }
+                                .clickable { onMove(shelf.name) }
                                 .padding(horizontal = spacing.small, vertical = spacing.tight),
                         )
                     }

@@ -1,6 +1,7 @@
 package com.wolfy.data.library
 
 import java.io.File
+import java.security.MessageDigest
 
 /**
  * Библиотека в файлах — общая реализация для Android и Windows.
@@ -53,6 +54,37 @@ internal class FileLibraryStore(private val directory: File) : LibraryStore {
         // указывать куда угодно на диске пользователя.
         if (file.absolutePath.startsWith(books.absolutePath)) {
             file.delete()
+        }
+    }
+
+    /**
+     * Отпечаток — SHA-256 содержимого.
+     *
+     * Файл читается кусками, а не целиком: книга бывает и на сотню мегабайт,
+     * а держать её в памяти ради хеша незачем.
+     */
+    override fun fingerprint(path: String): String {
+        val file = File(path)
+        if (!file.isFile) return ""
+
+        return try {
+            val digest = MessageDigest.getInstance("SHA-256")
+            file.inputStream().use { input ->
+                val buffer = ByteArray(64 * 1024)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read <= 0) break
+                    digest.update(buffer, 0, read)
+                }
+            }
+            digest.digest().joinToString("") { byte ->
+                val value = byte.toInt() and 0xFF
+                value.toString(16).padStart(2, '0')
+            }
+        } catch (e: Exception) {
+            // Файл мог исчезнуть между выбором и чтением. Книга просто не
+            // узнается автоматически — это не повод не добавлять её.
+            ""
         }
     }
 

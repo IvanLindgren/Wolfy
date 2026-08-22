@@ -13,10 +13,12 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.wolfy.data.Settings
+import com.wolfy.data.SyncService
 import com.wolfy.data.WolfyApi
 import com.wolfy.data.library.Library
 import com.wolfy.data.library.LibraryBook
@@ -38,6 +40,8 @@ import com.wolfy.ui.nav.Section
 import com.wolfy.ui.reader.ReaderScreen
 import com.wolfy.ui.reader.ReaderViewModel
 import com.wolfy.ui.settings.SettingsScreen
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * Корень приложения.
@@ -65,15 +69,14 @@ fun WolfyApplication(
             val core = createWolfyCore()
             val store = createLibraryStore()
             val library = Library(store)
+            val settings = Settings(store)
+            val api = WolfyApi(baseUrl = serverUrl, tokenProvider = { sessionToken })
             Parts(
                 core = core,
                 library = library,
-                settings = Settings(store),
-                reader = ReaderViewModel(
-                    core = core,
-                    api = WolfyApi(baseUrl = serverUrl, tokenProvider = { sessionToken }),
-                    library = library,
-                ),
+                settings = settings,
+                sync = SyncService(library, settings, api),
+                reader = ReaderViewModel(core = core, api = api, library = library),
                 catalogue = LibraryViewModel(library, core),
             )
         } catch (e: CoreException) {
@@ -125,6 +128,7 @@ private class Parts(
     val core: WolfyCore,
     val library: Library,
     val settings: Settings,
+    val sync: SyncService,
     val reader: ReaderViewModel,
     val catalogue: LibraryViewModel,
 )
@@ -144,17 +148,48 @@ private fun Shell(
     // решает, показывать библиотеку или страницу, и она же переживает переход
     // в другой раздел и обратно.
     var reading by remember { mutableStateOf<LibraryBook?>(null) }
+    val scope = rememberCoroutineScope()
 
     val catalogue by parts.catalogue.state.collectAsState()
     val readerState by parts.reader.state.collectAsState()
 
+    // Книга, которой не хватает файла: она приехала синхронизацией, и читатель
+    // сейчас покажет, где держит его на этом устройстве.
+    var attachTo by remember { mutableStateOf<String?>(null) }
+    val attach = rememberBookPicker { picked ->
+        attachTo?.let { parts.catalogue.attachFile(it, picked) }
+        attachTo = null
+    }
+
     val open: (LibraryBook) -> Unit = { book ->
-        reading = book
-        section = Section.Books
-        parts.reader.open(book)
+        if (book.readable) {
+            reading = book
+            section = Section.Books
+            parts.reader.open(book)
+        } else {
+            // Открыть нечего: сервер знает, что читатель на четвёртой главе,
+            // но файла у него нет и не будет. Спрашиваем файл вместо того,
+            // чтобы молча ничего не сделать.
+            attachTo = book.id
+            attach()
+        }
     }
 
     val pick = rememberBookPicker(onPicked = parts.catalogue::import)
+    val syncStatus by parts.sync.status.collectAsState()
+
+    // Обмен с сервером: при запуске и потом, пока есть что отправлять.
+    //
+    // Минута, а не секунда: синхронизация нужна, чтобы вечером продолжить на
+    // телефоне то, что читал днём за компьютером, и опаздывать на минуту в
+    // этой задаче нечем. Опрос чаще жёг бы батарею ради ничего.
+    LaunchedEffect(parts) {
+        parts.sync.sync()
+        while (true) {
+            delay(60_000)
+            if (parts.sync.hasPending()) parts.sync.sync()
+        }
+    }
 
     Column(
         Modifier
@@ -199,7 +234,7 @@ private fun Shell(
                 )
 
                 Section.Srs -> DecksScreen(
-                    books = catalogue.books,
+                    state = catalogue,
                     onOpenBook = open,
                     onRemoveWord = parts.library::removeWord,
                 )
@@ -209,6 +244,8 @@ private fun Shell(
                     onThemeChange = onThemeChange,
                     fontScale = fontScale,
                     onFontScaleChange = onFontScaleChange,
+                    sync = syncStatus,
+                    onSyncNow = { scope.launch { parts.sync.sync() } },
                     coreVersion = remember { runCatching { parts.core.version() }.getOrElse { "?" } },
                     serverUrl = serverUrl,
                     signedIn = signedIn,

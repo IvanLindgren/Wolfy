@@ -63,6 +63,16 @@ class Settings(private val store: LibraryStore) {
         update { it.copy(theme = theme.name) }
     }
 
+    /**
+     * Заменяет настройки целиком — так они приезжают с другого устройства.
+     *
+     * Признак «клали ли демо-книгу» при этом сохраняется местный: он про то,
+     * что происходило на *этом* устройстве, и приезжать ему неоткуда.
+     */
+    fun replace(settings: AppSettings) {
+        update { settings.copy(demoAdded = it.demoAdded) }
+    }
+
     fun markDemoAdded() {
         update { it.copy(demoAdded = true) }
     }

@@ -28,7 +28,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.wolfy.data.library.Card
 import com.wolfy.data.library.LibraryBook
+import com.wolfy.ui.library.LibraryUiState
 import com.wolfy.theme.WolfyTheme
 import com.wolfy.widgets.BookCover
 import com.wolfy.widgets.Rule
@@ -49,7 +51,7 @@ import com.wolfy.widgets.WolfySticker
  */
 @Composable
 fun DecksScreen(
-    books: List<LibraryBook>,
+    state: LibraryUiState,
     onOpenBook: (LibraryBook) -> Unit,
     onRemoveWord: (bookId: String, lemma: String) -> Unit,
     modifier: Modifier = Modifier,
@@ -57,8 +59,11 @@ fun DecksScreen(
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
 
-    val decks = books.filter { it.savedWords > 0 }.sortedByDescending { it.savedWords }
-    val total = decks.sumOf { it.savedWords }
+    val decks = state.books
+        .map { it to state.deck(it.id) }
+        .filter { (_, deck) -> deck.isNotEmpty() }
+        .sortedByDescending { (_, deck) -> deck.size }
+    val total = decks.sumOf { (_, deck) -> deck.size }
     var opened by remember { mutableStateOf<String?>(null) }
 
     LazyColumn(
@@ -91,9 +96,10 @@ fun DecksScreen(
             item { EmptyDecks() }
         }
 
-        items(decks, key = { it.id }) { book ->
+        items(decks, key = { (book, _) -> book.id }) { (book, deck) ->
             DeckCard(
                 book = book,
+                deck = deck,
                 expanded = opened == book.id,
                 onToggle = { opened = if (opened == book.id) null else book.id },
                 onOpenBook = { onOpenBook(book) },
@@ -106,6 +112,7 @@ fun DecksScreen(
 @Composable
 private fun DeckCard(
     book: LibraryBook,
+    deck: List<Card>,
     expanded: Boolean,
     onToggle: () -> Unit,
     onOpenBook: () -> Unit,
@@ -141,7 +148,7 @@ private fun DeckCard(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = "★ " + plural(book.savedWords, "слово", "слова", "слов"),
+                    text = "★ " + plural(deck.size, "слово", "слова", "слов"),
                     style = WolfyTheme.typography.caption,
                     color = colors.inkMuted,
                 )
@@ -158,7 +165,7 @@ private fun DeckCard(
             // Слова стоят вплотную, как выписка из тетради, а не списком по
             // строке на слово: сорок строк превращают колоду в бесконечную
             // ленту, в которой не видно, сколько всего набрано.
-            WordChips(words = book.deck.sorted(), onRemove = onRemoveWord)
+            WordChips(words = deck.map { it.lemma }.sorted(), onRemove = onRemoveWord)
             Text(
                 text = "Долгое нажатие убирает слово из колоды",
                 style = WolfyTheme.typography.caption,

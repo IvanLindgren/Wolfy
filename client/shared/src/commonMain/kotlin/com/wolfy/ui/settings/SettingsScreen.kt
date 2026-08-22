@@ -19,6 +19,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.wolfy.data.SyncStatus
 import com.wolfy.theme.ReadingTheme
 import com.wolfy.theme.WolfyTheme
 import com.wolfy.widgets.Rule
@@ -40,6 +41,8 @@ fun SettingsScreen(
     onThemeChange: (ReadingTheme) -> Unit,
     fontScale: Float,
     onFontScaleChange: (Float) -> Unit,
+    sync: SyncStatus,
+    onSyncNow: () -> Unit,
     coreVersion: String,
     serverUrl: String,
     signedIn: Boolean,
@@ -83,6 +86,10 @@ fun SettingsScreen(
         )
 
         Rule()
+        SectionLabel("Синхронизация")
+        SyncBlock(status = sync, signedIn = signedIn, onSyncNow = onSyncNow)
+
+        Rule()
         SectionLabel("Перевод")
         Fact(
             label = "Аккаунт Читавука",
@@ -122,6 +129,60 @@ fun SettingsScreen(
                     color = colors.inkMuted,
                 )
             }
+        }
+    }
+}
+
+/**
+ * Состояние синхронизации.
+ *
+ * Отдельным блоком и с честной формулировкой: синхронизация — единственная
+ * часть приложения, которая может не работать по причинам вне читателя, и
+ * прятать это за молчаливым значком значит оставить его гадать, доехали ли
+ * его книги.
+ *
+ * Сами книги при этом не ездят и ездить не будут: сервер хранит, что вы
+ * читаете, а не сами файлы.
+ */
+@Composable
+private fun SyncBlock(status: SyncStatus, signedIn: Boolean, onSyncNow: () -> Unit) {
+    val colors = WolfyTheme.colors
+    val spacing = WolfyTheme.spacing
+
+    Column(verticalArrangement = Arrangement.spacedBy(spacing.small)) {
+        Fact(
+            label = "Состояние",
+            value = when {
+                !signedIn -> "нужен вход"
+                status.running -> "идёт обмен…"
+                status.error != null -> "не вышло"
+                status.lastSuccess > 0 -> "всё сошлось"
+                else -> "ещё не было"
+            },
+        )
+        if (status.pending > 0) {
+            Fact(label = "Ждёт отправки", value = status.pending.toString())
+        }
+        status.error?.let {
+            Text(text = it, style = WolfyTheme.typography.caption, color = colors.accent)
+        }
+        Text(
+            text = "Между устройствами едут прогресс, полки и колоды. Файлы книг " +
+                "остаются на устройстве: книга — это ваш файл, и держать его у себя " +
+                "сервер не должен.",
+            style = WolfyTheme.typography.caption,
+            color = colors.inkMuted,
+        )
+        if (signedIn) {
+            Text(
+                text = if (status.running) "обмен идёт" else "синхронизировать сейчас",
+                style = WolfyTheme.typography.button,
+                color = if (status.running) colors.inkMuted else colors.accent,
+                modifier = Modifier
+                    .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.huge))
+                    .clickable(enabled = !status.running, onClick = onSyncNow)
+                    .padding(horizontal = spacing.large, vertical = spacing.small),
+            )
         }
     }
 }

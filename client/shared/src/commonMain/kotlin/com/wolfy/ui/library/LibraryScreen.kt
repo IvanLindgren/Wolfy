@@ -73,7 +73,11 @@ fun LibraryScreen(
         item(span = { GridItemSpan(maxLineSpan) }) {
             Column(verticalArrangement = Arrangement.spacedBy(spacing.large)) {
                 state.continueReading?.let { current ->
-                    ContinueCard(current, onOpen = { onOpen(current) })
+                    ContinueCard(
+                        book = current,
+                        savedWords = state.deckSize(current.id),
+                        onOpen = { onOpen(current) },
+                    )
                 }
                 LibraryHeader(count = state.books.size, onImport = onImport)
                 state.message?.let { message ->
@@ -93,6 +97,7 @@ fun LibraryScreen(
         items(state.books, key = { it.id }) { book ->
             BookTile(
                 book = book,
+                savedWords = state.deckSize(book.id),
                 onOpen = { onOpen(book) },
                 onRemove = { onRemove(book) },
             )
@@ -108,7 +113,7 @@ fun LibraryScreen(
  * а если открытых нет — её нет вовсе.
  */
 @Composable
-private fun ContinueCard(book: LibraryBook, onOpen: () -> Unit) {
+private fun ContinueCard(book: LibraryBook, savedWords: Int, onOpen: () -> Unit) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
     val typography = WolfyTheme.typography
@@ -192,14 +197,19 @@ private fun LibraryHeader(count: Int, onImport: () -> Unit) {
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun BookTile(book: LibraryBook, onOpen: () -> Unit, onRemove: () -> Unit) {
+private fun BookTile(
+    book: LibraryBook,
+    savedWords: Int,
+    onOpen: () -> Unit,
+    onRemove: () -> Unit,
+) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
     var confirming by remember { mutableStateOf(false) }
 
     if (confirming) {
         RemoveConfirmation(
-            book = book,
+            savedWords = savedWords,
             onConfirm = {
                 confirming = false
                 onRemove()
@@ -221,16 +231,23 @@ private fun BookTile(book: LibraryBook, onOpen: () -> Unit, onRemove: () -> Unit
 
         Text(
             text = when {
+                // Книга без файла приехала по синхронизации: прогресс у неё
+                // есть, а открыть её здесь нечем, и молчать об этом нельзя.
+                !book.readable -> "нет файла"
                 book.finished -> "прочитана ✓"
                 !book.started -> "новая"
                 else -> percent(book.fraction)
             },
             style = WolfyTheme.typography.button,
-            color = if (book.finished) colors.partsOfSpeech.adjective else colors.ink,
+            color = when {
+                !book.readable -> colors.inkMuted
+                book.finished -> colors.partsOfSpeech.adjective
+                else -> colors.ink
+            },
         )
         Text(
-            text = if (book.savedWords > 0) {
-                "★ " + plural(book.savedWords, "слово", "слова", "слов")
+            text = if (savedWords > 0) {
+                "★ " + plural(savedWords, "слово", "слова", "слов")
             } else {
                 "☆ 0 слов"
             },
@@ -243,7 +260,7 @@ private fun BookTile(book: LibraryBook, onOpen: () -> Unit, onRemove: () -> Unit
 
 /** Подтверждение удаления — на месте самой плитки, а не поверх экрана. */
 @Composable
-private fun RemoveConfirmation(book: LibraryBook, onConfirm: () -> Unit, onCancel: () -> Unit) {
+private fun RemoveConfirmation(savedWords: Int, onConfirm: () -> Unit, onCancel: () -> Unit) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
 
@@ -261,12 +278,12 @@ private fun RemoveConfirmation(book: LibraryBook, onConfirm: () -> Unit, onCance
             color = colors.ink,
             textAlign = TextAlign.Center,
         )
-        if (book.savedWords > 0) {
+        if (savedWords > 0) {
             // Колода уходит вместе с книгой, и узнать об этом после — хуже
             // всего, что может случиться на этом экране.
             Text(
                 text = "Вместе с ней пропадёт колода: " +
-                    plural(book.savedWords, "слово", "слова", "слов"),
+                    plural(savedWords, "слово", "слова", "слов"),
                 style = WolfyTheme.typography.caption,
                 color = colors.inkMuted,
                 textAlign = TextAlign.Center,

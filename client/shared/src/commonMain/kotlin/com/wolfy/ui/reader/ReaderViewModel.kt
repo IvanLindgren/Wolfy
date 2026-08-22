@@ -127,8 +127,8 @@ class ReaderViewModel(
         // погаснуть вместе с ним.
         deckJob = viewModelScope.launch {
             library.state.collect { current ->
-                val deck = current.books.firstOrNull { it.id == book.id }?.deck ?: return@collect
-                _state.update { it.copy(savedLemmas = deck.toSet()) }
+                val deck = current.deck(book.id).map { it.lemma }.toSet()
+                _state.update { it.copy(savedLemmas = deck) }
             }
         }
 
@@ -136,7 +136,7 @@ class ReaderViewModel(
             _state.update {
                 ReaderState(
                     loading = true,
-                    savedLemmas = book.deck.toSet(),
+                    savedLemmas = library.deck(book.id).map { it.lemma }.toSet(),
                     startAt = book.progress.withinChapter,
                 )
             }
@@ -294,7 +294,17 @@ class ReaderViewModel(
                 )
             }
         } else {
-            id?.let { library.saveWord(it, lemma) }
+            id?.let {
+                library.saveWord(
+                    bookId = it,
+                    surface = card.analysis.surface,
+                    lemma = lemma,
+                    translation = (card.translation as? TranslationState.Ready)?.text.orEmpty(),
+                    context = card.context,
+                    pos = card.analysis.primaryPos.orEmpty(),
+                    cefr = card.analysis.cefr,
+                )
+            }
             _state.update {
                 it.copy(
                     savedLemmas = it.savedLemmas + lemma,

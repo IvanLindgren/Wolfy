@@ -4,6 +4,7 @@ import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.wolfy.data.library.Library
+import com.wolfy.data.library.Card
 import com.wolfy.data.library.LibraryBook
 import com.wolfy.data.library.Shelf
 import com.wolfy.ffi.CoreException
@@ -22,12 +23,20 @@ import kotlinx.coroutines.withContext
 @Immutable
 data class LibraryUiState(
     val books: List<LibraryBook> = emptyList(),
+    /** Все карточки всех колод: экраны берут отсюда счётчики и списки слов. */
+    val cards: List<Card> = emptyList(),
     val shelves: List<Shelf> = emptyList(),
     /** Книга, к которой стоит вернуться, или `null`, если открытых нет. */
     val continueReading: LibraryBook? = null,
     /** Сообщение читателю: книга не открылась, файл не скопировался. */
     val message: String? = null,
-)
+) {
+    /** Колода книги. */
+    fun deck(bookId: String): List<Card> = cards.filter { it.bookId == bookId && !it.deleted }
+
+    /** Сколько слов книги лежит в колоде. */
+    fun deckSize(bookId: String): Int = deck(bookId).size
+}
 
 /**
  * Библиотека: список книг, добавление файлов, полки.
@@ -48,13 +57,14 @@ class LibraryViewModel(
             // Недавно открытые впереди, а никогда не открытые — по дате
             // добавления. Алфавит здесь был бы честнее, но библиотеку читают
             // не с начала: сверху должно лежать то, к чему возвращаются.
-            books = library.books.sortedWith(
+            books = library.visible.sortedWith(
                 compareByDescending<LibraryBook> { it.progress.openedAt }
                     .thenByDescending { it.addedAt },
             ),
+            cards = library.cards.filterNot { it.deleted },
             shelves = library.shelves,
-            continueReading = library.books
-                .filter { it.started && !it.finished }
+            continueReading = library.visible
+                .filter { it.started && !it.finished && it.readable }
                 .maxByOrNull { it.progress.openedAt },
             message = message,
         )
@@ -109,15 +119,35 @@ class LibraryViewModel(
     }
 
     fun addShelf(name: String) {
-        if (name.isNotBlank()) library.addShelf(name.trim())
+        if (name.isNotBlank()) library.addShelf(name)
     }
 
-    fun removeShelf(id: String) {
-        library.removeShelf(id)
+    fun removeShelf(name: String) {
+        library.removeShelf(name)
     }
 
-    fun moveToShelf(bookId: String, shelfId: String?) {
-        library.moveToShelf(bookId, shelfId)
+    fun moveToShelf(bookId: String, shelf: String?) {
+        library.moveToShelf(bookId, shelf)
+    }
+
+    /**
+     * Привязывает файл к книге, приехавшей по синхронизации.
+     *
+     * Сервер знает, что читатель на четвёртой главе «Гэтсби», но файла у него
+     * нет — и не будет. На втором устройстве книгу надо показать пальцем.
+     */
+    fun attachFile(bookId: String, picked: PickedBook) {
+        viewModelScope.launch {
+            message.value = null
+            try {
+                library.attachFile(bookId, picked.path, picked.name)
+                val book = library.book(bookId) ?: return@launch
+                val described = withContext(Dispatchers.Default) { describe(book.path) }
+                library.describe(bookId, described.title ?: book.title, described.author, described.chapters)
+            } catch (e: CoreException) {
+                message.value = "Не получилось открыть файл: ${e.message}"
+            }
+        }
     }
 
     /** Название, автор и число глав из самого файла. */

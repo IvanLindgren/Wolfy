@@ -59,6 +59,34 @@ class WolfyApi(
         }
     }
 
+    /**
+     * Обменивается изменениями библиотеки.
+     *
+     * Один запрос в обе стороны: отправляем своё и свой курсор, получаем
+     * назад чужое — и своё тоже, уже с присвоенными ревизиями, чтобы не
+     * гадать, дошло ли.
+     */
+    suspend fun sync(payload: SyncPayload): SyncResult {
+        val token = tokenProvider() ?: return SyncResult.Failed("нужно войти в аккаунт")
+
+        return try {
+            val response = client.post("$baseUrl/v1/sync") {
+                header("Authorization", "Bearer $token")
+                contentType(ContentType.Application.Json)
+                setBody(payload)
+            }
+            when (response.status) {
+                HttpStatusCode.OK -> SyncResult.Ready(response.body())
+                HttpStatusCode.Unauthorized -> SyncResult.Failed("нужно войти заново")
+                HttpStatusCode.PayloadTooLarge ->
+                    SyncResult.Failed("библиотека слишком велика для одной отправки")
+                else -> SyncResult.Failed("сервер не принял изменения")
+            }
+        } catch (e: Exception) {
+            SyncResult.Failed("нет связи с сервером")
+        }
+    }
+
     companion object {
         fun defaultClient(): HttpClient = HttpClient {
             install(ContentNegotiation) {
@@ -71,6 +99,19 @@ class WolfyApi(
             }
         }
     }
+}
+
+/** Результат обмена с сервером. */
+sealed interface SyncResult {
+    data class Ready(val payload: SyncPayload) : SyncResult
+
+    /**
+     * Обмен не состоялся.
+     *
+     * Это не авария: библиотека уже лежит на устройстве и работает без сети.
+     * Сообщение пишется для читателя, а не для лога.
+     */
+    data class Failed(val message: String) : SyncResult
 }
 
 /** Результат перевода. */
