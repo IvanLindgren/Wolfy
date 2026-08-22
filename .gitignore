@@ -1,0 +1,41 @@
+# Секреты
+.env
+.env.*
+!.env.example
+
+# Rust
+core/target/
+**/*.rs.bk
+
+# Go
+server/bin/
+server/wolfy-server
+server/wolfy-server.exe
+
+# Kotlin / Gradle / Android
+.gradle/
+client/build/
+client/*/build/
+client/local.properties
+client/.kotlin/
+*.jks
+*.keystore
+!client/androidApp/debug.keystore
+
+# Собранные нативные библиотеки ядра
+client/androidApp/src/main/jniLibs/
+client/desktopApp/resources/windows-x64/*.dll
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# ОС
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Временное
+tmp/
+*.log
