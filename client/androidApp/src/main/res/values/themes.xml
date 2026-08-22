@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Системная тема нужна только до первого кадра Compose: она задаёт цвет
+         фона окна, чтобы при запуске не мелькал белый прямоугольник поверх
+         газетной бумаги. -->
+    <style name="Theme.Wolfy" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#F4F4F1</item>
+        <item name="android:statusBarColor">#F4F4F1</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

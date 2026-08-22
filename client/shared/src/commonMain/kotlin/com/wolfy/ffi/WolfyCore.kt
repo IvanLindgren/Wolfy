@@ -1,0 +1,197 @@
+package com.wolfy.ffi
+
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+
+/**
+ * Ядро на Rust: разбор слов, токенизация и чтение книг.
+ *
+ * Всё, что здесь есть, считается на устройстве и не ждёт сети — ради этого
+ * ядро и линкуется в приложение. Единственное, что приходит из интернета, —
+ * контекстный перевод, и он живёт в другом слое.
+ *
+ * Реализация зависит от платформы: на Android библиотека грузится через
+ * `System.loadLibrary`, на Windows — через JNA. Общий код различия не видит.
+ */
+interface WolfyCore {
+    /** Версия ядра — клиент сверяет её со своей при запуске. */
+    fun version(): String
+
+    /**
+     * Разбирает слово: начальная форма, части речи, объяснение формы,
+     * частотность, уровень.
+     *
+     * Быстрая операция — единицы микросекунд, вызывать можно прямо по тапу.
+     */
+    fun analyzeWord(word: String): WordAnalysis
+
+    /** Разбивает текст на кликабельные токены и предложения. */
+    fun tokenize(text: String): ParsedText
+
+    /**
+     * Открывает книгу и возвращает её описание вместе с номером.
+     *
+     * Номер обязателен к закрытию через [closeBook]: пока книга открыта, ядро
+     * держит её файл.
+     */
+    fun openBook(path: String): OpenBook
+
+    /**
+     * Читает главу.
+     *
+     * Единственная тяжёлая операция ядра — вызывать только из фонового потока
+     * (`Dispatchers.Default`), иначе просядет кадр.
+     */
+    fun readChapter(handle: Long, index: Int): Chapter
+
+    /** Закрывает книгу и отпускает файл. */
+    fun closeBook(handle: Long)
+}
+
+/** Ошибка ядра: битая книга, закрытый номер, неподдерживаемый формат. */
+class CoreException(message: String) : Exception(message)
+
+/** Разбор слова для карточки. */
+@Serializable
+data class WordAnalysis(
+    /** Слово так, как оно стоит в тексте. */
+    val surface: String,
+    /** Начальная форма — по ней слово ищется в колоде. */
+    val lemma: String,
+    /** Части речи в universal tagset: NOUN, VERB, ADJ… */
+    val pos: List<String> = emptyList(),
+    /** `lemma`, `regular`, `irregular` или `unknown`. */
+    val form: String,
+    /** Объяснения формы для карточки: «Число: множественное». */
+    val facts: List<Fact> = emptyList(),
+    /** Частотность по шкале Zipf: 6 — «the», 4 — обычное книжное слово. */
+    val zipf: Float,
+    /** Уровень по европейской шкале. */
+    val cefr: String,
+    /** Нашлось ли слово в словаре. */
+    val known: Boolean,
+) {
+    /** Основная часть речи — та, что показывается в шапке карточки. */
+    val primaryPos: String? get() = pos.firstOrNull()
+}
+
+/** Факт о форме слова: «Число» — «множественное, окончание -s». */
+@Serializable
+data class Fact(
+    val label: String,
+    val value: String,
+)
+
+/** Разобранный текст страницы. */
+@Serializable
+data class ParsedText(
+    val tokens: List<Token> = emptyList(),
+    val sentences: List<Sentence> = emptyList(),
+) {
+    /**
+     * Предложение, внутри которого стоит символ с этой позицией.
+     *
+     * Это и есть контекст для перевода: читатель ткнул в слово, а переводить
+     * надо фразу вокруг него.
+     */
+    fun sentenceAt(offset: Int): Sentence? =
+        sentences.firstOrNull { offset >= it.start && offset < it.end }
+
+    /** Токен под позицией касания. */
+    fun tokenAt(offset: Int): Token? =
+        tokens.firstOrNull { offset >= it.start && offset < it.end }
+}
+
+/**
+ * Кусок текста с позицией.
+ *
+ * [start] и [end] — индексы в строке Kotlin, то есть в единицах UTF-16. Ядро
+ * отдаёт их именно так, чтобы клиенту не пересчитывать смещения на каждый
+ * кадр отрисовки.
+ */
+@Serializable
+data class Token(
+    /** `word`, `number`, `punctuation` или `space`. */
+    val kind: String,
+    val start: Int,
+    val end: Int,
+    val text: String,
+) {
+    /** Можно ли по токену тапнуть ради карточки. */
+    val tappable: Boolean get() = kind == "word"
+}
+
+/** Предложение внутри текста. */
+@Serializable
+data class Sentence(
+    val start: Int,
+    val end: Int,
+    @SerialName("firstToken") val firstToken: Int,
+    @SerialName("lastToken") val lastToken: Int,
+    val text: String,
+)
+
+/** Книга сразу после открытия. */
+@Serializable
+data class BookInfo(
+    val title: String? = null,
+    val author: String? = null,
+    val language: String? = null,
+    /** Путь к обложке внутри книги. */
+    val cover: String? = null,
+    val chapters: List<ChapterInfo> = emptyList(),
+)
+
+@Serializable
+data class ChapterInfo(val title: String? = null)
+
+/** Открытая книга: её описание и номер для последующих обращений. */
+data class OpenBook(
+    val handle: Long,
+    val info: BookInfo,
+)
+
+/** Глава книги. */
+@Serializable
+data class Chapter(
+    val title: String? = null,
+    val blocks: List<Block> = emptyList(),
+) {
+    /**
+     * Весь текст главы одной строкой — то, что уходит в токенизатор.
+     *
+     * Блоки разделяются пустой строкой, потому что для ядра граница абзаца
+     * это ещё и граница предложения: иначе заголовок главы прилип бы к первой
+     * фразе и уехал в контекст перевода вместе с ней.
+     */
+    fun plainText(): String = blocks
+        .mapNotNull { it.text }
+        .joinToString("\n\n")
+}
+
+/**
+ * Блок главы.
+ *
+ * Поля плоские, а не запечатанная иерархия: так их отдаёт ядро, и городить
+ * поверх этого разбор в sealed-класс значило бы описать одно и то же дважды.
+ */
+@Serializable
+data class Block(
+    /** `heading`, `paragraph`, `quote`, `listItem`, `image` или `divider`. */
+    val kind: String,
+    val text: String? = null,
+    /** Уровень заголовка: 1 — часть, 2 — глава. */
+    val level: Int? = null,
+    /** Путь к иллюстрации внутри книги. */
+    val path: String? = null,
+    val alt: String? = null,
+)
+
+/**
+ * Создаёт ядро для текущей платформы.
+ *
+ * Загрузка библиотеки — единственное, что Android и Windows делают
+ * по-разному: первый берёт `.so` из пакета приложения, второй — `.dll` рядом
+ * с исполняемым файлом.
+ */
+expect fun createWolfyCore(): WolfyCore
