@@ -1,0 +1,24 @@
+[package]
+name = "wolfy-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+description = "Ядро Wolfy: разбор книг, токенизация и морфология английского"
+license = "Proprietary"
+publish = false
+
+[lib]
+# rlib нужен тестам и бенчмаркам, cdylib — клиенту: Android грузит .so,
+# Windows — .dll. Обе формы собираются из одного кода.
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+thiserror = "2"
+
+[profile.release]
+# Разбор слова обязан укладываться в 15 мс на среднем телефоне, поэтому
+# оптимизируем по скорости и разрешаем LTO через всю программу.
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
