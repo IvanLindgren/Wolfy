@@ -151,6 +151,10 @@ class ReaderViewModel(
     fun onWordTap(token: Token, parsed: ParsedText) {
         val context = parsed.sentenceAt(token.start)?.text ?: token.text
         val analysis = core.analyzeWord(token.text)
+        // Грамматика считается здесь же, а не отдельным запросом: она про то
+        // же предложение и стоит доли миллисекунды. Тянуть её вторым шагом
+        // значило бы показать карточку, которая потом дёрнется.
+        val grammar = core.explain(context)
 
         _state.update {
             it.copy(
@@ -158,6 +162,7 @@ class ReaderViewModel(
                     token = token,
                     analysis = analysis,
                     context = context,
+                    grammar = grammar,
                     translation = TranslationState.Loading,
                     saved = analysis.lemma in it.savedLemmas,
                 ),

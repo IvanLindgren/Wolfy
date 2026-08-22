@@ -1,6 +1,7 @@
 package com.wolfy.ui.card
 
 import androidx.compose.runtime.Immutable
+import com.wolfy.ffi.Finding
 import com.wolfy.ffi.Token
 import com.wolfy.ffi.WordAnalysis
 
@@ -18,6 +19,15 @@ data class WordCardState(
     val analysis: WordAnalysis,
     /** Предложение вокруг слова — контекст перевода. */
     val context: String,
+    /**
+     * Грамматика этого предложения: время, залог, модальность, условие.
+     *
+     * Считается ядром на устройстве вместе с разбором слова и потому есть
+     * сразу — в отличие от перевода, которого приходится ждать. Пустой список
+     * значит, что разбирать во фразе нечего, и это нормальный ответ: не в
+     * каждом предложении есть чему учиться.
+     */
+    val grammar: List<Finding> = emptyList(),
     val translation: TranslationState = TranslationState.Idle,
     /** Лежит ли слово уже в колоде книги. */
     val saved: Boolean = false,

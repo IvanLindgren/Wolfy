@@ -32,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.wolfy.ffi.Finding
 import com.wolfy.theme.WolfyTheme
 import com.wolfy.widgets.CefrBadge
 import com.wolfy.widgets.Rule
@@ -155,6 +156,12 @@ private fun CardBody(
                 }
             }
 
+            if (state.grammar.isNotEmpty()) {
+                Rule()
+                SectionLabel("Грамматика предложения")
+                state.grammar.forEach { GrammarNote(it) }
+            }
+
             Rule()
             SectionLabel("Частотность в живой речи")
             FrequencyBar(state.analysis.zipf)
@@ -234,6 +241,39 @@ private fun Translation(state: WordCardState) {
         )
 
         TranslationState.Idle -> Unit
+    }
+}
+
+/**
+ * Одно грамматическое правило, найденное в предложении.
+ *
+ * Формула стоит рядом с названием, а не под объяснением, и это не украшение:
+ * правило запоминается схемой, а объяснение только помогает её понять. Читатель,
+ * который уже знает «have/has + V3», по одной формуле узнаёт время быстрее, чем
+ * прочитает заголовок.
+ */
+@Composable
+private fun GrammarNote(finding: Finding) {
+    val colors = WolfyTheme.colors
+    val spacing = WolfyTheme.spacing
+    val typography = WolfyTheme.typography
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(colors.paper, RoundedCornerShape(spacing.small))
+            .padding(spacing.small),
+        verticalArrangement = Arrangement.spacedBy(spacing.tight),
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(text = finding.title, style = typography.body, color = colors.ink)
+            Text(text = finding.formula, style = typography.caption, color = colors.accent)
+        }
+        Text(text = finding.explanation, style = typography.caption, color = colors.inkMuted)
     }
 }
 
