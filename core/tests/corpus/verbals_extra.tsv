@@ -1,0 +1,35 @@
+# Неличные формы: сложные инфинитивы, причастия, герундий после глаголов.
+perfect-infinitive	She is glad to have finished the work.
+perfect-infinitive	He would like to have stayed longer.
+passive-infinitive	The work needs to be done today.
+passive-infinitive	The letter needs to be sent today.
+continuous-infinitive	He seems to be working hard.
+!perfect-infinitive	I want to have a rest.
+!bare-infinitive	He made a promise.
+
+bare-infinitive	He made me laugh.
+bare-infinitive	She saw him leave the house.
+bare-infinitive	Let's go home.
+bare-infinitive	They heard her sing in the kitchen.
+!bare-infinitive	He made a promise.
+!bare-infinitive	We watched a movie yesterday.
+
+gerund-verb	He avoided answering directly.
+gerund-verb	She suggested going home.
+gerund-verb	They kept working until midnight.
+gerund-verb	I enjoy reading old letters.
+!gerund-verb	They finished the work.
+!gerund-verb	Keep the change.
+
+perfect-participle	Having finished work, he went home.
+perfect-participle	Having been warned, she left early.
+participle-clause	Walking down the street, she met an old friend.
+participle-clause	She sat by the window, reading a book.
+present-participle	The man standing there is my brother.
+present-participle	The children playing in the yard are quiet.
+past-participle	The broken glass lay on the floor.
+past-participle	A letter written by hand arrived today.
+# Времена и залог не разбираются причастием.
+!participle-clause	Reading is useful.
+!participle-clause	She was reading a book.
+!past-participle	The window was broken by the wind.

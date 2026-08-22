@@ -1,0 +1,19 @@
+# Сложное дополнение, сложное подлежащее и каузатив.
+complex-object	I want you to stay here.
+complex-object	She expects him to call tomorrow.
+complex-object	We asked them to wait outside.
+# Инфинитив с одним подлежащим — не сложное дополнение.
+!complex-object	I want to read the book.
+!complex-object	She hopes to win the prize.
+
+causative	I had my car repaired yesterday.
+causative	She got her hair cut.
+causative	They had their house painted last summer.
+# Перфект от have — не каузатив.
+!causative	He had repaired the car before noon.
+!causative	She has finished her homework.
+
+complex-subject	He is believed to be rich.
+complex-subject	She seems to know the answer.
+complex-subject	They are likely to arrive on time.
+complex-subject	The storm appears to be moving north.

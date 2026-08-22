@@ -1,0 +1,21 @@
+# Модальные глаголы вероятности и дедукции.
+modal-deduction	It must be John.
+modal-deduction	He can't be serious.
+modal-deduction	She might be at home.
+modal-deduction	The letter could be in the drawer.
+# Дедукция о прошлом — это modal-perfect, не deduction.
+!modal-deduction	He must have left already.
+!modal-deduction	She can't have said that.
+# Обязанность без связки be — обычный модальный.
+!modal-deduction	You must wait here.
+!modal-deduction	Students must not use phones in class.
+
+# Эквиваленты модальных глаголов.
+modal-equivalent	She has to work on Sundays.
+modal-equivalent	He had to leave early.
+modal-equivalent	We will be able to come tomorrow.
+modal-equivalent	You are supposed to wait here.
+modal-equivalent	Visitors are allowed to take photos.
+# Владение и перфект — не обязанность.
+!modal-equivalent	I have two books to read.
+!modal-equivalent	She has finished the work.

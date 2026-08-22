@@ -25,14 +25,26 @@
 //!
 //! Правила слоя — в `rules/grammar_engine.md`.
 
+mod adverbial;
 mod chain;
+mod cleft;
+mod comparison;
+mod complex;
 mod conditional;
+mod emphasis;
+mod equivalents;
 mod exercise;
 mod modal;
+mod participle;
 mod passive;
+mod phrasal;
 mod reference;
+mod relative;
+mod reported;
+mod subjunctive;
 mod tense;
 mod verbal;
+mod wish;
 
 pub use chain::{Chain, Link, Part};
 pub use exercise::{exercises, exercises_for, Exercise, Task, GAP};
@@ -112,12 +124,24 @@ type Detector = fn(&[Word]) -> Vec<Finding>;
 /// времена и залог, затем модальные, затем неличные формы, затем условные.
 /// Это не техническое требование, а забота о читателе: разборы одного
 /// предложения показываются в этом же порядке, и первым он видит главное.
-const DETECTORS: [Detector; 5] = [
+const DETECTORS: [Detector; 17] = [
     tense::detect,
     passive::detect,
     modal::detect,
+    equivalents::detect,
     verbal::detect,
+    participle::detect,
+    complex::detect,
     conditional::detect,
+    subjunctive::detect,
+    wish::detect,
+    emphasis::detect,
+    cleft::detect,
+    reported::detect,
+    relative::detect,
+    adverbial::detect,
+    comparison::detect,
+    phrasal::detect,
 ];
 
 /// Разбирает предложение.

@@ -1,0 +1,14 @@
+# Конструкции сравнения и фразовые глаголы.
+comparison-as-as	She is as tall as her mother.
+comparison-as-as	It is not so difficult as I thought.
+comparison-the-more	The more you read, the more you know.
+!comparison-as-as	As a child, he lived in Rome.
+!comparison-the-more	I like tea more than coffee.
+
+phrasal-verb	She gave up smoking last year.
+phrasal-verb	He is looking forward to the trip.
+phrasal-verb	We ran out of milk.
+phrasal-verb	Turn on the light, please.
+phrasal-verb	They got rid of the old sofa.
+# Одиночный глагол без своего предлога — не фразовый.
+!phrasal-verb	They give money to charity every month.

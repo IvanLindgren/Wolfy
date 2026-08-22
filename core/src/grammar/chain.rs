@@ -197,6 +197,11 @@ fn chain_at(words: &[Word], start: usize) -> Option<Chain> {
             if link == Link::Modal && !parts.is_empty() {
                 break;
             }
+            // Отрицание бывает и зашито в служебное слово: «won't», «didn't»,
+            // «cannot». Цепочка запоминает его так же, как отдельное «not».
+            if negation.is_none() && (word.lower.ends_with("n't") || word.lower == "cannot") {
+                negation = Some(index);
+            }
             parts.push(Part {
                 word: index,
                 link,

@@ -1,0 +1,43 @@
+# Сокращения и типографский апостроф.
+#
+# Книги печатают «don’t» с типографским апострофом и «won't» с прямым, и оба
+# написания обязаны разбираться одинаково: отрицание меняет смысл фразы, но не
+# то, какое это правило.
+future-simple	He won't come tomorrow.
+future-simple	He won’t come tomorrow.
+present-perfect	She hasn't read the book.
+past-simple	I didn't see him.
+present-continuous	They aren't coming.
+modal-perfect	He shouldn't have said that.
+conditional-second	If I were you, I wouldn't wait.
+modal-deduction	She can't be serious.
+# Отрицание, зашитое в слово, — не эмфатическое do.
+!emphatic-do	She doesn't read books.
+!emphatic-do	She doesn’t read books.
+# «Won't» образует будущее, а не отношение говорящего.
+!modal-verb	He won't come tomorrow.
+
+# Возможность против вывода.
+!modal-deduction	This can be useful.
+!modal-deduction	It can be difficult at first.
+modal-deduction	The answer may be wrong.
+
+# Инверсия — это когда служебный глагол обогнал подлежащее.
+!inversion-negative	Little is known about him.
+inversion-negative	Never have I seen such a mess.
+
+# «While» вводит время чаще, чем уступку.
+!concession-clause	While I was reading, the phone rang.
+concession-clause	Although it rained, we went out.
+
+# Фразовый глагол начинается с глагола, а не с существительного.
+!phrasal-verb	There is a break down the road.
+phrasal-verb	The car broke down on the way.
+
+# Подлежащее сослагательного бывает и из двух слов.
+subjunctive-mood	They demanded that the bill pass.
+subjunctive-mood	It is important that she go there.
+
+# «Going to» бывает в предложении не одно.
+future-going-to	I am going to read and she is going to write.
+!future-going-to	He is going to the shop.

@@ -11,7 +11,7 @@
 //! признак: модальный глагол с третьей формой («must have left») почти всегда
 //! говорит о догадке про прошлое, а не о долге.
 
-use crate::tagger::Word;
+use crate::tagger::{modal_base, Aux, Word};
 
 use super::chain::{chains, Link};
 use super::Finding;
@@ -26,10 +26,14 @@ pub fn detect(words: &[Word]) -> Vec<Finding> {
             }
             let modal = words.get(head.word)?;
 
+            // Сокращение — то же правило: «won't come» это будущее, а
+            // «shouldn't have» — тот же упрёк, что «should not have».
+            let base = modal_base(&modal.lower);
+
             // «will» и «shall» здесь не разбираются: они образуют будущее
             // время, и говорит о них детектор времён. Разобрать их дважды
             // значило бы показать читателю два ответа на один вопрос.
-            if matches!(modal.lower.as_str(), "will" | "shall") {
+            if matches!(base, "will" | "shall") {
                 return None;
             }
 
@@ -40,22 +44,65 @@ pub fn detect(words: &[Word]) -> Vec<Finding> {
                     "modal-perfect",
                     "Модальный глагол о прошлом",
                     "модальный + have + V3",
-                    explain_perfect(&modal.lower),
+                    explain_perfect(base),
                     words,
                     chain.words.clone(),
                 ));
+            }
+
+            // Модальный со связкой «be» — почти всегда вывод о настоящем:
+            // «it must be John», «he can't be serious». Обязанность тут ни при
+            // чём, и общее объяснение про «можно/должен» промахнулось бы.
+            // Связка ищется по служебной роли слова, а не по звену цепочки:
+            // в «must be John» за связкой нет глагола, и цепочка сделала её
+            // смысловым звеном, хотя роль слова не менялась.
+            let links_be = chain
+                .words
+                .clone()
+                .any(|i| words.get(i).is_some_and(|w| w.aux == Some(Aux::Be)));
+            if links_be {
+                if let Some(explanation) = explain_deduction(base, chain.is_negative()) {
+                    return Some(Finding::new(
+                        "modal-deduction",
+                        "Предположение или вывод",
+                        "модальный + be",
+                        explanation,
+                        words,
+                        chain.words.clone(),
+                    ));
+                }
             }
 
             Some(Finding::new(
                 "modal-verb",
                 "Модальный глагол",
                 "модальный + V",
-                explain(&modal.lower),
+                explain(base),
                 words,
                 chain.words.clone(),
             ))
         })
         .collect()
+}
+
+/// Объяснение для вывода о настоящем: «must be», «can't be», «might be».
+///
+/// Возвращается `None` для модальных, которые со связкой дедукции не образуют:
+/// «should be» это по-прежнему совет, а «would be» — условие.
+fn explain_deduction(modal: &str, negative: bool) -> Option<&'static str> {
+    Some(match (modal, negative) {
+        ("must", false) => "Уверенный вывод о настоящем: иначе быть просто не может",
+        // «Can» становится выводом только с отрицанием. Голое «can be» — это
+        // возможность («it can be difficult»), и назвать её невозможностью
+        // значит сказать читателю ровно обратное тому, что написано в книге.
+        ("can", true) => {
+            "Уверенный вывод о невозможности: так быть не может, говорящий это исключает"
+        }
+        ("may" | "might" | "could", _) => {
+            "Предположение о настоящем: возможно, так и есть, но уверенности нет"
+        }
+        _ => return None,
+    })
 }
 
 /// Объяснение для модального с третьей формой.

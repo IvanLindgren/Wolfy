@@ -17,7 +17,8 @@
 //! это не время, а возможность, и разбирает его свой детектор. Молчание здесь
 //! не пропуск, а отказ отвечать не на свой вопрос.
 
-use crate::tagger::{AuxForm, Word};
+use crate::lexicon::{Pos, VerbForm};
+use crate::tagger::{modal_base, Aux, AuxForm, Word};
 
 use super::chain::{chains, Chain, Link};
 use super::Finding;
@@ -31,10 +32,59 @@ enum Time {
 }
 
 pub fn detect(words: &[Word]) -> Vec<Finding> {
-    chains(words)
+    let mut out: Vec<Finding> = chains(words)
         .iter()
         .filter_map(|chain| finding(words, chain))
-        .collect()
+        .collect();
+    out.extend(going_to(words));
+    out
+}
+
+/// Конструкция «to be going to»: «She is going to read».
+///
+/// Формально это продолженное время от «go», но смысл у него свой — план или
+/// предсказание по признакам, — и читатель ищет в разборе именно его. Признак
+/// узкий: слева служебное «be», дальше частица «to» и начальная форма глагола.
+/// Последняя проверка отсекает «people going to work»: за «to» там стоит
+/// существительное, и это просто направление движения, а не будущее время.
+fn going_to(words: &[Word]) -> Vec<Finding> {
+    let mut out = Vec::new();
+
+    for index in 1..words.len() {
+        if words[index].lower != "going" || !words[index].has_form(VerbForm::Gerund) {
+            continue;
+        }
+        // Слева обязана быть форма be. В вопросе между ними стоит подлежащее
+        // («Was he going…»), поэтому смотрим на два слова назад.
+        let links_be = (1..=2).any(|back| match index.checked_sub(back) {
+            Some(position) => {
+                words[position].aux == Some(Aux::Be)
+                    && (back == 1 || words[index - 1].pos == Pos::Pronoun)
+            }
+            None => false,
+        });
+        if !links_be {
+            continue;
+        }
+        // Не «?»: за одним «going» без продолжения стоит конец предложения,
+        // а не конец поиска — во второй половине фразы может быть ещё одно.
+        let (Some(next), Some(verb)) = (words.get(index + 1), words.get(index + 2)) else {
+            continue;
+        };
+        if next.aux == Some(Aux::To) && verb.has_form(VerbForm::Base) && verb.pos == Pos::Verb {
+            out.push(Finding::new(
+                "future-going-to",
+                "Конструкция going to",
+                "am/is/are + going to + V",
+                "Решение или план, который был ещё до момента речи, либо \
+                 предсказание по видимым признакам: вот-вот случится",
+                words,
+                index - 1..index + 3,
+            ));
+        }
+    }
+
+    out
 }
 
 fn finding(words: &[Word], chain: &Chain) -> Option<Finding> {
@@ -65,7 +115,7 @@ fn time(words: &[Word], chain: &Chain) -> Option<Time> {
         // Будущее в английском строится модальным глаголом, и только двумя из
         // них. Остальные образуют не время, а отношение говорящего к действию.
         let word = words.get(head.word)?;
-        return matches!(word.lower.as_str(), "will" | "shall" | "'ll").then_some(Time::Future);
+        return matches!(modal_base(&word.lower), "will" | "shall").then_some(Time::Future);
     }
 
     match head.form {

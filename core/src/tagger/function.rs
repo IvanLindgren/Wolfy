@@ -70,6 +70,9 @@ pub struct FunctionWord {
 /// Ищет слово в закрытом списке.
 ///
 /// Проверять надо до словаря: смысл таблицы в том, чтобы перебить его ответ.
+///
+/// Слово приходит в нижнем регистре и с прямым апострофом — приводит его к
+/// такому виду теггер, до всякого разбора.
 pub fn lookup(word: &str) -> Option<FunctionWord> {
     use AuxForm::*;
 
@@ -82,6 +85,26 @@ pub fn lookup(word: &str) -> Option<FunctionWord> {
             (Pos::Verb, Some(Aux::Modal), None, Present)
         }
         "could" | "would" | "should" | "might" => (Pos::Verb, Some(Aux::Modal), None, Past),
+
+        // Сокращения живут одним токеном: токенизатор хранит апостроф внутри
+        // слова. Отрицание здесь зашито в само слово, и цепочка запоминает его
+        // по окончанию «n't» — отдельного «not» при этом не придёт. В таблицу
+        // идут только те сокращения, где отрицание не меняет роль слова;
+        // «need» без «n't» сюда не попало сознательно: чаще он смысловой
+        // глагол («I need water»), чем модальный.
+        "won't" => (Pos::Verb, Some(Aux::Modal), None, Present),
+        "can't" | "cannot" => (Pos::Verb, Some(Aux::Modal), None, Present),
+        "couldn't" | "shouldn't" | "wouldn't" | "mightn't" => {
+            (Pos::Verb, Some(Aux::Modal), None, Past)
+        }
+        "mustn't" | "needn't" => (Pos::Verb, Some(Aux::Modal), None, Present),
+        "shan't" => (Pos::Verb, Some(Aux::Modal), None, Present),
+        "don't" | "doesn't" => (Pos::Verb, Some(Aux::Do), Some("do"), Present),
+        "didn't" => (Pos::Verb, Some(Aux::Do), Some("do"), Past),
+        "isn't" | "aren't" => (Pos::Verb, Some(Aux::Be), Some("be"), Present),
+        "wasn't" | "weren't" => (Pos::Verb, Some(Aux::Be), Some("be"), Past),
+        "hasn't" | "haven't" => (Pos::Verb, Some(Aux::Have), Some("have"), Present),
+        "hadn't" => (Pos::Verb, Some(Aux::Have), Some("have"), Past),
 
         // Формы «be». Их восемь, и это единственный глагол английского с таким
         // числом форм — поэтому список, а не правило.
@@ -135,10 +158,27 @@ pub enum Clause {
     Other,
 }
 
+/// Модальный глагол без отрицания: «won't» → «will», «cannot» → «can».
+///
+/// Отрицание меняет смысл фразы, но не то, какое это правило: «won't come» —
+/// то же будущее время, что «will come», а «shouldn't have» — тот же упрёк.
+/// Детекторы спрашивают про правило, поэтому спрашивают отсюда, а не сверяют
+/// написание: иначе каждый из них пришлось бы учить всем сокращениям по
+/// отдельности, и каждый забыл бы своё.
+pub fn modal_base(word: &str) -> &str {
+    match word {
+        "won't" => "will",
+        "shan't" => "shall",
+        "can't" | "cannot" => "can",
+        "'ll" => "will",
+        other => other.strip_suffix("n't").unwrap_or(other),
+    }
+}
+
 /// Вводит ли слово придаточное предложение.
 pub fn clause_marker(word: &str) -> Option<Clause> {
     Some(match word {
-        "if" | "unless" | "provided" | "providing" => Clause::Condition,
+        "if" | "unless" | "provided" | "providing" | "suppose" | "supposing" => Clause::Condition,
         "when" | "whenever" | "while" | "before" | "after" | "until" | "till" | "once"
         | "since" => Clause::Time,
         "because" | "although" | "though" | "whereas" | "whether" | "so" => Clause::Other,

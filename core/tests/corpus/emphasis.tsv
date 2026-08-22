@@ -1,0 +1,30 @@
+# Эмфаза, инверсии и расщеплённые предложения.
+emphatic-do	He does love you.
+emphatic-do	She did come after all.
+!emphatic-do	Does he love you?
+!emphatic-do	What does he want?
+!emphatic-do	She does not love you.
+
+inversion-negative	Never have I seen such a mess.
+inversion-negative	Seldom does he come here.
+inversion-negative	No sooner had I arrived than it started raining.
+inversion-negative	Hardly had she sat down when the phone rang.
+!inversion-negative	I have never seen such a mess.
+!inversion-negative	Never say never.
+
+inversion-place	Here comes the bus.
+inversion-place	Down fell the rain.
+!inversion-place	There was a house.
+!inversion-place	Here is your coffee.
+
+inversion-echo	So do I.
+inversion-echo	Neither can she.
+
+cleft-it	It was John who broke the window.
+cleft-it	It is the book that changed my mind.
+!cleft-it	It is important that he be present.
+!cleft-it	It is raining.
+
+cleft-what	What I need is a cup of coffee.
+cleft-what	All she wanted was peace.
+!cleft-what	What time is it?

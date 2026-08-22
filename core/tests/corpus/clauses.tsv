@@ -1,0 +1,24 @@
+# Косвенная речь, относительные и обстоятельственные придаточные.
+reported-speech	He said he had finished the work.
+reported-speech	She said she would come tomorrow.
+reported-speech	He asked where I lived.
+reported-speech	She wondered if he was ready.
+!reported-speech	He said hello and left.
+!reported-speech	She asked a question.
+
+relative-defining	The book that changed my life was cheap.
+relative-defining	The man who I saw yesterday is my neighbor.
+relative-defining	The author whose book won the prize is young.
+relative-nondefining	My brother, who lives in Rome, is a doctor.
+# Союз при глаголе речи и указательное местоимение — не relative.
+!relative-defining	He said that he came late.
+!relative-defining	That book was good.
+
+purpose-clause	He stood up in order to see better.
+purpose-clause	We whispered so that the baby would not wake.
+reason-clause	The game was canceled because of the rain.
+reason-clause	She left early because she was tired.
+reason-clause	Due to the storm, all flights were canceled.
+concession-clause	Although it rained, we went out.
+concession-clause	Whereas most people agreed, he refused.
+!reason-clause	As a child, he lived in Rome.

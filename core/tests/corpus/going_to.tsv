@@ -1,0 +1,9 @@
+# Конструкция to be going to.
+future-going-to	She is going to read the book.
+future-going-to	We are going to visit grandma tomorrow.
+future-going-to	It is going to rain soon.
+future-going-to	Was he going to say something?
+# Направление движения, а не будущее время.
+!future-going-to	She went to the library.
+!future-going-to	The people going to work were quiet.
+!future-going-to	He is going home now.

@@ -19,7 +19,7 @@
 
 mod function;
 
-pub use function::{Aux, AuxForm, Clause};
+pub use function::{modal_base, Aux, AuxForm, Clause};
 
 use crate::lexicon::{verb_roles, Lexicon, Pos, PosSet, VerbForm, VerbRole};
 use crate::tokenizer::{Token, TokenKind};
@@ -108,7 +108,11 @@ fn collect(lexicon: &Lexicon, tokens: &[Token]) -> Vec<Word> {
             continue;
         }
 
-        let lower = token.text.to_lowercase();
+        // Книги печатают типографский апостроф: «don’t», «I’ve». Сводим его к
+        // прямому здесь и один раз — иначе каждая таблица служебных слов и
+        // каждая проверка на «n't» удваивались бы ради одного символа, и
+        // где-нибудь про него однажды забыли бы.
+        let lower = token.text.to_lowercase().replace('\u{2019}', "'");
         let function = function::lookup(&lower);
         let entry = lexicon.entry(&lower);
         let candidates = entry.map(|e| e.pos).unwrap_or(PosSet::EMPTY);

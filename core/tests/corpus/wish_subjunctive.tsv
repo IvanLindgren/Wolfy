@@ -1,0 +1,22 @@
+# Условие без if, сослагательное наклонение и wish.
+conditional-inversion	Had we known earlier, we would have acted.
+conditional-inversion	Were she here, she would help us.
+conditional-inversion	Should you see him, tell him to call.
+!conditional-inversion	Had dinner, we went home.
+!conditional-inversion	I have known him for years.
+
+subjunctive-mood	It is important that he be present.
+subjunctive-mood	I suggest that she go alone.
+subjunctive-mood	The doctor insisted that she take the medicine.
+!subjunctive-mood	It is important that he arrives on time.
+!subjunctive-mood	It is important to arrive on time.
+
+wish-present	I wish I knew the answer.
+wish-present	If only I had more time!
+wish-past	She wishes she had studied harder.
+wish-past	If only I had known earlier!
+wish-would	I wish you would stop smoking.
+wish-would	I wish he would write more often.
+# Простое пожелание без глагольной цепочки — не наклонение.
+!wish-present	We wish you a merry Christmas.
+!wish-present	I wish you luck in the new job.
