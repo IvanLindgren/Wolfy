@@ -39,7 +39,10 @@ pub struct FunctionWord {
     pub aux: Option<Aux>,
     /// Начальная форма — «is» → «be». Нужна, чтобы движок сравнивал глаголы,
     /// а не их написания.
-    pub lemma: &'static str,
+    ///
+    /// `None` у слова, которое само себе начальная форма: у модальных других
+    /// форм и не бывает, в том и разница между «can» и обычным глаголом.
+    pub lemma: Option<&'static str>,
 }
 
 /// Ищет слово в закрытом списке.
@@ -50,24 +53,23 @@ pub fn lookup(word: &str) -> Option<FunctionWord> {
         // Модальные. Своих неличных форм у них нет, спряжения тоже — потому
         // они и не глаголы в обычном смысле, а отдельный класс.
         "can" | "could" | "will" | "would" | "shall" | "should" | "may" | "might" | "must"
-        | "ought" => (Pos::Verb, Some(Aux::Modal), word),
+        | "ought" => (Pos::Verb, Some(Aux::Modal), None),
 
         // Формы «be». Их восемь, и это единственный глагол английского с таким
         // числом форм — поэтому список, а не правило.
-        "be" => (Pos::Verb, Some(Aux::Be), "be"),
-        "am" | "is" | "are" | "was" | "were" | "been" | "being" => {
-            (Pos::Verb, Some(Aux::Be), "be")
+        "be" | "am" | "is" | "are" | "was" | "were" | "been" | "being" => {
+            (Pos::Verb, Some(Aux::Be), Some("be"))
         }
 
-        "have" | "has" | "had" | "having" => (Pos::Verb, Some(Aux::Have), "have"),
-        "do" | "does" | "did" | "doing" => (Pos::Verb, Some(Aux::Do), "do"),
+        "have" | "has" | "had" | "having" => (Pos::Verb, Some(Aux::Have), Some("have")),
+        "do" | "does" | "did" | "doing" => (Pos::Verb, Some(Aux::Do), Some("do")),
 
         // «to» перед глаголом — частица инфинитива, перед существительным —
         // предлог. Разделить их может только разбор, поэтому здесь частица, а
         // предлог восстанавливается по соседям.
-        "to" => (Pos::Particle, Some(Aux::To), "to"),
+        "to" => (Pos::Particle, Some(Aux::To), None),
 
-        "not" | "n't" | "nt" => (Pos::Adverb, Some(Aux::Not), "not"),
+        "not" | "n't" | "nt" => (Pos::Adverb, Some(Aux::Not), Some("not")),
 
         _ => return None,
     };

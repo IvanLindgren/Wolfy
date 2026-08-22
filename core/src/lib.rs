@@ -19,6 +19,7 @@ mod error;
 pub mod ffi;
 pub mod lexicon;
 pub mod parser;
+pub mod tagger;
 pub mod tokenizer;
 
 pub use error::{CoreError, Result};
