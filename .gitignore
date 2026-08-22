@@ -39,3 +39,6 @@ desktop.ini
 # Временное
 tmp/
 *.log
+
+# Go
+server/wolfy-server

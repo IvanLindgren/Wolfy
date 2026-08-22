@@ -1,0 +1,42 @@
+# Локальное окружение разработки.
+#
+# Отдельный Postgres, а не боевой инстанс Читавука: миграции Wolfy трогают
+# общую базу, и отлаживать их на живых данных нельзя. В продакшене сервис
+# смотрит в тот же инстанс, что и Читавук, — отличается только WOLFY_DB_URL.
+#
+# Порт 5433, чтобы не спорить с локальным Postgres, если он уже стоит.
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: wolfy-postgres
+    environment:
+      POSTGRES_USER: wolfy
+      POSTGRES_PASSWORD: wolfy
+      POSTGRES_DB: wolfy
+    ports:
+      - "5433:5432"
+    volumes:
+      - wolfy-pgdata:/var/lib/postgresql/data
+      # Таблицы Читавука, от которых зависит авторизация. В продакшене они уже
+      # есть; локально их надо чем-то заменить, иначе вход не проверить.
+      - ./server/testdata/citavuk_accounts.sql:/docker-entrypoint-initdb.d/10_citavuk.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wolfy -d wolfy"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: wolfy-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  wolfy-pgdata:
