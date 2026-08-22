@@ -152,10 +152,18 @@ def load_exceptions(wn) -> dict[str, dict[str, str]]:
     return out
 
 
-def load_brown(brown) -> tuple[Counter, dict[str, str], dict[str, str]]:
-    """Частотность, служебные части речи и глагольные метки из корпуса.
+def load_brown(brown) -> tuple[Counter, dict[str, str], dict[str, str], dict[str, str]]:
+    """Частотность, служебные части речи и преобладающая метка из корпуса.
 
     Из корпуса берутся только счётчики и метки; сам текст никуда не попадает.
+
+    Преобладающая метка — четвёртый результат и самый неочевидный. Словарь
+    отвечает, какими частями речи слово *бывает*, а разбору предложения нужно,
+    какой оно *обычно является*: у «book» это существительное, у «run» —
+    глагол, и порядок в списке значений об этом не говорит ничего. Корпус
+    размечен руками, и посчитать по нему преобладание — единственный способ
+    получить осмысленный ответ по умолчанию, не таща в ядро статистическую
+    модель.
     """
     counts: Counter = Counter()
     tags: dict[str, Counter] = defaultdict(Counter)
@@ -167,13 +175,21 @@ def load_brown(brown) -> tuple[Counter, dict[str, str], dict[str, str]]:
 
     closed: dict[str, str] = {}
     open_class: dict[str, str] = {}
+    dominant: dict[str, str] = {}
     for word, tag_counts in tags.items():
-        tag, _ = tag_counts.most_common(1)[0]
-        if tag in BROWN_CLOSED:
-            closed[word] = BROWN_CLOSED[tag]
-        elif tag in BROWN_OPEN:
-            open_class[word] = BROWN_OPEN[tag]
-    return counts, closed, open_class
+        tag, hits = tag_counts.most_common(1)[0]
+        code = BROWN_CLOSED.get(tag) or BROWN_OPEN.get(tag)
+        if code:
+            # Слово, встреченное дважды, о преобладании не говорит ничего:
+            # такая «статистика» врёт чаще, чем помогает, и разбор лучше
+            # оставит выбор правилам.
+            if hits >= 5:
+                dominant[word] = code
+            if tag in BROWN_CLOSED:
+                closed[word] = code
+            elif tag in BROWN_OPEN:
+                open_class[word] = code
+    return counts, closed, open_class, dominant
 
 
 def resolvable(word: str, words: dict[str, set[str]]) -> bool:
@@ -218,13 +234,13 @@ def resolvable(word: str, words: dict[str, set[str]]) -> bool:
     return False
 
 
-def build(top: int, min_closed: int, min_missing: int) -> tuple[dict, dict, Counter]:
+def build(top: int, min_closed: int, min_missing: int) -> tuple[dict, dict, Counter, dict]:
     from nltk.corpus import brown
     from nltk.corpus import wordnet as wn
 
     lemmas = load_wordnet_lemmas(wn)
     exceptions = load_exceptions(wn)
-    counts, closed, brown_open = load_brown(brown)
+    counts, closed, brown_open, dominant = load_brown(brown)
 
     words: dict[str, set[str]] = defaultdict(set)
 
@@ -288,20 +304,23 @@ def build(top: int, min_closed: int, min_missing: int) -> tuple[dict, dict, Coun
     # намеренно остаются в обеих таблицах: ядро покажет разбор формы, но
     # отметит, что слово бывает и самостоятельной леммой.
     encoded = {w: "".join(sorted(c)) for w, c in words.items() if c}
-    return encoded, irregular, counts
+    return encoded, irregular, counts, dominant
 
 
-def render(encoded: dict, irregular: dict, counts: Counter, top: int) -> str:
+def render(encoded: dict, irregular: dict, counts: Counter, dominant: dict, top: int) -> str:
     """Собирает построчный TSV.
 
     Формат построчный, а не JSON, ради одного: ядро читает файл за один проход
     без разбора дерева, и старт приложения не упирается в парсер.
 
-        W<TAB>слово<TAB>коды частей речи<TAB>zipf<TAB>уровень
+        W<TAB>слово<TAB>коды частей речи<TAB>zipf<TAB>уровень[<TAB>преобладающая]
         I<TAB>форма<TAB>лемма<TAB>код части речи
+
+    Шестое поле необязательно: у слова, которого в корпусе почти нет, честнее
+    его не писать, чем выдумать преобладание по двум вхождениям.
     """
     lines = [
-        "# wolfy english lexicon v1",
+        "# wolfy english lexicon v2",
         "# generated\t" + date.today().isoformat(),
         "# source\tPrinceton WordNet 3.0 — леммы и таблицы исключений (*.exc)",
         "# source\tBrown Corpus (NLTK, universal tagset) — частотность и служебные части речи",
@@ -312,7 +331,14 @@ def render(encoded: dict, irregular: dict, counts: Counter, top: int) -> str:
     ]
     for word in sorted(encoded):
         z = zipf(counts.get(word, 0))
-        lines.append("W\t" + word + "\t" + encoded[word] + "\t" + str(z) + "\t" + cefr_level(z))
+        row = ["W", word, encoded[word], str(z), cefr_level(z)]
+        # Преобладающая часть речи пишется, только если она у слова вообще
+        # есть среди словарных: корпус метит «states» существительным, но для
+        # словаря это форма глагола «state», и такая метка сбила бы разбор.
+        main = dominant.get(word)
+        if main and main in encoded[word]:
+            row.append(main)
+        lines.append("	".join(row))
     for form in sorted(irregular):
         lemma, code = irregular[form].split("/")
         lines.append("I\t" + form + "\t" + lemma + "\t" + code)
@@ -342,13 +368,15 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        encoded, irregular, counts = build(args.top, args.min_closed, args.min_missing)
+        encoded, irregular, counts, dominant = build(
+            args.top, args.min_closed, args.min_missing
+        )
     except LookupError as err:
         print("нет корпуса nltk: " + str(err), file=sys.stderr)
         return 1
 
     TARGET.parent.mkdir(parents=True, exist_ok=True)
-    TARGET.write_text(render(encoded, irregular, counts, args.top), encoding="utf-8")
+    TARGET.write_text(render(encoded, irregular, counts, dominant, args.top), encoding="utf-8")
     size = TARGET.stat().st_size / 1024
     print(
         "{}: {} слов, {} неправильных форм, {:.0f} КБ".format(

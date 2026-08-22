@@ -34,6 +34,17 @@ pub struct Entry {
     pub zipf: f32,
     /// Уровень по европейской шкале, выведенный из частотности.
     pub cefr: Cefr,
+    /// Часть речи, которой слово чаще всего оказывается в живом тексте.
+    ///
+    /// [`pos`](Entry::pos) отвечает, чем слово *бывает*: у «green» это и
+    /// прилагательное, и существительное, и глагол. Разбору предложения нужен
+    /// другой ответ — чем оно *обычно является*, и порядок в наборе об этом не
+    /// говорит ничего. Здесь лежит преобладание, посчитанное по размеченному
+    /// вручную корпусу Brown.
+    ///
+    /// `None` у слова, которое в корпусе почти не встречается: выдумывать
+    /// преобладание по двум вхождениям хуже, чем не знать его.
+    pub dominant: Option<Pos>,
 }
 
 /// Неправильная форма: «children» → «child» как существительное.
@@ -75,7 +86,7 @@ impl Lexicon {
     /// Формат построчный:
     ///
     /// ```text
-    /// W<TAB>слово<TAB>коды частей речи<TAB>zipf<TAB>уровень
+    /// W<TAB>слово<TAB>коды частей речи<TAB>zipf<TAB>уровень[<TAB>преобладающая]
     /// I<TAB>форма<TAB>лемма<TAB>код части речи
     /// ```
     pub fn parse(text: &'static str) -> Result<Lexicon> {
@@ -96,6 +107,10 @@ impl Lexicon {
                     let codes = parts.next().ok_or_else(malformed)?;
                     let zipf = parts.next().ok_or_else(malformed)?;
                     let cefr = parts.next().ok_or_else(malformed)?;
+                    // Шестое поле появилось во второй версии формата и есть не
+                    // у всех слов. Читаем его необязательным: лексикон, собранный
+                    // прошлой версией генератора, обязан продолжать работать.
+                    let dominant = parts.next();
 
                     let mut set = PosSet::EMPTY;
                     for code in codes.bytes() {
@@ -123,12 +138,28 @@ impl Lexicon {
                         ))
                     })?;
 
+                    let dominant = match dominant {
+                        Some(code) => {
+                            let pos = code.bytes().next().and_then(Pos::from_code).ok_or_else(
+                                || {
+                                    CoreError::Lexicon(format!(
+                                        "строка {}: неизвестная преобладающая часть речи «{code}»",
+                                        number + 1
+                                    ))
+                                },
+                            )?;
+                            Some(pos)
+                        }
+                        None => None,
+                    };
+
                     words.insert(
                         word,
                         Entry {
                             pos: set,
                             zipf,
                             cefr,
+                            dominant,
                         },
                     );
                 }
@@ -214,6 +245,42 @@ mod tests {
             .entry("serendipity")
             .expect("«serendipity» обязано быть в словаре");
         assert!(entry.pos.contains(Pos::Noun));
+    }
+
+    #[test]
+    fn у_омонима_есть_преобладающее_значение() {
+        // Набор частей речи говорит, чем слово бывает, и на «green» их три.
+        // Разбору нужен другой ответ: в живом тексте это прилагательное.
+        let lexicon = Lexicon::embedded();
+        assert_eq!(
+            lexicon.entry("green").and_then(|e| e.dominant),
+            Some(Pos::Adjective)
+        );
+        assert_eq!(
+            lexicon.entry("book").and_then(|e| e.dominant),
+            Some(Pos::Noun)
+        );
+        assert_eq!(
+            lexicon.entry("run").and_then(|e| e.dominant),
+            Some(Pos::Verb)
+        );
+    }
+
+    #[test]
+    fn редкое_слово_остаётся_без_преобладания() {
+        // Двух вхождений в корпусе мало, чтобы о чём-то говорить, и словарь
+        // честно не отвечает вместо того, чтобы угадывать.
+        assert_eq!(
+            Lexicon::embedded().entry("serendipity").and_then(|e| e.dominant),
+            None
+        );
+    }
+
+    #[test]
+    fn лексикон_прошлой_версии_без_шестого_поля_читается() {
+        let lexicon = Lexicon::parse("W	book	nv	5.2	A2
+").expect("должно разобраться");
+        assert_eq!(lexicon.entry("book").and_then(|e| e.dominant), None);
     }
 
     #[test]

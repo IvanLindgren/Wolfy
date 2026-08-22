@@ -59,6 +59,12 @@ pub struct WordAnalysis {
     ///
     /// `None` у слова, которое и есть начальная форма: там уточнять нечего.
     pub matched: Option<Pos>,
+    /// Часть речи, которой начальная форма чаще всего оказывается в тексте.
+    ///
+    /// Нужна там, где [`matched`](Self::matched) молчит, — то есть на самой
+    /// начальной форме. Карточка «green» без этого показала бы существительное
+    /// просто потому, что существительные стоят в наборе первыми.
+    pub dominant: Option<Pos>,
     pub form: FormKind,
     /// Что показать в разборе: число, время, степень сравнения.
     pub facts: Vec<Fact>,
@@ -76,6 +82,7 @@ impl WordAnalysis {
             lemma: surface.to_lowercase(),
             pos: PosSet::EMPTY,
             matched: None,
+            dominant: None,
             form: FormKind::Unknown,
             facts: Vec::new(),
             zipf: 0.0,
@@ -138,6 +145,7 @@ fn analyze_stem(lexicon: &Lexicon, surface: &str, lower: &str) -> WordAnalysis {
         lemma: lower.to_string(),
         pos: entry.pos,
         matched: None,
+        dominant: entry.dominant,
         form: FormKind::Lemma,
         facts: Vec::new(),
         zipf: entry.zipf,
@@ -189,6 +197,7 @@ fn analyze_irregular(lexicon: &Lexicon, surface: &str, lower: &str) -> Option<Wo
         lemma: irregular.lemma.to_string(),
         pos: entry.pos,
         matched: Some(irregular.pos),
+        dominant: entry.dominant,
         form: FormKind::Irregular,
         facts: irregular_facts(irregular.pos, irregular.lemma),
         zipf: entry.zipf,
@@ -322,6 +331,7 @@ fn analyze_regular(lexicon: &Lexicon, surface: &str, lower: &str) -> Option<Word
                 lemma,
                 pos: entry.pos,
                 matched: Some(pos),
+                dominant: entry.dominant,
                 form: FormKind::Regular,
                 facts: regular_facts(rule.suffix, entry.pos),
                 zipf: entry.zipf,

@@ -28,6 +28,11 @@ pub struct WordDto {
     /// лемма «glow» бывает и существительным. `null` у начальной формы.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub matched_pos: Option<&'static str>,
+    /// Часть речи, которой слово чаще всего оказывается в живом тексте:
+    /// у «green» это прилагательное, хотя оно бывает и существительным.
+    /// Клиент берёт её, когда разбор формы ничего не уточнил.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dominant_pos: Option<&'static str>,
     /// `lemma` | `regular` | `irregular` | `unknown`.
     pub form: &'static str,
     pub facts: Vec<FactDto>,
@@ -51,6 +56,7 @@ impl From<&WordAnalysis> for WordDto {
             lemma: analysis.lemma.clone(),
             pos: pos_names(analysis.pos),
             matched_pos: analysis.matched.map(pos_name),
+            dominant_pos: analysis.dominant.map(pos_name),
             form: form_name(analysis.form),
             facts: analysis.facts.iter().map(FactDto::from).collect(),
             zipf: analysis.zipf,
@@ -307,6 +313,18 @@ mod tests {
         let json = serde_json::to_value(WordDto::from(&analysis)).expect("сериализация");
 
         assert!(json.get("matchedPos").is_none(), "уточнять тут нечего");
+    }
+
+    #[test]
+    fn начальная_форма_несёт_преобладающее_значение() {
+        // Разбирать в «green» нечего — это и есть начальная форма. Но
+        // показать существительное только потому, что оно первое в наборе,
+        // значило бы соврать: в тексте это почти всегда цвет.
+        let analysis = analyze(Lexicon::embedded(), "green");
+        let json = serde_json::to_value(WordDto::from(&analysis)).expect("сериализация");
+
+        assert!(json.get("matchedPos").is_none());
+        assert_eq!(json["dominantPos"], "ADJ");
     }
 
     #[test]
