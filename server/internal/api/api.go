@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/wolfy/server/internal/auth"
+	"github.com/wolfy/server/internal/library"
 	"github.com/wolfy/server/internal/store"
 	"github.com/wolfy/server/internal/translate"
 )
@@ -22,11 +23,18 @@ type Server struct {
 	store     *store.Store
 	verifier  *auth.Verifier
 	translate *translate.Service
+	library   *library.Service
 	log       *slog.Logger
 }
 
-func NewServer(s *store.Store, v *auth.Verifier, t *translate.Service, log *slog.Logger) *Server {
-	return &Server{store: s, verifier: v, translate: t, log: log}
+func NewServer(
+	s *store.Store,
+	v *auth.Verifier,
+	t *translate.Service,
+	l *library.Service,
+	log *slog.Logger,
+) *Server {
+	return &Server{store: s, verifier: v, translate: t, library: l, log: log}
 }
 
 // Handler собирает маршруты сервиса.
@@ -41,6 +49,7 @@ func (s *Server) Handler() http.Handler {
 	private := http.NewServeMux()
 	private.HandleFunc("GET /v1/me", s.me)
 	private.HandleFunc("POST /v1/translate", s.postTranslate)
+	private.HandleFunc("POST /v1/sync", s.postSync)
 
 	mux.Handle("/v1/", s.verifier.Middleware(private))
 
@@ -110,6 +119,40 @@ func (s *Server) postTranslate(w http.ResponseWriter, r *http.Request) {
 		return
 	case err != nil:
 		s.log.Error("перевод не удался", "error", err)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// postSync обменивается изменениями библиотеки.
+//
+// Один маршрут на отправку и получение: устройство присылает своё и свой
+// курсор, получает назад чужое. Разделять на два запроса значило бы удвоить
+// походы в сеть ради симметрии, которая никому не нужна.
+func (s *Server) postSync(w http.ResponseWriter, r *http.Request) {
+	user, ok := auth.FromContext(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "нужен вход"})
+		return
+	}
+
+	var incoming store.Changes
+	// Предел на тело: библиотека читателя это десятки книг и тысячи слов.
+	// Восемь мегабайт с запасом покрывают первую отправку с полной колодой.
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<20)).Decode(&incoming); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "запрос не разобран"})
+		return
+	}
+
+	result, err := s.library.Sync(r.Context(), user.ID, incoming)
+	switch {
+	case errors.Is(err, library.ErrTooLarge):
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": err.Error()})
+		return
+	case err != nil:
+		s.log.Error("синхронизация не удалась", "error", err, "user", user.ID)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
