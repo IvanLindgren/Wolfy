@@ -108,6 +108,9 @@ class ReaderViewModel(
     /** Последняя записанная доля главы — по ней отсекается лишняя запись. */
     private var lastReportedPlace: Float? = null
 
+    /** Подписка на колоду книги. Живёт, пока книга открыта. */
+    private var deckJob: Job? = null
+
     /**
      * Открывает книгу библиотеки на том месте, где читатель остановился.
      *
@@ -118,6 +121,16 @@ class ReaderViewModel(
     fun open(book: LibraryBook) {
         closeCurrent()
         bookId = book.id
+
+        // Колода читается из библиотеки подпиской, а не копией: слово можно
+        // убрать и на экране повторений, и подсветка на странице обязана
+        // погаснуть вместе с ним.
+        deckJob = viewModelScope.launch {
+            library.state.collect { current ->
+                val deck = current.books.firstOrNull { it.id == book.id }?.deck ?: return@collect
+                _state.update { it.copy(savedLemmas = deck.toSet()) }
+            }
+        }
 
         viewModelScope.launch {
             _state.update {
@@ -257,20 +270,37 @@ class ReaderViewModel(
     }
 
     /**
-     * Кладёт слово в колоду книги.
+     * Кладёт слово в колоду книги или забирает обратно.
+     *
+     * Именно переключателем, а не двумя действиями: слово попадает в колоду
+     * одним касанием, и передумать нужно тем же касанием. Отдельная кнопка
+     * «убрать» на карточке из четырёх строк стоила бы дороже, чем помогает.
      *
      * Колода живёт в библиотеке и переживает закрытие приложения. Подсветка на
      * странице обновляется тем же кадром: читатель должен видеть свой словарь
      * на полосе, а не после перезахода.
      */
-    fun saveWord() {
+    fun toggleWord() {
         val card = _state.value.card ?: return
-        bookId?.let { library.saveWord(it, card.analysis.lemma) }
-        _state.update {
-            it.copy(
-                savedLemmas = it.savedLemmas + card.analysis.lemma,
-                card = card.copy(saved = true),
-            )
+        val lemma = card.analysis.lemma
+        val id = bookId
+
+        if (card.saved) {
+            id?.let { library.removeWord(it, lemma) }
+            _state.update {
+                it.copy(
+                    savedLemmas = it.savedLemmas - lemma,
+                    card = card.copy(saved = false),
+                )
+            }
+        } else {
+            id?.let { library.saveWord(it, lemma) }
+            _state.update {
+                it.copy(
+                    savedLemmas = it.savedLemmas + lemma,
+                    card = card.copy(saved = true),
+                )
+            }
         }
     }
 
@@ -292,6 +322,8 @@ class ReaderViewModel(
 
     /** Закрывает книгу, не закрывая экран, — перед открытием следующей. */
     fun closeCurrent() {
+        deckJob?.cancel()
+        deckJob = null
         handle?.let(core::closeBook)
         handle = null
         bookId = null

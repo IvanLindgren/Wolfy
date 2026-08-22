@@ -178,7 +178,7 @@ private fun Shell(
                         state = readerState,
                         onWordTap = parts.reader::onWordTap,
                         onDismissCard = parts.reader::dismissCard,
-                        onSaveWord = parts.reader::saveWord,
+                        onSaveWord = parts.reader::toggleWord,
                         onPreviousChapter = parts.reader::previousChapter,
                         onNextChapter = parts.reader::nextChapter,
                         onScrolled = parts.reader::rememberPlace,
@@ -201,6 +201,7 @@ private fun Shell(
                 Section.Srs -> DecksScreen(
                     books = catalogue.books,
                     onOpenBook = open,
+                    onRemoveWord = parts.library::removeWord,
                 )
 
                 Section.More -> SettingsScreen(

@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -187,16 +188,48 @@ private fun Header(state: WordCardState) {
                 style = typography.screenTitle,
                 color = colors.ink,
             )
-            val pos = state.analysis.primaryPos?.let(::posTitle)
+            val tag = state.analysis.primaryPos
+            val pos = tag?.let(::posTitle)
             val subtitle = when {
                 pos == null -> "нет в словаре"
                 state.analysis.lemma == state.analysis.surface.lowercase() -> pos
                 else -> "$pos · от «${state.analysis.lemma}»"
             }
-            Text(text = subtitle, style = typography.body, color = colors.inkMuted)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(WolfyTheme.spacing.small),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // Метка цвета части речи — та же, что красит грамматику на
+                // странице. Читатель запоминает цвет раньше, чем название:
+                // «синее — существительное» усваивается с третьего раза.
+                tag?.let { PosMark(it) }
+                Text(text = subtitle, style = typography.body, color = colors.inkMuted)
+            }
         }
         CefrBadge(state.analysis.cefr)
     }
+}
+
+/** Квадратик цвета части речи. */
+@Composable
+private fun PosMark(tag: String) {
+    val palette = WolfyTheme.colors.partsOfSpeech
+    val color = when (tag) {
+        "NOUN" -> palette.noun
+        "VERB" -> palette.verb
+        "ADJ" -> palette.adjective
+        "ADV" -> palette.adverb
+        "PRON" -> palette.pronoun
+        // Служебным частям речи своего цвета не досталось намеренно: их пять
+        // видов, они встречаются в каждой строке, и раскрашенная страница
+        // перестала бы читаться. Серый — это «служебное слово».
+        else -> WolfyTheme.colors.inkMuted
+    }
+    Box(
+        Modifier
+            .size(WolfyTheme.spacing.small)
+            .background(color, RoundedCornerShape(WolfyTheme.spacing.hair)),
+    )
 }
 
 /**
@@ -328,11 +361,11 @@ private fun SaveButton(saved: Boolean, onSave: () -> Unit) {
                 if (saved) colors.rule else colors.ink,
                 RoundedCornerShape(spacing.huge),
             )
-            .clickable(enabled = !saved, onClick = onSave)
+            .clickable(onClick = onSave)
             .padding(vertical = spacing.medium),
     ) {
         Text(
-            text = if (saved) "В колоде книги ✓" else "+ В колоду книги",
+            text = if (saved) "В колоде книги ✓ · убрать" else "+ В колоду книги",
             style = WolfyTheme.typography.button,
             color = if (saved) colors.inkMuted else colors.paper,
             textAlign = TextAlign.Center,

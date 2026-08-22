@@ -1,9 +1,13 @@
 package com.wolfy.ui.decks
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -47,6 +51,7 @@ import com.wolfy.widgets.WolfySticker
 fun DecksScreen(
     books: List<LibraryBook>,
     onOpenBook: (LibraryBook) -> Unit,
+    onRemoveWord: (bookId: String, lemma: String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = WolfyTheme.colors
@@ -92,6 +97,7 @@ fun DecksScreen(
                 expanded = opened == book.id,
                 onToggle = { opened = if (opened == book.id) null else book.id },
                 onOpenBook = { onOpenBook(book) },
+                onRemoveWord = { onRemoveWord(book.id, it) },
             )
         }
     }
@@ -103,6 +109,7 @@ private fun DeckCard(
     expanded: Boolean,
     onToggle: () -> Unit,
     onOpenBook: () -> Unit,
+    onRemoveWord: (String) -> Unit,
 ) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
@@ -148,19 +155,54 @@ private fun DeckCard(
 
         if (expanded) {
             SectionLabel("Слова колоды")
-            // Слова показываются строкой через запятую, а не списком: сорок
-            // строк по одному слову превращают колоду в бесконечную ленту, а
-            // одной строкой она читается как выписка из тетради — чем и является.
+            // Слова стоят вплотную, как выписка из тетради, а не списком по
+            // строке на слово: сорок строк превращают колоду в бесконечную
+            // ленту, в которой не видно, сколько всего набрано.
+            WordChips(words = book.deck.sorted(), onRemove = onRemoveWord)
             Text(
-                text = book.deck.sorted().joinToString(", "),
-                style = WolfyTheme.typography.body,
-                color = colors.ink,
+                text = "Долгое нажатие убирает слово из колоды",
+                style = WolfyTheme.typography.caption,
+                color = colors.inkMuted,
             )
             Text(
                 text = "Открыть книгу →",
                 style = WolfyTheme.typography.caption,
                 color = colors.accent,
                 modifier = Modifier.clickable(onClick = onOpenBook),
+            )
+        }
+    }
+}
+
+/**
+ * Слова колоды.
+ *
+ * Убрать слово можно долгим нажатием — тем же жестом, что удаляет книгу в
+ * библиотеке. Одинаковый жест для всего необратимого читатель запоминает один
+ * раз; разные жесты для одного и того же приходится вспоминать каждый.
+ */
+@OptIn(ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
+@Composable
+private fun WordChips(words: List<String>, onRemove: (String) -> Unit) {
+    val colors = WolfyTheme.colors
+    val spacing = WolfyTheme.spacing
+
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(spacing.small),
+        verticalArrangement = Arrangement.spacedBy(spacing.small),
+    ) {
+        words.forEach { word ->
+            Text(
+                text = word,
+                style = WolfyTheme.typography.body,
+                color = colors.ink,
+                modifier = Modifier
+                    .background(colors.highlight, RoundedCornerShape(spacing.tight))
+                    .combinedClickable(
+                        onClick = {},
+                        onLongClick = { onRemove(word) },
+                    )
+                    .padding(horizontal = spacing.small, vertical = spacing.tight),
             )
         }
     }
