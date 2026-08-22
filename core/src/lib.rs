@@ -17,6 +17,7 @@
 
 mod error;
 pub mod lexicon;
+pub mod parser;
 pub mod tokenizer;
 
 pub use error::{CoreError, Result};

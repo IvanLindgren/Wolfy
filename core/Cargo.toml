@@ -13,7 +13,11 @@ publish = false
 crate-type = ["rlib", "cdylib"]
 
 [dependencies]
+encoding_rs = "0.8"
+pdf-extract = "0.12"
+quick-xml = "0.41"
 thiserror = "2"
+zip = { version = "8", default-features = false, features = ["deflate"] }
 
 [profile.release]
 # Разбор слова обязан укладываться в 15 мс на среднем телефоне, поэтому
@@ -22,3 +26,6 @@ opt-level = 3
 lto = true
 codegen-units = 1
 panic = "abort"
+
+[dev-dependencies]
+zip = { version = "8", default-features = false, features = ["deflate"] }

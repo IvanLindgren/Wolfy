@@ -65,12 +65,16 @@ pub fn split(tokens: &[Token]) -> Vec<Sentence> {
 /// Кончает ли токен предложение.
 fn is_terminator(tokens: &[Token], index: usize) -> bool {
     let token = &tokens[index];
-    if token.kind != TokenKind::Punctuation {
-        return false;
-    }
-    match token.text.as_str() {
-        "!" | "?" | "\u{2026}" => true,
-        "." => is_sentence_period(tokens, index),
+    match token.kind {
+        // Конец абзаца кончает предложение независимо от знаков препинания.
+        // Без этого заголовок главы прилипал бы к первой фразе — и уезжал бы
+        // в контекст перевода вместе с ней.
+        TokenKind::Space => token.text.matches('\n').count() >= 2,
+        TokenKind::Punctuation => match token.text.as_str() {
+            "!" | "?" | "\u{2026}" => true,
+            "." => is_sentence_period(tokens, index),
+            _ => false,
+        },
         _ => false,
     }
 }
@@ -240,6 +244,25 @@ mod tests {
         assert_eq!(
             предложения("The door opened.\n\nEvelyn stepped in."),
             vec!["The door opened.", "Evelyn stepped in."]
+        );
+    }
+
+    #[test]
+    fn заголовок_без_точки_не_прилипает_к_первой_фразе() {
+        // Так глава приходит из парсера: заголовок и абзацы разделены пустой
+        // строкой. Склейся они — заголовок уехал бы в контекст перевода.
+        assert_eq!(
+            предложения("The Catalogue\n\nMr. Ashton counted the children twice."),
+            vec!["The Catalogue", "Mr. Ashton counted the children twice."]
+        );
+    }
+
+    #[test]
+    fn одиночный_перенос_строки_предложение_не_режет() {
+        // Внутри абзаца перенос — это вёрстка, а не граница мысли.
+        assert_eq!(
+            предложения("The library smelled of dust,\nleather and old paper."),
+            vec!["The library smelled of dust,\nleather and old paper."]
         );
     }
 
