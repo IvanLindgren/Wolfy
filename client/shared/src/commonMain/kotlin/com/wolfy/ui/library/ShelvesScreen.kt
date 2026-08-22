@@ -5,6 +5,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -33,11 +35,16 @@ import androidx.compose.ui.unit.dp
 import com.wolfy.data.library.LibraryBook
 import com.wolfy.data.library.Shelf
 import com.wolfy.theme.WolfyTheme
+import androidx.compose.ui.unit.IntOffset
 import com.wolfy.widgets.BookCover
+import com.wolfy.widgets.DragBoard
+import com.wolfy.widgets.dragSource
+import com.wolfy.widgets.dropTarget
 import com.wolfy.widgets.Rule
 import com.wolfy.widgets.SectionLabel
 import com.wolfy.widgets.Sticker
 import com.wolfy.widgets.WolfySticker
+import kotlin.math.roundToInt
 
 /**
  * Полки: как читатель разложил свои книги.
@@ -46,10 +53,10 @@ import com.wolfy.widgets.WolfySticker
  * ярлыков на книгу выглядят гибче, но полка, на которой книга «частично
  * стоит», перестаёт быть полкой, и разложить библиотеку уже не получается.
  *
- * Перетаскивания здесь нет. На макете оно есть, и оно красиво, но на телефоне
- * тащить обложку через список из сорока книг — работа, а не жест. Вместо этого
- * у неразобранной книги прямо под ней стоят полки: одно касание вместо
- * прицеливания.
+ * Разложить книгу можно двумя способами, и оба нужны. Перетаскиванием — как на
+ * макете и как это делают руками с настоящей книгой. И касанием по названию
+ * полки под обложкой — потому что тащить через список из сорока книг на
+ * телефоне работа, а не жест, и одно касание там быстрее прицеливания.
  */
 @Composable
 fun ShelvesScreen(
@@ -65,9 +72,11 @@ fun ShelvesScreen(
 
     var expanded by remember { mutableStateOf<String?>(null) }
     val unshelved = state.books.filter { it.shelf == null }
+    val board = remember { DragBoard() }
 
+    Box(modifier.fillMaxSize().background(colors.paper)) {
     LazyColumn(
-        modifier = modifier.fillMaxSize().background(colors.paper),
+        modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(spacing.pageMargin),
         verticalArrangement = Arrangement.spacedBy(spacing.large),
     ) {
@@ -79,7 +88,7 @@ fun ShelvesScreen(
                     color = colors.ink,
                 )
                 Text(
-                    text = "Коснитесь полки, чтобы увидеть, что на ней стоит",
+                    text = "Перетащите книгу на полку или коснитесь названия под ней",
                     style = WolfyTheme.typography.caption,
                     color = colors.inkMuted,
                 )
@@ -99,30 +108,79 @@ fun ShelvesScreen(
                 shelf = shelf,
                 books = books,
                 expanded = expanded == shelf.name,
+                board = board,
+                hovered = board.hovered == shelf.name,
                 onToggle = { expanded = if (expanded == shelf.name) null else shelf.name },
                 onOpen = onOpen,
                 onRemove = { onRemoveShelf(shelf.name) },
                 onTakeOff = { onMove(it.id, null) },
+                onDropped = { bookId -> onMove(bookId, shelf.name) },
             )
         }
 
         if (unshelved.isNotEmpty()) {
             item {
-                Column(verticalArrangement = Arrangement.spacedBy(spacing.small)) {
+                Column(
+                    Modifier.dropTarget(board, UNSHELVED),
+                    verticalArrangement = Arrangement.spacedBy(spacing.small),
+                ) {
                     Rule()
-                    SectionLabel("Не разобрано")
+                    SectionLabel(
+                        if (board.hovered == UNSHELVED) {
+                            "Не разобрано — отпустите здесь"
+                        } else {
+                            "Не разобрано"
+                        },
+                    )
                 }
             }
             items(unshelved, key = { it.id }) { book ->
                 UnshelvedBook(
                     book = book,
                     shelves = state.shelves,
+                    board = board,
                     onOpen = { onOpen(book) },
                     onMove = { shelf -> onMove(book.id, shelf) },
+                    onDropped = { target -> onMove(book.id, target.takeIf { it != UNSHELVED }) },
                 )
             }
         }
     }
+
+        DragGhost(board)
+    }
+}
+
+/**
+ * Подпись под пальцем.
+ *
+ * Без неё перетаскивание превращается в угадывание: палец закрывает обложку, и
+ * понять, тащишь ты книгу или просто ведёшь по экрану, невозможно.
+ */
+@Composable
+private fun BoxScope.DragGhost(board: DragBoard) {
+    val dragged = board.dragged ?: return
+    val colors = WolfyTheme.colors
+    val spacing = WolfyTheme.spacing
+
+    Text(
+        text = dragged.label,
+        style = WolfyTheme.typography.caption,
+        color = colors.paper,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
+            .offset {
+                // Подпись ставится над пальцем, а не под ним: то, что ровно
+                // под пальцем, палец и закрывает.
+                IntOffset(
+                    x = dragged.position.x.roundToInt() - 60,
+                    y = dragged.position.y.roundToInt() - 80,
+                )
+            }
+            .background(colors.ink, RoundedCornerShape(spacing.tight))
+            .padding(horizontal = spacing.small, vertical = spacing.tight),
+    )
 }
 
 /**
@@ -137,10 +195,13 @@ private fun ShelfCard(
     shelf: Shelf,
     books: List<LibraryBook>,
     expanded: Boolean,
+    board: DragBoard,
+    hovered: Boolean,
     onToggle: () -> Unit,
     onOpen: (LibraryBook) -> Unit,
     onRemove: () -> Unit,
     onTakeOff: (LibraryBook) -> Unit,
+    onDropped: (String) -> Unit,
 ) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
@@ -148,8 +209,13 @@ private fun ShelfCard(
     Column(
         Modifier
             .fillMaxWidth()
+            .dropTarget(board, shelf.name)
             .background(colors.surface, RoundedCornerShape(spacing.small))
-            .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.small))
+            .border(
+                if (hovered) spacing.hair else spacing.rule,
+                if (hovered) colors.accent else colors.rule,
+                RoundedCornerShape(spacing.small),
+            )
             .padding(spacing.large),
         verticalArrangement = Arrangement.spacedBy(spacing.medium),
     ) {
@@ -168,9 +234,9 @@ private fun ShelfCard(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = shelfSummary(books),
+                    text = if (hovered) "отпустите здесь" else shelfSummary(books),
                     style = WolfyTheme.typography.caption,
-                    color = colors.inkMuted,
+                    color = if (hovered) colors.accent else colors.inkMuted,
                 )
             }
             Text(
@@ -200,6 +266,11 @@ private fun ShelfCard(
                                 author = book.author,
                                 modifier = Modifier
                                     .fillMaxWidth()
+                                    .dragSource(board, book.id, book.title) { target ->
+                                        // Книга, положенная обратно на свою же
+                                        // полку, никуда не переезжает.
+                                        if (target != shelf.name) onDropped(book.id)
+                                    }
                                     .clickable { onOpen(book) },
                             )
                             Text(
@@ -261,8 +332,10 @@ private fun Spines(books: List<LibraryBook>) {
 private fun UnshelvedBook(
     book: LibraryBook,
     shelves: List<Shelf>,
+    board: DragBoard,
     onOpen: () -> Unit,
     onMove: (String) -> Unit,
+    onDropped: (String) -> Unit,
 ) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
@@ -276,6 +349,7 @@ private fun UnshelvedBook(
             author = book.author,
             modifier = Modifier
                 .width(48.dp)
+                .dragSource(board, book.id, book.title, onDropped = onDropped)
                 .clickable(onClick = onOpen),
         )
         Column(
@@ -385,6 +459,9 @@ private fun NoShelves() {
         )
     }
 }
+
+/** Ключ области «не разобрано»: пустого имени у настоящей полки не бывает. */
+private const val UNSHELVED = ""
 
 private fun shelfSummary(books: List<LibraryBook>): String {
     val reading = books.count { it.started && !it.finished }

@@ -28,6 +28,12 @@ import com.wolfy.ffi.CoreException
 import com.wolfy.ffi.WolfyCore
 import com.wolfy.ffi.createWolfyCore
 import com.wolfy.platform.PickedBook
+import com.wolfy.platform.PickedPhoto
+import com.wolfy.platform.compressPhoto
+import com.wolfy.platform.fileDropTarget
+import com.wolfy.platform.fileNameOf
+import com.wolfy.platform.looksLikePhoto
+import com.wolfy.platform.readBytes
 import com.wolfy.platform.rememberBookPicker
 import com.wolfy.platform.rememberPhotoPicker
 import com.wolfy.theme.ReadingTheme
@@ -229,7 +235,11 @@ private fun Shell(
             .background(WolfyTheme.colors.paper)
             // Системные панели: газетная полоса доходит до края экрана, но
             // текст под часами и жестовой полосой читать невозможно.
-            .systemBarsPadding(),
+            .systemBarsPadding()
+            // Файл, брошенный в окно. Самый естественный способ добавить книгу
+            // на компьютере: она лежит в «Загрузках», окно открыто рядом, и
+            // диалог выбора после этого — лишний шаг.
+            .fileDropTarget { paths -> paths.forEach { drop(parts, it) } },
     ) {
         Box(Modifier.weight(1f)) {
             when (section) {
@@ -303,6 +313,24 @@ private fun Shell(
         }
 
         BottomBar(selected = section, onSelect = { section = it })
+    }
+}
+
+/**
+ * Разбирает брошенный в окно файл.
+ *
+ * Снимок отправляется на распознавание, всё остальное добавляется как книга.
+ * Различаем по расширению, а не по содержимому: заголовок файла пришлось бы
+ * читать целиком, а ошибка здесь дешёвая — читатель сразу увидит, что
+ * получилось не то.
+ */
+private fun drop(parts: Parts, path: String) {
+    val name = fileNameOf(path)
+    if (looksLikePhoto(name)) {
+        val bytes = readBytes(path) ?: return
+        parts.catalogue.recognize(PickedPhoto(compressPhoto(bytes), "image/jpeg"))
+    } else {
+        parts.catalogue.import(PickedBook(path = path, name = name))
     }
 }
 
