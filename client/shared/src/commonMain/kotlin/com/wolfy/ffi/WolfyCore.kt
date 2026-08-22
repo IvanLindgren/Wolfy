@@ -29,6 +29,16 @@ interface WolfyCore {
     fun tokenize(text: String): ParsedText
 
     /**
+     * Разбирает грамматику предложения: время, залог, модальность, условие.
+     *
+     * На вход идёт предложение целиком, а не слово: разбор смотрит на соседей.
+     * Границы предложений даёт [tokenize].
+     *
+     * Быстрая операция — доли миллисекунды, вызывать можно прямо по тапу.
+     */
+    fun explain(sentence: String): List<Finding>
+
+    /**
      * Открывает книгу и возвращает её описание вместе с номером.
      *
      * Номер обязателен к закрытию через [closeBook]: пока книга открыта, ядро
@@ -98,6 +108,32 @@ data class WordAnalysis(
      */
     val primaryPos: String? get() = matchedPos ?: dominantPos ?: pos.firstOrNull()
 }
+
+/**
+ * Что грамматический движок нашёл в предложении.
+ *
+ * Объяснение приходит от ядра готовым, а не собирается здесь: одно и то же
+ * правило обязано объясняться одинаково и в карточке, и в справочнике, и в
+ * тренировке, а держать формулировки в трёх местах — значит однажды их
+ * рассогласовать.
+ */
+@Serializable
+data class Finding(
+    /** Устойчивое имя правила: `present-perfect`. По нему открывается справка. */
+    val rule: String,
+    /** Название для человека: «Present Perfect». */
+    val title: String,
+    /** Схема формулы: «have/has + V3». */
+    val formula: String,
+    val explanation: String,
+    /** Первый токен разбора — индекс в [ParsedText.tokens]. */
+    val start: Int,
+    /** Токен за последним — полуинтервал. */
+    val end: Int,
+)
+
+@Serializable
+internal data class GrammarResult(val findings: List<Finding> = emptyList())
 
 /** Факт о форме слова: «Число» — «множественное, окончание -s». */
 @Serializable

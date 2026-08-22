@@ -39,7 +39,7 @@ use crate::lexicon::{analyze, Lexicon};
 use crate::parser::{self, Book};
 use crate::tokenizer::{split, tokenize};
 
-use dto::{BookDto, ChapterDto, TextDto, TokenDto, WordDto};
+use dto::{BookDto, ChapterDto, FindingDto, GrammarDto, TextDto, TokenDto, WordDto};
 
 thread_local! {
     /// Описание последней ошибки в этом потоке.
@@ -119,6 +119,30 @@ pub unsafe extern "C" fn wolfy_tokenize(text: *const c_char) -> *mut c_char {
         to_json(&TextDto {
             tokens: tokens.iter().map(TokenDto::from).collect(),
             sentences: sentences.iter().map(Into::into).collect(),
+        })
+    })
+}
+
+/// Разбирает грамматику предложения: время, залог, модальность, условие.
+///
+/// На вход идёт предложение целиком, а не слово: разбор смотрит на соседей, и
+/// обрывок фразы разберётся хуже, чем фраза целиком. Границы предложений
+/// клиент уже знает — их отдаёт [`wolfy_tokenize`].
+///
+/// Смещения в ответе — индексы токенов того же разбора, что вернул
+/// `wolfy_tokenize` для этого текста.
+///
+/// # Safety
+/// `text` — непустой указатель на строку в UTF-8, оканчивающуюся нулём.
+#[no_mangle]
+pub unsafe extern "C" fn wolfy_explain(text: *const c_char) -> *mut c_char {
+    guard(|| {
+        let text = unsafe { read_string(text) }?;
+        let tokens = tokenize(&text);
+        let findings = crate::grammar::analyze(Lexicon::embedded(), &tokens);
+
+        to_json(&GrammarDto {
+            findings: findings.iter().map(FindingDto::from).collect(),
         })
     })
 }
@@ -341,6 +365,24 @@ mod tests {
     fn версия_ядра_отдаётся() {
         let version = забрать(wolfy_version()).expect("версия есть");
         assert_eq!(version, crate::VERSION);
+    }
+
+    #[test]
+    fn грамматика_приходит_json_ом() {
+        let text = c"She has been reading the book.";
+        let json = забрать(unsafe { wolfy_explain(text.as_ptr()) }).expect("разбор есть");
+        let value: serde_json::Value = serde_json::from_str(&json).expect("это JSON");
+
+        let findings = value["findings"].as_array().expect("список разборов");
+        assert!(
+            findings
+                .iter()
+                .any(|f| f["rule"] == "present-perfect-continuous"),
+            "не нашлось нужного правила: {json}"
+        );
+        // Смещения обязаны быть в тех же токенах, что отдаёт wolfy_tokenize:
+        // по ним клиент подсвечивает страницу.
+        assert!(findings[0]["end"].as_u64().unwrap_or(0) > 0);
     }
 
     #[test]

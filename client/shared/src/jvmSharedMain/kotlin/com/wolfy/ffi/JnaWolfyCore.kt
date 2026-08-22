@@ -36,6 +36,7 @@ internal interface CoreLibrary : Library {
 
     fun wolfy_analyze_word(word: ByteArray): Pointer?
     fun wolfy_tokenize(text: ByteArray): Pointer?
+    fun wolfy_explain(text: ByteArray): Pointer?
 
     fun wolfy_book_open(path: ByteArray): Long
     fun wolfy_book_metadata(handle: Long): Pointer?
@@ -68,6 +69,11 @@ internal class JnaWolfyCore(private val library: CoreLibrary) : WolfyCore {
     override fun tokenize(text: String): ParsedText {
         val raw = library.wolfy_tokenize(text.toUtf8()).takeString("разбор текста")
         return json.decodeFromString(raw)
+    }
+
+    override fun explain(sentence: String): List<Finding> {
+        val raw = library.wolfy_explain(sentence.toUtf8()).takeString("разбор грамматики")
+        return json.decodeFromString<GrammarResult>(raw).findings
     }
 
     override fun openBook(path: String): OpenBook {

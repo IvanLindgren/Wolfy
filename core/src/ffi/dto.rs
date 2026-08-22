@@ -11,6 +11,7 @@
 
 use serde::Serialize;
 
+use crate::grammar::Finding;
 use crate::lexicon::{Fact, PosSet, WordAnalysis};
 use crate::parser::{Block, Chapter, ChapterInfo, Metadata};
 use crate::tokenizer::{Sentence, Token, TokenKind};
@@ -134,6 +135,42 @@ impl From<&Sentence> for SentenceDto {
             text: sentence.text.clone(),
         }
     }
+}
+
+/// Что грамматический движок нашёл в предложении.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FindingDto {
+    /// Устойчивое имя правила: `present-perfect`. По нему клиент открывает
+    /// справку и связывает разбор с упражнениями.
+    pub rule: &'static str,
+    pub title: &'static str,
+    /// Схема формулы: «have/has + V3».
+    pub formula: &'static str,
+    pub explanation: String,
+    /// Токены, к которым относится разбор, — полуинтервал.
+    pub start: usize,
+    pub end: usize,
+}
+
+impl From<&Finding> for FindingDto {
+    fn from(finding: &Finding) -> Self {
+        FindingDto {
+            rule: finding.rule,
+            title: finding.title,
+            formula: finding.formula,
+            explanation: finding.explanation.clone(),
+            start: finding.tokens.start,
+            end: finding.tokens.end,
+        }
+    }
+}
+
+/// Разбор предложения целиком.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GrammarDto {
+    pub findings: Vec<FindingDto>,
 }
 
 /// Книга сразу после открытия: метаданные и оглавление.
