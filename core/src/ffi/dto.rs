@@ -24,6 +24,10 @@ pub struct WordDto {
     pub lemma: String,
     /// Части речи начальной формы: `["NOUN", "VERB"]`.
     pub pos: Vec<&'static str>,
+    /// Часть речи, по которой слово разобралось: у «glowed» это `VERB`, хотя
+    /// лемма «glow» бывает и существительным. `null` у начальной формы.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matched_pos: Option<&'static str>,
     /// `lemma` | `regular` | `irregular` | `unknown`.
     pub form: &'static str,
     pub facts: Vec<FactDto>,
@@ -46,6 +50,7 @@ impl From<&WordAnalysis> for WordDto {
             surface: analysis.surface.clone(),
             lemma: analysis.lemma.clone(),
             pos: pos_names(analysis.pos),
+            matched_pos: analysis.matched.map(pos_name),
             form: form_name(analysis.form),
             facts: analysis.facts.iter().map(FactDto::from).collect(),
             zipf: analysis.zipf,
@@ -238,21 +243,23 @@ impl From<&Block> for BlockDto {
 
 /// Части речи именами universal tagset — так их читает и сервер, и клиент.
 fn pos_names(set: PosSet) -> Vec<&'static str> {
+    set.iter().map(pos_name).collect()
+}
+
+fn pos_name(pos: crate::lexicon::Pos) -> &'static str {
     use crate::lexicon::Pos;
-    set.iter()
-        .map(|pos| match pos {
-            Pos::Noun => "NOUN",
-            Pos::Verb => "VERB",
-            Pos::Adjective => "ADJ",
-            Pos::Adverb => "ADV",
-            Pos::Pronoun => "PRON",
-            Pos::Determiner => "DET",
-            Pos::Preposition => "ADP",
-            Pos::Conjunction => "CONJ",
-            Pos::Particle => "PART",
-            Pos::Numeral => "NUM",
-        })
-        .collect()
+    match pos {
+        Pos::Noun => "NOUN",
+        Pos::Verb => "VERB",
+        Pos::Adjective => "ADJ",
+        Pos::Adverb => "ADV",
+        Pos::Pronoun => "PRON",
+        Pos::Determiner => "DET",
+        Pos::Preposition => "ADP",
+        Pos::Conjunction => "CONJ",
+        Pos::Particle => "PART",
+        Pos::Numeral => "NUM",
+    }
 }
 
 fn form_name(form: crate::lexicon::FormKind) -> &'static str {
@@ -281,6 +288,25 @@ mod tests {
         assert_eq!(json["pos"][0], "NOUN");
         assert_eq!(json["known"], true);
         assert!(json["facts"][0]["label"].is_string());
+    }
+
+    #[test]
+    fn форма_несёт_часть_речи_по_которой_разобралась() {
+        // «glowed» — глагол, хотя лемма «glow» бывает и существительным.
+        // Карточка обязана показать глагол, а не первое попавшееся значение.
+        let analysis = analyze(Lexicon::embedded(), "glowed");
+        let json = serde_json::to_value(WordDto::from(&analysis)).expect("сериализация");
+
+        assert_eq!(json["lemma"], "glow");
+        assert_eq!(json["matchedPos"], "VERB");
+    }
+
+    #[test]
+    fn начальная_форма_не_уточняет_часть_речи() {
+        let analysis = analyze(Lexicon::embedded(), "book");
+        let json = serde_json::to_value(WordDto::from(&analysis)).expect("сериализация");
+
+        assert!(json.get("matchedPos").is_none(), "уточнять тут нечего");
     }
 
     #[test]

@@ -60,6 +60,13 @@ data class WordAnalysis(
     val lemma: String,
     /** Части речи в universal tagset: NOUN, VERB, ADJ… */
     val pos: List<String> = emptyList(),
+    /**
+     * Часть речи, по которой слово разобралось.
+     *
+     * У «glowed» это `VERB`, хотя лемма «glow» бывает и существительным.
+     * `null` у слова, которое и есть начальная форма.
+     */
+    val matchedPos: String? = null,
     /** `lemma`, `regular`, `irregular` или `unknown`. */
     val form: String,
     /** Объяснения формы для карточки: «Число: множественное». */
@@ -71,8 +78,14 @@ data class WordAnalysis(
     /** Нашлось ли слово в словаре. */
     val known: Boolean,
 ) {
-    /** Основная часть речи — та, что показывается в шапке карточки. */
-    val primaryPos: String? get() = pos.firstOrNull()
+    /**
+     * Часть речи для шапки карточки.
+     *
+     * Разбор формы точнее списка значений леммы: «glowed» — глагол, даже если
+     * «glow» бывает и существительным. Порядок в [pos] ничего не значит, и
+     * брать оттуда первое попавшееся — значит иногда врать.
+     */
+    val primaryPos: String? get() = matchedPos ?: pos.firstOrNull()
 }
 
 /** Факт о форме слова: «Число» — «множественное, окончание -s». */

@@ -50,6 +50,15 @@ pub struct WordAnalysis {
     pub lemma: String,
     /// Части речи начальной формы вне контекста.
     pub pos: PosSet,
+    /// Часть речи, по которой слово разобралось.
+    ///
+    /// У «glowed» лемма «glow» бывает и существительным, и глаголом, но
+    /// окончание «-ed» разобрано именно как глагольное — и показывать в
+    /// карточке надо глагол. Без этого поля пришлось бы угадывать по порядку
+    /// частей речи, а порядок ничего не значит.
+    ///
+    /// `None` у слова, которое и есть начальная форма: там уточнять нечего.
+    pub matched: Option<Pos>,
     pub form: FormKind,
     /// Что показать в разборе: число, время, степень сравнения.
     pub facts: Vec<Fact>,
@@ -66,6 +75,7 @@ impl WordAnalysis {
             surface: surface.to_string(),
             lemma: surface.to_lowercase(),
             pos: PosSet::EMPTY,
+            matched: None,
             form: FormKind::Unknown,
             facts: Vec::new(),
             zipf: 0.0,
@@ -127,6 +137,7 @@ fn analyze_stem(lexicon: &Lexicon, surface: &str, lower: &str) -> WordAnalysis {
         surface: surface.to_string(),
         lemma: lower.to_string(),
         pos: entry.pos,
+        matched: None,
         form: FormKind::Lemma,
         facts: Vec::new(),
         zipf: entry.zipf,
@@ -177,6 +188,7 @@ fn analyze_irregular(lexicon: &Lexicon, surface: &str, lower: &str) -> Option<Wo
         surface: surface.to_string(),
         lemma: irregular.lemma.to_string(),
         pos: entry.pos,
+        matched: Some(irregular.pos),
         form: FormKind::Irregular,
         facts: irregular_facts(irregular.pos, irregular.lemma),
         zipf: entry.zipf,
@@ -309,8 +321,9 @@ fn analyze_regular(lexicon: &Lexicon, surface: &str, lower: &str) -> Option<Word
                 surface: surface.to_string(),
                 lemma,
                 pos: entry.pos,
+                matched: Some(pos),
                 form: FormKind::Regular,
-                facts: regular_facts(rule.suffix, pos, entry.pos),
+                facts: regular_facts(rule.suffix, entry.pos),
                 zipf: entry.zipf,
                 cefr: entry.cefr,
             });
@@ -374,7 +387,7 @@ fn candidates(suffix: &str, stem: &str) -> Vec<String> {
 /// Одно и то же окончание значит разное в зависимости от части речи: «-s» на
 /// существительном — множественное число, на глаголе — третье лицо. У
 /// омонима вроде «books» верны оба разбора, и карточка показывает оба.
-fn regular_facts(suffix: &str, matched: Pos, all: PosSet) -> Vec<Fact> {
+fn regular_facts(suffix: &str, all: PosSet) -> Vec<Fact> {
     let mut facts = Vec::new();
     match suffix {
         "s" => {
@@ -404,7 +417,6 @@ fn regular_facts(suffix: &str, matched: Pos, all: PosSet) -> Vec<Fact> {
         )),
         _ => {}
     }
-    let _ = matched;
     facts
 }
 
