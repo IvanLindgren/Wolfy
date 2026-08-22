@@ -36,7 +36,14 @@ data class ReaderState(
     val bookTitle: String = "",
     val chapterTitle: String = "",
     val chapterIndex: Int = 0,
-    val chapterCount: Int = 0,
+    /**
+     * Названия глав в порядке книги.
+     *
+     * Оглавление живёт здесь, а не запрашивается отдельно: ядро отдаёт его
+     * вместе с книгой одним вызовом, и второй поход за тем же списком был бы
+     * лишним.
+     */
+    val chapters: List<String> = emptyList(),
     /** Блоки главы вместе с разбором каждого текстового блока. */
     val blocks: List<ReaderBlock> = emptyList(),
     /** Начальные формы слов, уже сохранённых в колоду этой книги. */
@@ -51,6 +58,7 @@ data class ReaderState(
     val startAt: Float = 0f,
     val error: String? = null,
 ) {
+    val chapterCount: Int get() = chapters.size
     val hasPrevious: Boolean get() = chapterIndex > 0
     val hasNext: Boolean get() = chapterIndex + 1 < chapterCount
 }
@@ -126,7 +134,12 @@ class ReaderViewModel(
                 _state.update {
                     it.copy(
                         bookTitle = title,
-                        chapterCount = opened.info.chapters.size,
+                        chapters = opened.info.chapters.mapIndexed { number, chapter ->
+                            // У главы бывает не быть названия — в обычном
+                            // тексте их нет вовсе. «Глава 4» лучше пустой
+                            // строки: по пустому списку не выбрать.
+                            chapter.title?.takeIf { it.isNotBlank() } ?: "Глава ${number + 1}"
+                        },
                     )
                 }
                 library.describe(

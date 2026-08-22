@@ -17,6 +17,10 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.flow.first
 import androidx.compose.ui.Alignment
@@ -48,13 +52,19 @@ fun ReaderScreen(
     onNextChapter: () -> Unit,
     onClose: () -> Unit,
     onScrolled: (Float) -> Unit,
+    onChapter: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = WolfyTheme.colors
+    var contentsOpen by remember { mutableStateOf(false) }
 
     Box(modifier.fillMaxSize().background(colors.paper)) {
         Column(Modifier.fillMaxSize()) {
-            ReaderTopBar(state, onClose = onClose)
+            ReaderTopBar(
+                state = state,
+                onClose = onClose,
+                onOpenContents = { contentsOpen = true },
+            )
 
             when {
                 state.error != null -> Message(state.error)
@@ -70,6 +80,17 @@ fun ReaderScreen(
             }
         }
 
+        ContentsSheet(
+            visible = contentsOpen,
+            chapters = state.chapters,
+            current = state.chapterIndex,
+            onSelect = {
+                contentsOpen = false
+                onChapter(it)
+            },
+            onDismiss = { contentsOpen = false },
+        )
+
         WordCardSheet(
             state = state.card,
             onDismiss = onDismissCard,
@@ -80,7 +101,7 @@ fun ReaderScreen(
 
 /** Шапка: глава и полоса прогресса чтения. */
 @Composable
-private fun ReaderTopBar(state: ReaderState, onClose: () -> Unit) {
+private fun ReaderTopBar(state: ReaderState, onClose: () -> Unit, onOpenContents: () -> Unit) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
     val progress = if (state.chapterCount > 0) {
@@ -103,7 +124,12 @@ private fun ReaderTopBar(state: ReaderState, onClose: () -> Unit) {
                 text = "‹ библиотека",
                 modifier = Modifier.clickable(onClick = onClose),
             )
-            SectionLabel(state.chapterTitle.ifBlank { state.bookTitle })
+            // Название главы — вход в оглавление. Отдельный значок для этого
+            // не нужен: читатель и так смотрит сюда, чтобы понять, где он.
+            SectionLabel(
+                text = state.chapterTitle.ifBlank { state.bookTitle } + " ▾",
+                modifier = Modifier.clickable(onClick = onOpenContents),
+            )
             SectionLabel("${(progress * 100).toInt()}%")
         }
         Box(

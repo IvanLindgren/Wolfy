@@ -26,6 +26,14 @@ data class AppSettings(
      * множитель: он растягивает всё сразу и набор остаётся согласованным.
      */
     val fontScale: Float = 1f,
+    /**
+     * Клали ли уже демо-книгу.
+     *
+     * Проверять «библиотека пуста» вместо этого нельзя: читатель, удаливший
+     * все свои книги, получил бы демо обратно — и понял бы это как то, что
+     * приложение не удалило ничего.
+     */
+    val demoAdded: Boolean = false,
 ) {
     /** Тема по имени. Незнакомое имя — светлая: она подходит всем. */
     val readingTheme: ReadingTheme
@@ -53,6 +61,10 @@ class Settings(private val store: LibraryStore) {
 
     fun setTheme(theme: ReadingTheme) {
         update { it.copy(theme = theme.name) }
+    }
+
+    fun markDemoAdded() {
+        update { it.copy(demoAdded = true) }
     }
 
     fun setFontScale(scale: Float) {

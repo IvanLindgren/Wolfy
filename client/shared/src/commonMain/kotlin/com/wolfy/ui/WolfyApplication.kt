@@ -100,7 +100,8 @@ fun WolfyApplication(
         // кладётся демо-глава. Она проходит ровно тот же путь, что настоящая
         // книга, — никакого отдельного «режима примера» в читалке нет.
         LaunchedEffect(parts) {
-            if (parts.library.books.isEmpty()) {
+            if (!parts.settings.current.demoAdded) {
+                parts.settings.markDemoAdded()
                 parts.catalogue.import(
                     PickedBook(path = writeDemoBook(), name = "Старая библиотека.txt"),
                 )
@@ -170,6 +171,7 @@ private fun Shell(
                         state = catalogue,
                         onOpen = open,
                         onImport = pick,
+                        onRemove = { parts.catalogue.remove(it.id) },
                     )
 
                     else -> ReaderScreen(
@@ -180,6 +182,7 @@ private fun Shell(
                         onPreviousChapter = parts.reader::previousChapter,
                         onNextChapter = parts.reader::nextChapter,
                         onScrolled = parts.reader::rememberPlace,
+                        onChapter = parts.reader::loadChapter,
                         onClose = {
                             parts.reader.closeCurrent()
                             reading = null
