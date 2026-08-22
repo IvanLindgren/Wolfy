@@ -32,6 +32,7 @@ tools/    генераторы словарей и вспомогательны�
 | Rust            | 1.90+               |
 | Go              | 1.25+               |
 | JDK             | 21 (подойдёт jbr Android Studio) |
+| Полный JDK 17   | только для установщика Windows: в jbr нет jpackage, Gradle скачает сам |
 | Android SDK/NDK | NDK 27 или 28       |
 | Docker          | для локального Postgres и Redis |
 
@@ -42,6 +43,16 @@ cp .env.example .env      # заполнить ключи
 docker compose up -d      # Postgres и Redis для разработки
 cd core && cargo test     # ядро
 cd server && go test ./...
+tools/run_server.sh       # сервис на :8080, ключи берутся из .env
+```
+
+Клиент:
+
+```bash
+tools/build_core.sh host                    # ядро на Rust под текущую систему
+cd client && ./gradlew :shared:desktopTest  # тесты общего кода
+./gradlew :desktopApp:packageExe            # установщик под Windows
+./gradlew :androidApp:assembleDebug         # apk
 ```
 
 ## Документация
