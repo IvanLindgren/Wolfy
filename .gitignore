@@ -22,9 +22,11 @@ client/.kotlin/
 *.keystore
 !client/androidApp/debug.keystore
 
-# Собранные нативные библиотеки ядра
-client/androidApp/src/main/jniLibs/
-client/desktopApp/resources/windows-x64/*.dll
+# Собранные нативные библиотеки ядра: их кладёт tools/build_core.sh, и в
+# репозитории им делать нечего — двенадцать мегабайт бинарников, которые
+# устаревают с каждой правкой ядра.
+client/shared/src/androidMain/jniLibs/
+client/desktopApp/*.dll
 
 # IDE
 .idea/

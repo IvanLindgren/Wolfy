@@ -27,9 +27,9 @@ JNI_LIBS="$ROOT/client/shared/src/androidMain/jniLibs"
 # которого разработка под Android невозможна. x86 (32 бита) не собираем:
 # устройств с ним не осталось, а вес пакета он увеличивает на треть.
 ANDROID_TARGETS=(
-    "arm64-v8a:aarch64-linux-android"
-    "armeabi-v7a:armv7-linux-androideabi"
-    "x86_64:x86_64-linux-android"
+    "arm64-v8a"
+    "armeabi-v7a"
+    "x86_64"
 )
 
 build_host() {
@@ -54,16 +54,16 @@ build_android() {
     echo "==> Ядро под Android"
     mkdir -p "$JNI_LIBS"
 
-    for entry in "${ANDROID_TARGETS[@]}"; do
-        local abi="${entry%%:*}"
-        local target="${entry##*:}"
-        echo "    $abi ($target)"
-        cargo ndk --manifest-path "$CORE/Cargo.toml" \
-            --target "$target" \
-            --platform 26 \
-            --output-dir "$JNI_LIBS" \
-            build --release
-    done
+    # cargo-ndk берёт крейт из текущего каталога и не понимает --manifest-path,
+    # поэтому переходим в core. Скобки — чтобы каталог сменился только внутри.
+    (
+        cd "$CORE" || exit 1
+        for abi in "${ANDROID_TARGETS[@]}"; do
+            echo "    $abi"
+            cargo ndk --target "$abi" --platform 26 --output-dir "$JNI_LIBS" \
+                build --release || exit 1
+        done
+    )
 
     echo "    готово: $JNI_LIBS"
 }

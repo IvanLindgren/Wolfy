@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Иконка приложения: Вульфи на цвете газетной бумаги.
+
+  Adaptive icon, а не одна картинка: система сама обрезает её маской под форму,
+  принятую на устройстве, — круг, квадрат со скруглением или каплю. Поэтому
+  фигура на переднем плане умещается в центральные две трети холста, иначе
+  маска срезала бы волку уши.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+    <monochrome android:drawable="@mipmap/ic_launcher_foreground" />
+</adaptive-icon>

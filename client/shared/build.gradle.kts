@@ -9,17 +9,14 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.compose.multiplatform)
     alias(libs.plugins.compose.compiler)
-    // Именно этот плагин, а не com.android.library: начиная с AGP 9 общий
-    // модуль KMP подключает Android собственным DSL, а старый с
-    // androidTarget() несовместим.
-    alias(libs.plugins.android.kmp.library)
+    alias(libs.plugins.android.library)
 }
 
 kotlin {
-    android {
-        namespace = "com.wolfy.shared"
-        compileSdk = libs.versions.androidCompileSdk.get().toInt()
-        minSdk = libs.versions.androidMinSdk.get().toInt()
+    androidTarget {
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        }
     }
 
     jvm("desktop") {
@@ -85,4 +82,23 @@ compose.resources {
     publicResClass = true
     packageOfResClass = "com.wolfy.resources"
     generateResClass = auto
+}
+
+android {
+    namespace = "com.wolfy.shared"
+    compileSdk = libs.versions.androidCompileSdk.get().toInt()
+
+    defaultConfig {
+        minSdk = libs.versions.androidMinSdk.get().toInt()
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    sourceSets["main"].apply {
+        // Собранное ядро на Rust: сюда его кладёт tools/build_core.sh android.
+        jniLibs.srcDirs("src/androidMain/jniLibs")
+    }
 }

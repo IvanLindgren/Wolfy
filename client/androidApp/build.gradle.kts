@@ -1,12 +1,12 @@
 // Android-обёртка.
 //
-// Это обычный Android-модуль, а не KMP: начиная с AGP 9 приложение и общий
-// KMP-модуль не могут жить в одном проекте. Здесь только то, чего не бывает
-// на Windows, — манифест, Activity и подпись релиза.
+// Это обычный Android-модуль, а не KMP: приложению не нужны общие исходники,
+// оно только подключает :shared. Здесь живёт то, чего не бывает на Windows, —
+// манифест, Activity, иконка и подпись релиза.
 
 plugins {
-    // Плагин Kotlin здесь не нужен: с AGP 9 поддержка Kotlin встроена.
     alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.compose.multiplatform)
     alias(libs.plugins.compose.compiler)
 }
@@ -45,4 +45,10 @@ dependencies {
     implementation(compose.runtime)
     implementation(compose.ui)
     implementation(libs.androidx.activity.compose)
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
 }
