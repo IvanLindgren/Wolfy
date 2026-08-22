@@ -68,6 +68,7 @@ class SyncService(
         try {
             _status.value = _status.value.copy(running = true, error = null)
 
+            val sent = library.snapshot()
             val (books, cards) = library.pending()
             val payload = SyncPayload(
                 cursor = library.state.value.cursor,
@@ -83,7 +84,7 @@ class SyncService(
                 }
 
                 is SyncResult.Ready -> {
-                    apply(result.payload)
+                    apply(result.payload, sent)
                     _status.value = SyncStatus(
                         running = false,
                         lastSuccess = currentTimeMillis(),
@@ -98,7 +99,7 @@ class SyncService(
         }
     }
 
-    private fun apply(payload: SyncPayload) {
+    private fun apply(payload: SyncPayload, sent: Library.Sent) {
         val state = library.state.value
         val knownBooks = state.books.associateBy { it.id }
         val knownCards = state.cards.associateBy { it.id }
@@ -106,7 +107,7 @@ class SyncService(
         val books: List<LibraryBook> = payload.books.map { it.toLibrary(knownBooks[it.id]) }
         val cards: List<Card> = payload.cards.map { it.toLibrary(knownCards[it.id]) }
 
-        library.applyServer(cursor = payload.cursor, books = books, cards = cards)
+        library.applyServer(cursor = payload.cursor, books = books, cards = cards, sent = sent)
 
         // Настройки чтения с сервера применяются только если местных ещё не
         // было. Иначе читатель, поменявший тему на телефоне, увидел бы, как

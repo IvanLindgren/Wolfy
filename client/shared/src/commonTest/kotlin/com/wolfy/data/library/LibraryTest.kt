@@ -236,18 +236,45 @@ class LibraryTest {
     }
 
     @Test
-    fun ответ_сервера_снимает_записи_с_отправки() {
+    fun правка_сделанная_во_время_обмена_не_теряется() {
+        // Пока запрос идёт по сети, читатель продолжает читать. Ответ сервера
+        // содержит эхо того, что мы отправили, — и принять его поверх более
+        // свежей местной правки значит потерять её.
         val library = library(FakeStore(), Clock())
         val book = library.add("/a.txt", "a.txt", "Книга", null)
 
+        // Отправляем то, что есть сейчас.
+        val sent = library.snapshot()
+
+        // Пока «шёл запрос», ядро сосчитало главы.
+        library.describe(book.id, "Книга", null, chapters = 12)
+
+        // Приходит эхо отправленного — с нулём глав.
         library.applyServer(
-            cursor = 7,
-            books = listOf(book.copy(rev = 7, dirty = false)),
+            cursor = 1,
+            books = listOf(book.copy(rev = 1, dirty = false, chapters = 0)),
             cards = emptyList(),
+            sent = sent,
+        )
+
+        assertEquals(12, library.book(book.id)?.chapters, "свежая правка затёрта эхом")
+        assertEquals(1, library.pending().first.size, "правка обязана уйти следующей отправкой")
+    }
+
+    @Test
+    fun эхо_отправленного_снимает_запись_с_очереди() {
+        val library = library(FakeStore(), Clock())
+        val book = library.add("/a.txt", "a.txt", "Книга", null)
+        val sent = library.snapshot()
+
+        library.applyServer(
+            cursor = 1,
+            books = listOf(book.copy(rev = 1, dirty = false)),
+            cards = emptyList(),
+            sent = sent,
         )
 
         assertTrue(library.pending().first.isEmpty(), "отправленное больше не ждёт")
-        assertEquals(7, library.state.value.cursor)
     }
 
     @Test
@@ -256,11 +283,13 @@ class LibraryTest {
         // его ответом сервера значило бы отобрать книгу у того, кто её читает.
         val library = library(FakeStore(), Clock())
         val book = library.add("/a.txt", "a.txt", "Книга", null)
+        val sent = library.snapshot()
 
         library.applyServer(
             cursor = 3,
             books = listOf(book.copy(path = "", title = "Переименована", rev = 3, dirty = false)),
             cards = emptyList(),
+            sent = sent,
         )
 
         val after = library.book(book.id)

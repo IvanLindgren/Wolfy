@@ -293,6 +293,30 @@ class Library(
         _state.value.books.filter { it.dirty } to _state.value.cards.filter { it.dirty }
 
     /**
+     * Снимок отправки: что ушло на сервер и в каком состоянии была библиотека.
+     *
+     * Нужен, чтобы отличить эхо собственной отправки от чужого изменения. Пока
+     * запрос идёт по сети, читатель продолжает читать, и запись успевает
+     * измениться ещё раз — принять после этого своё же старое эхо значит
+     * потерять то, что он только что сделал.
+     */
+    data class Sent(
+        val revision: Long,
+        val books: Set<String>,
+        val cards: Set<String>,
+    )
+
+    /** Что отправляем и с какого состояния. */
+    fun snapshot(): Sent {
+        val state = _state.value
+        return Sent(
+            revision = state.revision,
+            books = state.books.filter { it.dirty }.map { it.id }.toSet(),
+            cards = state.cards.filter { it.dirty }.map { it.id }.toSet(),
+        )
+    }
+
+    /**
      * Принимает ответ сервера.
      *
      * Всё, что было отправлено, приезжает назад с присвоенной ревизией — по
@@ -302,11 +326,24 @@ class Library(
      * Путь к файлу — единственное, что не приходит извне и не затирается: он у
      * каждого устройства свой, а у второго его может не быть вовсе.
      */
-    fun applyServer(cursor: Long, books: List<LibraryBook>, cards: List<Card>) {
+    fun applyServer(
+        cursor: Long,
+        books: List<LibraryBook>,
+        cards: List<Card>,
+        sent: Sent = Sent(_state.value.revision, emptySet(), emptySet()),
+    ) {
         update { current ->
+            // Изменилась ли библиотека, пока шёл запрос. Если да, ответ сервера
+            // старше местных правок, и принимать его на них нельзя.
+            val quiet = current.revision == sent.revision
+
             val byId = current.books.associateBy { it.id }.toMutableMap()
             for (incoming in books) {
                 val local = byId[incoming.id]
+                if (local != null && local.dirty && !(quiet && local.id in sent.books)) {
+                    // Местная правка новее ответа: оставляем её ждать отправки.
+                    continue
+                }
                 byId[incoming.id] = incoming.copy(
                     path = local?.path.orEmpty(),
                     dirty = false,
@@ -315,6 +352,10 @@ class Library(
 
             val cardsById = current.cards.associateBy { it.id }.toMutableMap()
             for (incoming in cards) {
+                val local = cardsById[incoming.id]
+                if (local != null && local.dirty && !(quiet && local.id in sent.cards)) {
+                    continue
+                }
                 cardsById[incoming.id] = incoming.copy(dirty = false)
             }
 
