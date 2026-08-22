@@ -32,6 +32,27 @@ pub enum Aux {
     Not,
 }
 
+/// Форма служебного глагола.
+///
+/// Отдельно от [`VerbForm`](crate::lexicon::VerbForm), потому что отвечает на
+/// другой вопрос. Тот описывает, чем форма может быть в принципе; этот —
+/// какая она у конкретного вспомогательного слова, и ответ здесь всегда один.
+/// «is» и «was» различаются только этим, а от различия зависит, Present
+/// Perfect перед читателем или Past Perfect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuxForm {
+    /// Настоящее время: «is», «have», «does», «will».
+    Present,
+    /// Прошедшее: «was», «had», «did», «would».
+    Past,
+    /// Начальная форма: «be», сюда же «to have».
+    Base,
+    /// Причастие прошедшего времени: «been», «done», «had».
+    Participle,
+    /// Причастие настоящего времени: «being», «having».
+    Gerund,
+}
+
 /// Что закрытый список знает о слове.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FunctionWord {
@@ -43,38 +64,60 @@ pub struct FunctionWord {
     /// `None` у слова, которое само себе начальная форма: у модальных других
     /// форм и не бывает, в том и разница между «can» и обычным глаголом.
     pub lemma: Option<&'static str>,
+    pub form: AuxForm,
 }
 
 /// Ищет слово в закрытом списке.
 ///
 /// Проверять надо до словаря: смысл таблицы в том, чтобы перебить его ответ.
 pub fn lookup(word: &str) -> Option<FunctionWord> {
-    let (pos, aux, lemma) = match word {
+    use AuxForm::*;
+
+    let (pos, aux, lemma, form) = match word {
         // Модальные. Своих неличных форм у них нет, спряжения тоже — потому
         // они и не глаголы в обычном смысле, а отдельный класс.
-        "can" | "could" | "will" | "would" | "shall" | "should" | "may" | "might" | "must"
-        | "ought" => (Pos::Verb, Some(Aux::Modal), None),
+        // Настоящее и прошедшее у модальных различается только формой, и это
+        // различие несёт смысл: «will» это будущее, «would» — условное.
+        "can" | "will" | "shall" | "may" | "must" | "ought" => {
+            (Pos::Verb, Some(Aux::Modal), None, Present)
+        }
+        "could" | "would" | "should" | "might" => (Pos::Verb, Some(Aux::Modal), None, Past),
 
         // Формы «be». Их восемь, и это единственный глагол английского с таким
         // числом форм — поэтому список, а не правило.
-        "be" | "am" | "is" | "are" | "was" | "were" | "been" | "being" => {
-            (Pos::Verb, Some(Aux::Be), Some("be"))
-        }
+        "be" => (Pos::Verb, Some(Aux::Be), Some("be"), Base),
+        "am" | "is" | "are" => (Pos::Verb, Some(Aux::Be), Some("be"), Present),
+        "was" | "were" => (Pos::Verb, Some(Aux::Be), Some("be"), Past),
+        "been" => (Pos::Verb, Some(Aux::Be), Some("be"), Participle),
+        "being" => (Pos::Verb, Some(Aux::Be), Some("be"), Gerund),
 
-        "have" | "has" | "had" | "having" => (Pos::Verb, Some(Aux::Have), Some("have")),
-        "do" | "does" | "did" | "doing" => (Pos::Verb, Some(Aux::Do), Some("do")),
+        "have" | "has" => (Pos::Verb, Some(Aux::Have), Some("have"), Present),
+        // «had» бывает и сказуемым в прошедшем, и причастием в «had had».
+        // Различает их место в цепочке, а не само слово, — здесь прошедшее,
+        // а разбор цепочки при нужде прочтёт его иначе.
+        "had" => (Pos::Verb, Some(Aux::Have), Some("have"), Past),
+        "having" => (Pos::Verb, Some(Aux::Have), Some("have"), Gerund),
+
+        "do" | "does" => (Pos::Verb, Some(Aux::Do), Some("do"), Present),
+        "did" => (Pos::Verb, Some(Aux::Do), Some("do"), Past),
+        "doing" => (Pos::Verb, Some(Aux::Do), Some("do"), Gerund),
 
         // «to» перед глаголом — частица инфинитива, перед существительным —
         // предлог. Разделить их может только разбор, поэтому здесь частица, а
         // предлог восстанавливается по соседям.
-        "to" => (Pos::Particle, Some(Aux::To), None),
+        "to" => (Pos::Particle, Some(Aux::To), None, Base),
 
-        "not" | "n't" | "nt" => (Pos::Adverb, Some(Aux::Not), Some("not")),
+        "not" | "n't" | "nt" => (Pos::Adverb, Some(Aux::Not), Some("not"), Base),
 
         _ => return None,
     };
 
-    Some(FunctionWord { pos, aux, lemma })
+    Some(FunctionWord {
+        pos,
+        aux,
+        lemma,
+        form,
+    })
 }
 
 /// Тип придаточного, который вводит слово.

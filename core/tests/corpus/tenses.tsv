@@ -1,0 +1,26 @@
+# Времена и вид. Слева — правило, которое обязано сработать;
+# со знаком «!» — правило, которое сработать не должно.
+present-simple	She reads every evening.
+present-simple	They live in London.
+!present-continuous	She reads every evening.
+present-continuous	She is reading a book.
+!present-simple	She is reading a book.
+past-simple	She read the book yesterday.
+past-simple	He went home.
+!present-perfect	She read the book yesterday.
+past-continuous	She was reading when he came.
+present-perfect	She has read the book.
+present-perfect	They have finished the work.
+!past-perfect	She has read the book.
+past-perfect	She had read the book before he came.
+!present-perfect	She had read the book before he came.
+present-perfect-continuous	She has been reading all morning.
+!present-perfect	She has been reading all morning.
+past-perfect-continuous	She had been reading all morning.
+future-simple	She will read the book.
+!present-simple	She will read the book.
+future-continuous	She will be reading at noon.
+future-perfect	She will have read the book by then.
+future-perfect-continuous	She will have been reading for an hour.
+present-simple	She does not read.
+past-simple	She did not read.

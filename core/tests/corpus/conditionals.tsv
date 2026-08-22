@@ -1,0 +1,15 @@
+# Условные предложения.
+conditional-zero	If it rains, the streets get wet.
+conditional-first	If it rains, we will stay home.
+conditional-second	If I had money, I would buy the house.
+conditional-third	If she had asked, I would have helped her.
+conditional-mixed	If she had asked, I would be there now.
+# Близкие примеры, где условия нет.
+!conditional-first	It rains and we stay home.
+!conditional-second	I had money and I bought the house.
+# Придаточное может стоять и вторым — запятой тогда нет.
+conditional-third	He would have come if he had known.
+conditional-second	I would buy the house if I had money.
+conditional-first	We will stay home if it rains.
+# Главное предложение берётся ближайшее, а не первое в фразе.
+conditional-third	He said he would have come if he had known.

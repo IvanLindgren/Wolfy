@@ -1,0 +1,11 @@
+# Модальные глаголы.
+modal-verb	She can read English.
+modal-verb	You must wait here.
+modal-verb	He should apologise.
+modal-verb	It may rain today.
+modal-perfect	He must have left already.
+!modal-verb	He must have left already.
+# «will» и «shall» образуют время, а не модальность.
+!modal-verb	She will read the book.
+!modal-verb	We shall see.
+future-simple	We shall see.

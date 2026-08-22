@@ -1,0 +1,13 @@
+# Неличные формы.
+infinitive	She wants to read the book.
+infinitive	He decided to leave.
+gerund	She is good at reading.
+gerund	He left without saying a word.
+# Предлог «to» перед существительным инфинитива не даёт.
+!infinitive	She went to the library.
+# Продолженное время — не герундий.
+!gerund	She is reading a book.
+!infinitive	She reads books.
+# Инфинитив после существительного сказуемым не становится.
+!present-simple	A good way to spend an evening.
+infinitive	A good way to spend an evening.

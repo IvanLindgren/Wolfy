@@ -19,7 +19,7 @@
 
 mod function;
 
-pub use function::{Aux, Clause};
+pub use function::{Aux, AuxForm, Clause};
 
 use crate::lexicon::{verb_roles, Lexicon, Pos, PosSet, VerbForm, VerbRole};
 use crate::tokenizer::{Token, TokenKind};
@@ -38,8 +38,13 @@ pub struct Word {
     pub pos: Pos,
     /// Части речи, которые допускал словарь. Пустой набор — слова нет.
     pub candidates: PosSet,
+    /// Часть речи, которой слово чаще всего оказывается в живом тексте.
+    pub dominant: Option<Pos>,
     /// Служебная роль: вспомогательный глагол, модальный, «to», отрицание.
     pub aux: Option<Aux>,
+    /// Форма служебного глагола: «is» настоящее, «was» прошедшее, «been»
+    /// причастие. `None` у слова, которое служебным не является.
+    pub aux_form: Option<AuxForm>,
     /// Вводит ли слово придаточное предложение.
     pub clause: Option<Clause>,
     /// Чем слово может быть как форма глагола.
@@ -105,18 +110,22 @@ fn collect(lexicon: &Lexicon, tokens: &[Token]) -> Vec<Word> {
 
         let lower = token.text.to_lowercase();
         let function = function::lookup(&lower);
-        let candidates = lexicon.entry(&lower).map(|e| e.pos).unwrap_or(PosSet::EMPTY);
+        let entry = lexicon.entry(&lower);
+        let candidates = entry.map(|e| e.pos).unwrap_or(PosSet::EMPTY);
+        let dominant = entry.and_then(|e| e.dominant);
 
         words.push(Word {
             token: index,
             text: token.text.clone(),
             pos: function
                 .map(|f| f.pos)
-                .or_else(|| lexicon.entry(&lower).and_then(|e| e.dominant))
+                .or(dominant)
                 .or_else(|| candidates.primary())
                 .unwrap_or(Pos::Noun),
             candidates,
+            dominant,
             aux: function.and_then(|f| f.aux),
+            aux_form: function.map(|f| f.form),
             clause: function::clause_marker(&lower),
             verb: verb_roles(lexicon, &lower),
             lower,
@@ -163,6 +172,19 @@ fn resolve(words: &mut [Word]) {
 
 /// Часть речи слова по его соседям, или `None`, если правила молчат.
 fn decide(word: &Word, previous: Option<&Word>, next: Option<&Word>) -> Option<Pos> {
+    // Служебные части речи — закрытый класс, и преобладание по корпусу на них
+    // надёжнее любого правила о соседях. Без этой проверки «it» после «if»
+    // становилось существительным (WordNet знает «IT» как отрасль), а вместе с
+    // ним разваливалось и всё придаточное.
+    if let Some(dominant) = word.dominant {
+        if matches!(
+            dominant,
+            Pos::Pronoun | Pos::Determiner | Pos::Conjunction | Pos::Preposition | Pos::Particle
+        ) {
+            return Some(dominant);
+        }
+    }
+
     if let Some(previous) = previous {
         match previous.aux {
             // «to read», «can read», «did read» — после частицы, модального и
@@ -250,14 +272,20 @@ mod tests {
     #[test]
     fn то_же_слово_без_существительного_справа_становится_существительным() {
         // «the green» — это уже лужайка, а не цвет.
-        assert_eq!(parts("She crossed the green."), "she/p crossed/v the/d green/n");
+        assert_eq!(
+            parts("She crossed the green."),
+            "she/p crossed/v the/d green/n"
+        );
     }
 
     #[test]
     fn после_модального_и_частицы_стоит_глагол() {
         // «book» по словарю прежде всего существительное — но не здесь.
         assert_eq!(parts("I can book a table."), "i/p can/v book/v a/d table/n");
-        assert_eq!(parts("I want to book a table."), "i/p want/v to/t book/v a/d table/n");
+        assert_eq!(
+            parts("I want to book a table."),
+            "i/p want/v to/t book/v a/d table/n"
+        );
     }
 
     #[test]
@@ -269,7 +297,10 @@ mod tests {
     #[test]
     fn причастие_после_связки_остаётся_глаголом() {
         assert_eq!(parts("She was reading."), "she/p was/v reading/v");
-        assert_eq!(parts("The window was broken."), "the/d window/n was/v broken/v");
+        assert_eq!(
+            parts("The window was broken."),
+            "the/d window/n was/v broken/v"
+        );
     }
 
     #[test]

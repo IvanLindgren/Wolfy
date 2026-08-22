@@ -1,0 +1,13 @@
+# Страдательный залог.
+passive-voice	The window was broken by the wind.
+passive-voice	The book is read by everyone.
+passive-voice	The letter has been sent.
+passive-voice	The house is being built.
+past-simple	The window was broken by the wind.
+present-perfect	The letter has been sent.
+present-continuous	The house is being built.
+# Действительный залог рядом: те же времена, но залог тут ни при чём.
+!passive-voice	She has read the book.
+!passive-voice	She was reading the book.
+!passive-voice	The wind broke the window.
+!passive-voice	She will read the book.

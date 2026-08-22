@@ -138,20 +138,21 @@ impl Lexicon {
                         ))
                     })?;
 
-                    let dominant = match dominant {
-                        Some(code) => {
-                            let pos = code.bytes().next().and_then(Pos::from_code).ok_or_else(
-                                || {
-                                    CoreError::Lexicon(format!(
+                    let dominant =
+                        match dominant {
+                            Some(code) => {
+                                let pos = code.bytes().next().and_then(Pos::from_code).ok_or_else(
+                                    || {
+                                        CoreError::Lexicon(format!(
                                         "строка {}: неизвестная преобладающая часть речи «{code}»",
                                         number + 1
                                     ))
-                                },
-                            )?;
-                            Some(pos)
-                        }
-                        None => None,
-                    };
+                                    },
+                                )?;
+                                Some(pos)
+                            }
+                            None => None,
+                        };
 
                     words.insert(
                         word,
@@ -271,15 +272,20 @@ mod tests {
         // Двух вхождений в корпусе мало, чтобы о чём-то говорить, и словарь
         // честно не отвечает вместо того, чтобы угадывать.
         assert_eq!(
-            Lexicon::embedded().entry("serendipity").and_then(|e| e.dominant),
+            Lexicon::embedded()
+                .entry("serendipity")
+                .and_then(|e| e.dominant),
             None
         );
     }
 
     #[test]
     fn лексикон_прошлой_версии_без_шестого_поля_читается() {
-        let lexicon = Lexicon::parse("W	book	nv	5.2	A2
-").expect("должно разобраться");
+        let lexicon = Lexicon::parse(
+            "W	book	nv	5.2	A2
+",
+        )
+        .expect("должно разобраться");
         assert_eq!(lexicon.entry("book").and_then(|e| e.dominant), None);
     }
 
