@@ -40,8 +40,8 @@ use crate::parser::{self, Book};
 use crate::tokenizer::{split, tokenize};
 
 use dto::{
-    ArticleDto, BookDto, ChapterDto, FindingDto, GrammarDto, ReferenceDto, TextDto, TokenDto,
-    WordDto,
+    ArticleDto, BookDto, ChapterDto, ExerciseDto, ExercisesDto, FindingDto, GrammarDto,
+    ReferenceDto, TextDto, TokenDto, WordDto,
 };
 
 thread_local! {
@@ -164,6 +164,23 @@ pub extern "C" fn wolfy_grammar_reference() -> *mut c_char {
         let articles = crate::grammar::articles(Lexicon::embedded());
         to_json(&ReferenceDto {
             articles: articles.iter().map(ArticleDto::from).collect(),
+        })
+    })
+}
+
+/// Микро-упражнения по грамматике.
+///
+/// Отдаются все сразу — их несколько десятков, а перемешивать и выбирать из
+/// них должна колода, которая одна знает, что читатель уже помнит.
+///
+/// # Safety
+/// Возвращённую строку освобождает [`wolfy_string_free`].
+#[no_mangle]
+pub extern "C" fn wolfy_grammar_exercises() -> *mut c_char {
+    guard(|| {
+        let exercises = crate::grammar::exercises(Lexicon::embedded());
+        to_json(&ExercisesDto {
+            exercises: exercises.iter().map(ExerciseDto::from).collect(),
         })
     })
 }
@@ -403,7 +420,9 @@ mod tests {
             .find(|a| a["rule"] == "present-perfect")
             .expect("статья про Present Perfect");
         assert_eq!(perfect["formula"], "have/has + V3");
-        assert!(perfect["explanation"].as_str().is_some_and(|s| !s.is_empty()));
+        assert!(perfect["explanation"]
+            .as_str()
+            .is_some_and(|s| !s.is_empty()));
         assert_eq!(perfect["topic"], "tenses");
     }
 

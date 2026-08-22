@@ -27,6 +27,7 @@
 
 mod chain;
 mod conditional;
+mod exercise;
 mod modal;
 mod passive;
 mod reference;
@@ -34,6 +35,7 @@ mod tense;
 mod verbal;
 
 pub use chain::{Chain, Link, Part};
+pub use exercise::{exercises, exercises_for, Exercise, Task, GAP};
 pub use reference::{articles, Article, Topic};
 
 use std::ops::Range;

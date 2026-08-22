@@ -11,7 +11,7 @@
 
 use serde::Serialize;
 
-use crate::grammar::{Article, Finding};
+use crate::grammar::{Article, Exercise, Finding};
 use crate::lexicon::{Fact, PosSet, WordAnalysis};
 use crate::parser::{Block, Chapter, ChapterInfo, Metadata};
 use crate::tokenizer::{Sentence, Token, TokenKind};
@@ -214,6 +214,48 @@ impl From<&Article> for ArticleDto {
 #[serde(rename_all = "camelCase")]
 pub struct ReferenceDto {
     pub articles: Vec<ArticleDto>,
+}
+
+/// Микро-упражнение по грамматике.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExerciseDto {
+    pub rule: &'static str,
+    pub topic: &'static str,
+    /// `form` — поставить форму, `name` — назвать правило.
+    pub task: &'static str,
+    /// Предложение. В задании на форму на месте конструкции стоит `___`.
+    pub sentence: String,
+    pub translation: &'static str,
+    /// Название правила в задании на форму; в задании на узнавание пусто.
+    pub question: &'static str,
+    pub options: Vec<String>,
+    pub answer: usize,
+    pub formula: &'static str,
+    pub explanation: String,
+}
+
+impl From<&Exercise> for ExerciseDto {
+    fn from(exercise: &Exercise) -> Self {
+        ExerciseDto {
+            rule: exercise.rule,
+            topic: exercise.topic.code(),
+            task: exercise.task.code(),
+            sentence: exercise.sentence.clone(),
+            translation: exercise.translation,
+            question: exercise.question,
+            options: exercise.options.clone(),
+            answer: exercise.answer,
+            formula: exercise.formula,
+            explanation: exercise.explanation.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExercisesDto {
+    pub exercises: Vec<ExerciseDto>,
 }
 
 /// Книга сразу после открытия: метаданные и оглавление.

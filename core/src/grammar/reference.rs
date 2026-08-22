@@ -62,6 +62,18 @@ pub struct Entry {
     /// Перевод примера. Единственное, чего движок сам не знает: он разбирает
     /// грамматику, а не переводит.
     pub translation: &'static str,
+    /// Кусок примера, который закрывают в упражнении на форму.
+    ///
+    /// Задан строкой, а не индексами: пример правят руками, а индексы после
+    /// правки молча уезжают и закрывают не то слово.
+    pub gap: &'static str,
+    /// Три неверных варианта к этому пропуску.
+    ///
+    /// Написаны руками, и это единственное в справочнике, что движок не
+    /// выводит сам: правильный ответ он знает, а вот чем его правдоподобно
+    /// подменить — нет. Зато проверяет: тест подставляет каждый вариант в
+    /// пример и требует, чтобы правило перестало срабатывать.
+    pub wrong: &'static [&'static str],
     /// Когда правило уместно — то, чего нет в объяснении разбора, потому что
     /// там читатель уже смотрит на готовое предложение, а здесь выбирает.
     pub usage: &'static str,
@@ -86,10 +98,13 @@ pub struct Article {
 /// разбираются за доли миллисекунды, а хранить копию объяснений значило бы
 /// снова завести второй источник правды.
 pub fn articles(lexicon: &Lexicon) -> Vec<Article> {
-    ENTRIES.iter().filter_map(|entry| article(lexicon, entry)).collect()
+    ENTRIES
+        .iter()
+        .filter_map(|entry| article(lexicon, entry))
+        .collect()
 }
 
-fn article(lexicon: &Lexicon, entry: &Entry) -> Option<Article> {
+pub(super) fn article(lexicon: &Lexicon, entry: &Entry) -> Option<Article> {
     let finding = explain(lexicon, entry)?;
     Some(Article {
         rule: entry.rule,
@@ -115,7 +130,7 @@ fn explain(lexicon: &Lexicon, entry: &Entry) -> Option<Finding> {
 /// Каждый обязан срабатывать на своём правиле — это проверяется тестом. Если
 /// правило переписали и оно перестало узнавать собственный пример, справочник
 /// не «немного устареет»: тест не пройдёт.
-const ENTRIES: [Entry; 22] = [
+pub(super) const ENTRIES: [Entry; 22] = [
     Entry {
         rule: "present-simple",
         topic: Topic::Tenses,
@@ -123,6 +138,8 @@ const ENTRIES: [Entry; 22] = [
         translation: "Она читает каждый вечер.",
         usage: "Привычки, расписания и то, что верно вообще: «я работаю здесь», \
                 «поезд уходит в шесть».",
+        gap: "reads",
+        wrong: &["is reading", "has read", "read"],
     },
     Entry {
         rule: "present-continuous",
@@ -131,6 +148,8 @@ const ENTRIES: [Entry; 22] = [
         translation: "Она сейчас читает книгу.",
         usage: "То, что происходит в эту минуту или в эти дни. Ещё — раздражение: \
                 «he is always losing his keys».",
+        gap: "is reading",
+        wrong: &["reads", "has read", "was reading"],
     },
     Entry {
         rule: "present-perfect",
@@ -139,6 +158,8 @@ const ENTRIES: [Entry; 22] = [
         translation: "Она прочитала книгу.",
         usage: "Когда важен результат, а не время: «я уже поел». Со словом \
                 «вчера» не сочетается — там нужен Past Simple.",
+        gap: "has read",
+        wrong: &["reads", "is reading", "had read"],
     },
     Entry {
         rule: "present-perfect-continuous",
@@ -147,6 +168,8 @@ const ENTRIES: [Entry; 22] = [
         translation: "Она читает всё утро.",
         usage: "Началось в прошлом и всё ещё идёт. Часто с «for» и «since»: \
                 «for two hours», «since morning».",
+        gap: "has been reading",
+        wrong: &["has read", "is reading", "had been reading"],
     },
     Entry {
         rule: "past-simple",
@@ -155,6 +178,8 @@ const ENTRIES: [Entry; 22] = [
         translation: "Она прочитала книгу вчера.",
         usage: "Законченное действие в законченном прошлом. Основное время \
                 повествования: рассказы и романы написаны им.",
+        gap: "read",
+        wrong: &["reads", "has read", "will read"],
     },
     Entry {
         rule: "past-continuous",
@@ -162,6 +187,8 @@ const ENTRIES: [Entry; 22] = [
         example: "She was reading when he came.",
         translation: "Она читала, когда он вошёл.",
         usage: "Фон для другого события: одно длилось, второе случилось.",
+        gap: "was reading",
+        wrong: &["is reading", "read", "has been reading"],
     },
     Entry {
         rule: "past-perfect",
@@ -170,6 +197,8 @@ const ENTRIES: [Entry; 22] = [
         translation: "Она прочитала книгу до того, как он пришёл.",
         usage: "Прошлое раньше прошлого. Нужно только когда порядок событий \
                 иначе непонятен.",
+        gap: "had read",
+        wrong: &["has read", "read", "was reading"],
     },
     Entry {
         rule: "past-perfect-continuous",
@@ -177,6 +206,8 @@ const ENTRIES: [Entry; 22] = [
         example: "She had been reading all morning.",
         translation: "Она читала всё утро — до того момента.",
         usage: "Длилось до какого-то момента в прошлом и к нему уже шло давно.",
+        gap: "had been reading",
+        wrong: &["has been reading", "had read", "was reading"],
     },
     Entry {
         rule: "future-simple",
@@ -185,6 +216,8 @@ const ENTRIES: [Entry; 22] = [
         translation: "Она прочитает книгу.",
         usage: "Решение, принятое сейчас, обещание или предсказание. Про планы, \
                 составленные заранее, говорят «going to».",
+        gap: "will read",
+        wrong: &["reads", "has read", "will have read"],
     },
     Entry {
         rule: "future-continuous",
@@ -193,6 +226,8 @@ const ENTRIES: [Entry; 22] = [
         translation: "В полдень она будет читать.",
         usage: "Будет идти в названный момент. Ещё — вежливый вопрос о планах: \
                 «will you be using the car?»",
+        gap: "will be reading",
+        wrong: &["will read", "is reading", "will have read"],
     },
     Entry {
         rule: "future-perfect",
@@ -201,6 +236,8 @@ const ENTRIES: [Entry; 22] = [
         translation: "К тому времени она уже прочитает книгу.",
         usage: "К названному сроку действие закончится. Почти всегда со словом \
                 «by»: «by Friday», «by then».",
+        gap: "will have read",
+        wrong: &["will read", "has read", "will be reading"],
     },
     Entry {
         rule: "future-perfect-continuous",
@@ -209,6 +246,8 @@ const ENTRIES: [Entry; 22] = [
         translation: "К тому моменту она будет читать уже час.",
         usage: "Самое редкое из времён. Встречается там, где важна длительность \
                 к будущему сроку.",
+        gap: "will have been reading",
+        wrong: &["will have read", "has been reading", "will be reading"],
     },
     Entry {
         rule: "passive-voice",
@@ -217,6 +256,8 @@ const ENTRIES: [Entry; 22] = [
         translation: "Окно разбило ветром.",
         usage: "Когда важнее действие, чем тот, кто его совершил, или когда \
                 деятель неизвестен. «by» называет его, если нужно.",
+        gap: "was broken",
+        wrong: &["broke", "has broken", "was breaking"],
     },
     Entry {
         rule: "modal-verb",
@@ -225,6 +266,8 @@ const ENTRIES: [Entry; 22] = [
         translation: "Вам нужно подождать здесь.",
         usage: "Отношение говорящего к действию: возможно оно, обязательно, \
                 желательно или всего лишь вероятно.",
+        gap: "must wait",
+        wrong: &["must have waited", "waited", "are waiting"],
     },
     Entry {
         rule: "modal-perfect",
@@ -233,6 +276,8 @@ const ENTRIES: [Entry; 22] = [
         translation: "Должно быть, он уже ушёл.",
         usage: "Догадка, упрёк или сожаление о прошлом. Что именно — зависит от \
                 модального: «must have» это уверенность, «should have» — упрёк.",
+        gap: "must have left",
+        wrong: &["must leave", "has left", "left"],
     },
     Entry {
         rule: "infinitive",
@@ -241,6 +286,8 @@ const ENTRIES: [Entry; 22] = [
         translation: "Она хочет прочитать книгу.",
         usage: "После want, decide, hope, promise и десятка других глаголов. \
                 Какие требуют инфинитива, а какие герундия — приходится помнить.",
+        gap: "to read",
+        wrong: &["reading", "reads", "read"],
     },
     Entry {
         rule: "gerund",
@@ -249,6 +296,8 @@ const ENTRIES: [Entry; 22] = [
         translation: "Она хорошо читает.",
         usage: "После предлога всегда стоит форма на «-ing», а не инфинитив. \
                 Это правило без исключений — редкость в английском.",
+        gap: "reading",
+        wrong: &["read", "to read", "reads"],
     },
     Entry {
         rule: "conditional-zero",
@@ -257,6 +306,8 @@ const ENTRIES: [Entry; 22] = [
         translation: "Если идёт дождь, улицы становятся мокрыми.",
         usage: "Общие истины и законы природы: всегда так, когда условие \
                 выполняется. «if» здесь можно заменить на «when».",
+        gap: "get",
+        wrong: &["will get", "would get", "got"],
     },
     Entry {
         rule: "conditional-first",
@@ -265,6 +316,8 @@ const ENTRIES: [Entry; 22] = [
         translation: "Если пойдёт дождь, мы останемся дома.",
         usage: "Реальное условие в будущем. После «if» стоит настоящее время, \
                 хотя речь о будущем, — «will» там не ставят.",
+        gap: "will stay",
+        wrong: &["stay", "would stay", "stayed"],
     },
     Entry {
         rule: "conditional-second",
@@ -273,6 +326,8 @@ const ENTRIES: [Entry; 22] = [
         translation: "Будь у меня деньги, я бы купил этот дом.",
         usage: "Про настоящее, которого нет. Прошедшее время здесь не о прошлом: \
                 оно и означает нереальность.",
+        gap: "would buy",
+        wrong: &["will buy", "bought", "would have bought"],
     },
     Entry {
         rule: "conditional-third",
@@ -280,6 +335,8 @@ const ENTRIES: [Entry; 22] = [
         example: "If she had asked, I would have helped her.",
         translation: "Если бы она попросила, я бы ей помог.",
         usage: "Сожаление о прошлом: этого не случилось, и изменить уже нечего.",
+        gap: "would have helped",
+        wrong: &["would help", "will help", "helped"],
     },
     Entry {
         rule: "conditional-mixed",
@@ -288,6 +345,8 @@ const ENTRIES: [Entry; 22] = [
         translation: "Попроси она тогда, я был бы там сейчас.",
         usage: "Условие о прошлом, следствие о настоящем. Смешивается ровно так, \
                 как в жизни: тогда не сделал — сейчас расхлёбываю.",
+        gap: "would be",
+        wrong: &["would have been", "will be", "was"],
     },
 ];
 
@@ -333,15 +392,16 @@ mod tests {
         // Не алфавит: читатель осваивает времена раньше условных, и справочник
         // обязан лежать в том же порядке, что и его путь.
         let articles = articles(Lexicon::embedded());
-        let topics: Vec<&str> = articles
-            .iter()
-            .map(|a| a.topic.code())
-            .fold(Vec::new(), |mut seen, code| {
-                if seen.last() != Some(&code) {
-                    seen.push(code);
-                }
-                seen
-            });
+        let topics: Vec<&str> =
+            articles
+                .iter()
+                .map(|a| a.topic.code())
+                .fold(Vec::new(), |mut seen, code| {
+                    if seen.last() != Some(&code) {
+                        seen.push(code);
+                    }
+                    seen
+                });
 
         assert_eq!(
             topics,
