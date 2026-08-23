@@ -24,10 +24,13 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::grammar::Exercise;
+use crate::lexicon::Lexicon;
 use crate::library::book::{LibraryBook, LibraryState, Shelf};
 use crate::library::{merge, ops};
 use crate::settings::AppSettings;
-use crate::srs::{scheduler, Card};
+use crate::srs::drill::Drill;
+use crate::srs::{chunks, drill, scheduler, training, Card};
 
 /// Библиотека и настройки одного читателя.
 #[derive(Debug, Default)]
@@ -144,6 +147,26 @@ pub enum Command {
     Due {
         now: i64,
     },
+    /// Состояние колоды: сколько созрело, всего и выучено.
+    DeckStatus {
+        kind: String,
+        now: i64,
+    },
+    /// Сегодняшняя порция заданий.
+    TrainingQueue {
+        kind: String,
+        now: i64,
+    },
+    /// Задание по карточке.
+    #[serde(rename_all = "camelCase")]
+    DrillFor { card_id: String },
+    /// Задание по правилу, у которого карточки ещё нет.
+    #[serde(rename_all = "camelCase")]
+    RuleDrill { rule: String, card_id: String },
+    /// Сходятся ли собранный ответ и ожидаемый.
+    SameText { assembled: String, expected: String },
+    /// Как приклеить снятую страницу к уже снятым.
+    AppendedPage { before: String, page: String },
     /// Когда напомнить о повторении.
     #[serde(rename_all = "camelCase")]
     ReminderAt {
@@ -238,6 +261,18 @@ pub struct Outcome {
     /// Серия дней после засчитанного ответа.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub streak: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<training::DeckStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub queue: Option<training::Queue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drill: Option<Drill>,
+    /// Верен ли ответ.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub right: Option<bool>,
+    /// Готовый текст — например, снимки страниц, склеенные по правилу.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
 }
 
 impl Session {
@@ -459,6 +494,42 @@ impl Session {
                 ..Outcome::default()
             },
 
+            Command::DeckStatus { kind, now } => Outcome {
+                status: Some(training::status(&self.library.cards, &kind, now, exercises())),
+                ..Outcome::default()
+            },
+
+            Command::TrainingQueue { kind, now } => Outcome {
+                queue: Some(training::queue(&self.library.cards, &kind, now, exercises())),
+                ..Outcome::default()
+            },
+
+            Command::DrillFor { card_id } => Outcome {
+                drill: training::drill_for(&self.library.cards, &card_id, Lexicon::embedded()),
+                ..Outcome::default()
+            },
+
+            Command::RuleDrill { rule, card_id } => Outcome {
+                drill: exercises()
+                    .iter()
+                    .find(|exercise| exercise.rule == rule)
+                    .map(|exercise| drill::for_rule(exercise, &card_id)),
+                ..Outcome::default()
+            },
+
+            Command::SameText {
+                assembled,
+                expected,
+            } => Outcome {
+                right: Some(chunks::same(&assembled, &expected)),
+                ..Outcome::default()
+            },
+
+            Command::AppendedPage { before, page } => Outcome {
+                text: Some(crate::library::ops::appended_page(&before, &page)),
+                ..Outcome::default()
+            },
+
             Command::ReminderAt {
                 now,
                 offset_minutes,
@@ -607,6 +678,15 @@ impl Session {
             ..Outcome::default()
         })
     }
+}
+
+/// Упражнения справочника — считаются один раз на весь процесс.
+///
+/// Их больше сотни, и собираются они за доли миллисекунды, но экран колод
+/// спрашивает статус на каждый кадр: пересчитывать их столько же раз незачем.
+fn exercises() -> &'static [Exercise] {
+    static EXERCISES: std::sync::OnceLock<Vec<Exercise>> = std::sync::OnceLock::new();
+    EXERCISES.get_or_init(|| crate::grammar::exercises(Lexicon::embedded()))
 }
 
 #[cfg(test)]

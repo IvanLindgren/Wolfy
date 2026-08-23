@@ -16,6 +16,7 @@ pub mod chunks;
 pub mod drill;
 pub mod intensity;
 pub mod scheduler;
+pub mod training;
 
 pub use card::Card;
 pub use drill::{Deck, Drill, DrillKind};
