@@ -155,7 +155,7 @@ private fun DeckCard(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = "★ " + plural(deck.size, "слово", "слова", "слов"),
+                    text = plural(deck.size, "слово", "слова", "слов"),
                     style = WolfyTheme.typography.caption,
                     color = colors.inkMuted,
                 )

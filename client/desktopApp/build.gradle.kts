@@ -8,6 +8,12 @@ plugins {
     alias(libs.plugins.compose.compiler)
 }
 
+// Позволяет выпускать новый установщик, пока предыдущий EXE ещё открыт
+// Windows Installer и потому заблокирован для перезаписи.
+providers.gradleProperty("wolfyBuildDir").orNull?.let { directory ->
+    layout.buildDirectory.set(project.layout.projectDirectory.dir(directory))
+}
+
 kotlin {
     jvm {
         compilerOptions {
@@ -23,11 +29,6 @@ kotlin {
 }
 
 // Каталог, куда кладётся собранное ядро на Rust.
-//
-// Ядро не собирается Gradle: у него свой инструмент, и запускать cargo из
-// каждой сборки клиента значило бы ждать его без нужды. Задача только
-// переносит уже собранную библиотеку туда, где её найдут и запуск из
-// исходников, и установщик.
 val coreLibDir = layout.buildDirectory.dir("coreLib")
 
 // Внутри — подкаталог `common`, и это не украшение. Compose складывает в
@@ -36,12 +37,38 @@ val coreLibDir = layout.buildDirectory.dir("coreLib")
 // устанавливается без ядра. Собирается всегда ровно одна библиотека — под ту
 // систему, на которой запустили cargo, — поэтому `common`, а не `windows-x64`.
 val coreLibFiles = coreLibDir.map { it.dir("common") }
+val coreLibraryFileName = when {
+    System.getProperty("os.name").startsWith("Windows", ignoreCase = true) -> "wolfy_core.dll"
+    System.getProperty("os.name").startsWith("Mac", ignoreCase = true) -> "libwolfy_core.dylib"
+    else -> "libwolfy_core.so"
+}
+
+// Установщик обязан быть автономным. Поэтому его нативная часть собирается
+// той же Gradle-цепочкой, что и клиент: нельзя случайно выпустить пакет без
+// DLL или положить в него библиотеку от предыдущей версии исходников.
+// Cargo сам пропускает работу, когда входные файлы не менялись.
+val buildCoreLibrary by tasks.registering(Exec::class) {
+    description = "Собирает нативное ядро Wolfy для установщика"
+    workingDir(rootProject.layout.projectDirectory.dir("../core"))
+    commandLine("cargo", "build", "--release", "--locked")
+
+    inputs.file(rootProject.layout.projectDirectory.file("../core/Cargo.toml"))
+    inputs.file(rootProject.layout.projectDirectory.file("../core/Cargo.lock"))
+    inputs.dir(rootProject.layout.projectDirectory.dir("../core/src"))
+    inputs.dir(rootProject.layout.projectDirectory.dir("../core/data"))
+    outputs.file(rootProject.layout.projectDirectory.file("../core/target/release/$coreLibraryFileName"))
+}
 
 val copyCoreLibrary by tasks.registering(Copy::class) {
-    description = "Кладёт собранное ядро на Rust рядом с приложением"
+    description = "Кладёт ядро и офлайн-словарь рядом с приложением"
+    dependsOn(buildCoreLibrary)
     from(rootProject.layout.projectDirectory.dir("../core/target/release")) {
         include("wolfy_core.dll", "libwolfy_core.so", "libwolfy_core.dylib")
     }
+    from(rootProject.layout.projectDirectory.dir("../dist")) {
+        include("wolfy_dictionary.tsv.gz")
+    }
+    from(rootProject.layout.projectDirectory.file("../THIRD_PARTY_NOTICES.md"))
     into(coreLibFiles)
 }
 
@@ -81,6 +108,13 @@ compose.desktop {
     application {
         mainClass = "com.wolfy.desktop.MainKt"
 
+        // JNA находит C-функции динамически. Обычный shrink/optimize не видит
+        // эти обращения и удаляет в release-сборке необходимые методы самой
+        // JNA (в частности Native.dispose). Правила сохраняют мост целиком.
+        buildTypes.release.proguard {
+            configurationFiles.from(project.file("proguard-rules.pro"))
+        }
+
         if (packagingRequested) {
             javaHome = javaToolchains.launcherFor {
                 languageVersion.set(JavaLanguageVersion.of(17))
@@ -90,7 +124,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Exe)
             packageName = "Wolfy"
-            packageVersion = "1.0.0"
+            packageVersion = "1.0.4"
             // Латиницей, и не по недосмотру: установщик собирает WiX, а строки
             // он пишет в кодовой странице 1252 — кириллица в неё не влезает и
             // роняет сборку целиком (LGHT0311). Название приложения при этом

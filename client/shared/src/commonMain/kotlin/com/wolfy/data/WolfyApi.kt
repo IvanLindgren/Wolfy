@@ -3,6 +3,7 @@ package com.wolfy.data
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.plugins.onDownload
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.timeout
 import io.ktor.client.request.header
@@ -17,6 +18,7 @@ import io.ktor.http.contentType
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.Serializable
 import com.wolfy.platform.PickedPhoto
+import com.wolfy.ffi.DictionaryEntry
 import kotlinx.serialization.json.Json
 
 /**
@@ -190,6 +192,40 @@ class WolfyApi(
             // не отвечает сервер. Для читателя это одно и то же.
             TranslateResult.Failed("нет связи с сервером")
         }
+    }
+
+    /** Толкование с сервера для устройства без скачанного словаря. */
+    suspend fun define(word: String): DefineResult = try {
+        val response = client.get("$baseUrl/v1/define") {
+            parameter("word", word)
+        }
+        when (response.status) {
+            HttpStatusCode.OK -> DefineResult.Ready(response.body())
+            HttpStatusCode.NotFound -> DefineResult.Missing
+            HttpStatusCode.ServiceUnavailable -> DefineResult.Failed
+            else -> DefineResult.Failed
+        }
+    } catch (e: Exception) {
+        DefineResult.Failed
+    }
+
+    /** Скачивает gzip-архив словаря, отдавая UI долю принятых байтов. */
+    suspend fun downloadDictionary(onProgress: (Float?) -> Unit): DictionaryDownloadResult = try {
+        val response = client.get("$baseUrl/v1/dictionary") {
+            timeout { requestTimeoutMillis = 120_000 }
+            onDownload { received, total ->
+                onProgress(total?.takeIf { it > 0L }?.let { received.toFloat() / it.toFloat() })
+            }
+        }
+        if (response.status == HttpStatusCode.OK) {
+            DictionaryDownloadResult.Ready(response.body())
+        } else {
+            DictionaryDownloadResult.Failed(
+                "Сервер не отдал словарь (HTTP ${response.status.value}).",
+            )
+        }
+    } catch (e: Exception) {
+        DictionaryDownloadResult.Failed("Нет связи с сервером словаря.")
     }
 
     /**
@@ -386,6 +422,17 @@ sealed interface SyncResult {
 sealed interface TranslateResult {
     data class Ready(val text: String) : TranslateResult
     data class Failed(val message: String) : TranslateResult
+}
+
+sealed interface DefineResult {
+    data class Ready(val entry: DictionaryEntry) : DefineResult
+    data object Missing : DefineResult
+    data object Failed : DefineResult
+}
+
+sealed interface DictionaryDownloadResult {
+    data class Ready(val bytes: ByteArray) : DictionaryDownloadResult
+    data class Failed(val message: String) : DictionaryDownloadResult
 }
 
 @Serializable

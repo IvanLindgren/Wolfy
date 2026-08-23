@@ -10,9 +10,14 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
@@ -26,6 +31,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.dp
 import com.wolfy.data.Settings
 import com.wolfy.data.AccountSession
 import com.wolfy.data.SyncService
@@ -34,8 +40,9 @@ import com.wolfy.data.library.CoreSession
 import com.wolfy.data.library.Library
 import com.wolfy.data.library.LibraryBook
 import com.wolfy.data.library.createLibraryStore
+import com.wolfy.data.dictionary.DictionaryManager
+import com.wolfy.data.dictionary.DictionaryStatus
 import com.wolfy.data.writeDemoBook
-import com.wolfy.ffi.CoreException
 import com.wolfy.ffi.WolfyCore
 import com.wolfy.ffi.createWolfyCore
 import com.wolfy.platform.PickedBook
@@ -48,6 +55,7 @@ import com.wolfy.platform.readBytes
 import com.wolfy.platform.rememberReminderPermission
 import com.wolfy.platform.rememberBookPicker
 import com.wolfy.platform.rememberPhotoPicker
+import com.wolfy.platform.rememberPronouncer
 import com.wolfy.theme.ReadingTheme
 import com.wolfy.theme.WolfyTheme
 import com.wolfy.srs.Deck
@@ -66,8 +74,11 @@ import com.wolfy.ui.reference.ReferenceScreen
 import com.wolfy.ui.settings.SettingsScreen
 import com.wolfy.ui.srs.SrsScreen
 import com.wolfy.ui.srs.TrainingScreen
+import com.wolfy.widgets.pressable
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Корень приложения.
@@ -97,9 +108,14 @@ fun WolfyApplication(
     onPhone: Boolean = false,
 ) {
     var failure by remember { mutableStateOf<String?>(null) }
+    var loaded by remember { mutableStateOf<Parts?>(null) }
 
-    val parts = remember {
-        try {
+    // Нативная библиотека и сохранённая сессия открываются после первого
+    // кадра. Даже на холодном запуске окно появляется сразу, а тяжёлая работа
+    // идёт на фоновом потоке вместо блокировки UI.
+    LaunchedEffect(Unit) {
+        val result = withContext(Dispatchers.Default) {
+            runCatching {
             val core = createWolfyCore()
             val store = createLibraryStore()
             // Одна сессия ядра на приложение: она держит библиотеку и
@@ -109,35 +125,47 @@ fun WolfyApplication(
             val settings = Settings(coreSession)
             val session = AccountSession(store, sessionToken)
             val api = WolfyApi(baseUrl = serverUrl, tokenProvider = { session.token.value })
+            val dictionary = DictionaryManager(coreSession, store, api)
             Parts(
                 core = core,
                 library = library,
                 settings = settings,
                 sync = SyncService(library, settings, api),
-                reader = ReaderViewModel(core = core, api = api, library = library),
+                reader = ReaderViewModel(
+                    core = core,
+                    api = api,
+                    library = library,
+                    dictionary = dictionary,
+                ),
                 catalogue = LibraryViewModel(library, core, api),
                 training = TrainingViewModel(library, settings, coreSession),
                 session = session,
                 discovery = DiscoveryViewModel(api, session, library),
+                dictionary = dictionary,
             )
-        } catch (e: CoreException) {
-            failure = e.message
-            null
+            }
         }
+        result.fold(
+            onSuccess = { loaded = it },
+            onFailure = { failure = it.message ?: "ядро недоступно" },
+        )
     }
 
+    val parts = loaded
     val message = failure
-    if (parts == null || message != null) {
+    if (parts == null) {
         // Тема здесь ещё не прочитана — хранилище могло не открыться вместе с
         // ядром. Светлая подходит всем и не мешает прочитать сообщение.
         WolfyTheme(theme = ReadingTheme.Paper) {
-            CoreUnavailable(message ?: "ядро недоступно")
+            if (message == null) Starting() else CoreUnavailable(message)
         }
         return
     }
 
     val settings by parts.settings.state.collectAsState()
     val activeToken by parts.session.token.collectAsState()
+    val dictionaryStatus by parts.dictionary.status.collectAsState()
+    val scope = rememberCoroutineScope()
 
     WolfyTheme(
         theme = settings.readingTheme,
@@ -157,18 +185,25 @@ fun WolfyApplication(
             }
         }
 
-        Shell(
-            parts = parts,
-            onPhone = onPhone,
-            theme = settings.readingTheme,
-            fontScale = settings.fontScale,
-            lineScale = settings.lineScale,
-            onThemeChange = parts.settings::setTheme,
-            onFontScaleChange = parts.settings::setFontScale,
-            onLineScaleChange = parts.settings::setLineScale,
-            serverUrl = serverUrl,
-            signedIn = activeToken != null,
-        )
+        Box(Modifier.fillMaxSize()) {
+            Shell(
+                parts = parts,
+                onPhone = onPhone,
+                theme = settings.readingTheme,
+                fontScale = settings.fontScale,
+                lineScale = settings.lineScale,
+                onThemeChange = parts.settings::setTheme,
+                onFontScaleChange = parts.settings::setFontScale,
+                onLineScaleChange = parts.settings::setLineScale,
+                serverUrl = serverUrl,
+                signedIn = activeToken != null,
+            )
+            DictionaryOffer(
+                status = dictionaryStatus,
+                onDownload = { scope.launch { parts.dictionary.download() } },
+                onLater = parts.dictionary::dismissOffer,
+            )
+        }
     }
 }
 
@@ -183,6 +218,7 @@ private class Parts(
     val training: TrainingViewModel,
     val session: AccountSession,
     val discovery: DiscoveryViewModel,
+    val dictionary: DictionaryManager,
 )
 
 @Composable
@@ -204,12 +240,20 @@ private fun Shell(
     // в другой раздел и обратно.
     var reading by remember { mutableStateOf<LibraryBook?>(null) }
     val scope = rememberCoroutineScope()
+    val pronouncer = rememberPronouncer()
+    val dictionaryStatus by parts.dictionary.status.collectAsState()
     // Открытый справочник. Пустая строка — открыт целиком, непустая — на
     // конкретном правиле, ради которого его и позвали из карточки слова.
     var reference by remember { mutableStateOf<String?>(null) }
-    // Справочник считается ядром один раз: два десятка статей, доли
-    // миллисекунды, но пересчитывать их на каждый кадр незачем.
-    val articles = remember { runCatching { parts.core.reference() }.getOrElse { emptyList() } }
+    // Первый разбор встроенного лексикона заметно тяжелее отрисовки окна.
+    // Строим справочник после первого кадра в фоне: библиотека появляется
+    // сразу, а справочник к моменту обычного открытия уже готов.
+    var articles by remember { mutableStateOf(emptyList<com.wolfy.ffi.Article>()) }
+    LaunchedEffect(parts.core) {
+        articles = withContext(Dispatchers.Default) {
+            runCatching { parts.core.reference() }.getOrElse { emptyList() }
+        }
+    }
 
     val catalogue by parts.catalogue.state.collectAsState()
     val readerState by parts.reader.state.collectAsState()
@@ -326,6 +370,9 @@ private fun Shell(
                     onDismissCard = parts.reader::dismissCard,
                     onSaveWord = parts.reader::toggleWord,
                     onSavePhrase = parts.reader::savePhrase,
+                    onPronounce = {
+                        readerState.card?.analysis?.lemma?.let(pronouncer::speak)
+                    },
                     onPreviousChapter = parts.reader::previousChapter,
                     onNextChapter = parts.reader::nextChapter,
                     onScrolled = parts.reader::rememberPlace,
@@ -394,6 +441,8 @@ private fun Shell(
                     serverUrl = serverUrl,
                     signedIn = signedIn,
                     onOpenReference = { reference = "" },
+                    dictionary = dictionaryStatus,
+                    onDownloadDictionary = { scope.launch { parts.dictionary.download() } },
                 )
 
                 is Route.Reference -> ReferenceScreen(
@@ -509,12 +558,109 @@ private fun drop(parts: Parts, path: String) {
     }
 }
 
+/** Ненавязчивое предложение: словарь вложен в пакет, но ставится по выбору. */
+@Composable
+private fun DictionaryOffer(
+    status: DictionaryStatus,
+    onDownload: () -> Unit,
+    onLater: () -> Unit,
+) {
+    if (status is DictionaryStatus.Ready || status is DictionaryStatus.Declined) return
+
+    val colors = WolfyTheme.colors
+    val spacing = WolfyTheme.spacing
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(colors.ink.copy(alpha = 0.35f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            Modifier
+                .padding(spacing.large)
+                .widthIn(max = 460.dp)
+                .fillMaxWidth()
+                .background(colors.surface, RoundedCornerShape(spacing.large))
+                .padding(spacing.xlarge),
+            verticalArrangement = Arrangement.spacedBy(spacing.medium),
+        ) {
+            Text("Офлайн-словарь", style = WolfyTheme.typography.bookTitle, color = colors.ink)
+            Text(
+                "Установить русские переводы слов, английские толкования и МФА? " +
+                    "Архив уже входит в приложение, сеть не нужна. После установки " +
+                    "словарь занимает около 9 МБ.",
+                style = WolfyTheme.typography.body,
+                color = colors.inkMuted,
+            )
+
+            when (status) {
+                is DictionaryStatus.Downloading -> {
+                    val progress = status.progress
+                    if (progress == null) {
+                        LinearProgressIndicator(Modifier.fillMaxWidth())
+                    } else {
+                        LinearProgressIndicator(
+                            progress = { progress },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Text(
+                            "Подготовлено ${(progress * 100).toInt()}%",
+                            style = WolfyTheme.typography.caption,
+                            color = colors.inkMuted,
+                        )
+                    }
+                }
+                is DictionaryStatus.Failed -> Text(
+                    status.message,
+                    style = WolfyTheme.typography.caption,
+                    color = colors.accent,
+                )
+                else -> Unit
+            }
+
+            if (status !is DictionaryStatus.Downloading) {
+                Text(
+                    text = if (status is DictionaryStatus.Failed) "попробовать снова" else "установить",
+                    style = WolfyTheme.typography.button,
+                    color = colors.accent,
+                    modifier = Modifier.pressable(onClick = onDownload).padding(vertical = spacing.small),
+                )
+                Text(
+                    text = "позже",
+                    style = WolfyTheme.typography.button,
+                    color = colors.inkMuted,
+                    modifier = Modifier.pressable(onClick = onLater).padding(vertical = spacing.small),
+                )
+            }
+        }
+    }
+}
+
 /**
  * Ядро не загрузилось.
  *
  * Отдельный экран, а не молчаливая пустота: без ядра приложение не умеет
  * ничего, и разработчику важно сразу увидеть, что библиотека не собрана.
  */
+@Composable
+private fun Starting() {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(
+            modifier = Modifier.widthIn(max = 320.dp).fillMaxWidth().padding(WolfyTheme.spacing.large),
+            verticalArrangement = Arrangement.spacedBy(WolfyTheme.spacing.medium),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text("Wolfy", style = WolfyTheme.typography.screenTitle, color = WolfyTheme.colors.ink)
+            Text(
+                "Готовим библиотеку",
+                style = WolfyTheme.typography.body,
+                color = WolfyTheme.colors.inkMuted,
+            )
+            LinearProgressIndicator(Modifier.fillMaxWidth())
+        }
+    }
+}
+
 @Composable
 private fun CoreUnavailable(message: String) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

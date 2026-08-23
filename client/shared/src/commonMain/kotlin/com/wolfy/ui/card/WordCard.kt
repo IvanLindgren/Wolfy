@@ -40,6 +40,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -68,6 +72,7 @@ fun WordCardSheet(
     onDismiss: () -> Unit,
     onSave: () -> Unit,
     onSavePhrase: () -> Unit,
+    onPronounce: () -> Unit,
     onOpenRule: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -79,7 +84,7 @@ fun WordCardSheet(
         // разбора сразу. Доля от окна, а не фиксированная высота: на телефоне
         // и на большом экране «две трети» выглядят одинаково уместно, а
         // 520 точек на телефоне закрыли бы почти всё.
-        val maxCardHeight = maxHeight * 0.66f
+        val maxCardHeight = maxHeight * 0.90f
         // Затемнение фона: страница остаётся видна, но уходит на второй план.
         AnimatedVisibility(
             visible = state != null,
@@ -113,6 +118,7 @@ fun WordCardSheet(
                     state = state,
                     onSave = onSave,
                     onSavePhrase = onSavePhrase,
+                    onPronounce = onPronounce,
                     onDismiss = onDismiss,
                     onOpenRule = onOpenRule,
                     maxHeight = maxCardHeight,
@@ -127,6 +133,7 @@ private fun CardBody(
     state: WordCardState,
     onSave: () -> Unit,
     onSavePhrase: () -> Unit,
+    onPronounce: () -> Unit,
     onDismiss: () -> Unit,
     onOpenRule: (String) -> Unit,
     maxHeight: Dp,
@@ -161,8 +168,9 @@ private fun CardBody(
             Modifier.verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(spacing.medium),
         ) {
-            Header(state)
+            Header(state, onPronounce)
             Translation(state)
+            Definition(state)
             CardModeTabs(mode = mode, onMode = { mode = it })
             AnimatedContent(targetState = mode, label = "card mode") { selected ->
                 when (selected) {
@@ -225,14 +233,16 @@ private fun WordDetails(
 
     Column(verticalArrangement = Arrangement.spacedBy(spacing.medium)) {
         Appear(0) { Facts(state) }
-        Appear(1) { Frequency(state.analysis.zipf) }
+        Appear(1) { WordStructure(state) }
+        Appear(2) { ContextPhrases(state) }
+        Appear(3) { Frequency(state.analysis.zipf) }
         // Грамматика фразы стоит и здесь, а не только на вкладке «Фраза».
         // Читатель тапнул по слову внутри предложения, и правило, которое это
         // предложение строит, — часть ответа на вопрос «почему слово выглядит
         // так». Прятать его за вкладку значит требовать догадаться, что там
         // что-то есть.
         if (state.grammar.isNotEmpty()) {
-            Appear(2) {
+            Appear(4) {
                 Column(verticalArrangement = Arrangement.spacedBy(spacing.small)) {
                     SectionLabel("Грамматика этой фразы")
                     state.grammar.forEach { finding ->
@@ -241,8 +251,8 @@ private fun WordDetails(
                 }
             }
         }
-        Appear(3) { WolfyLexicalTip(state) }
-        Appear(4) { SaveButton(saved = state.saved, onSave = onSave) }
+        Appear(5) { WolfyLexicalTip(state) }
+        Appear(6) { SaveButton(saved = state.saved, onSave = onSave) }
     }
 }
 
@@ -280,6 +290,62 @@ private fun Facts(state: WordCardState) {
         if (syllables > 0) Chip(plural(syllables, "слог", "слога", "слогов"))
 
         analysis.facts.forEach { fact -> Chip(fact.value, label = fact.label) }
+    }
+}
+
+/** Значимые части слова и правило окончания — без псевдоэтимологии. */
+@Composable
+private fun WordStructure(state: WordCardState) {
+    val parts = wordParts(state.analysis.surface, state.analysis.lemma, state.analysis.form)
+    if (parts.size < 2) return
+
+    val colors = WolfyTheme.colors
+    val spacing = WolfyTheme.spacing
+    Column(verticalArrangement = Arrangement.spacedBy(spacing.small)) {
+        SectionLabel("Строение слова")
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(spacing.small),
+            verticalArrangement = Arrangement.spacedBy(spacing.small),
+        ) {
+            parts.forEachIndexed { index, part ->
+                Chip(
+                    text = part.text,
+                    tint = if (part.affix) colors.accent else null,
+                )
+                if (index != parts.lastIndex) {
+                    Text("+", style = WolfyTheme.typography.caption, color = colors.inkMuted)
+                }
+            }
+        }
+        parts.lastOrNull()?.explanation?.takeIf(String::isNotBlank)?.let { explanation ->
+            Text(
+                explanation,
+                style = WolfyTheme.typography.caption,
+                color = colors.inkMuted,
+            )
+        }
+    }
+}
+
+/** Соседние слова из текущего предложения — полезнее абстрактного списка. */
+@Composable
+private fun ContextPhrases(state: WordCardState) {
+    val phrases = contextPhrases(state.context, state.token.text)
+    if (phrases.isEmpty()) return
+
+    Column(verticalArrangement = Arrangement.spacedBy(WolfyTheme.spacing.small)) {
+        SectionLabel("Словосочетания")
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(WolfyTheme.spacing.small),
+            verticalArrangement = Arrangement.spacedBy(WolfyTheme.spacing.small),
+        ) {
+            phrases.forEach { Chip(it) }
+        }
+        Text(
+            "Сочетания взяты из текущего предложения, поэтому сохраняют авторский контекст.",
+            style = WolfyTheme.typography.caption,
+            color = WolfyTheme.colors.inkMuted,
+        )
     }
 }
 
@@ -390,6 +456,20 @@ private fun PhraseDetails(
 ) {
     val spacing = WolfyTheme.spacing
     Column(verticalArrangement = Arrangement.spacedBy(spacing.medium)) {
+        SectionLabel("Разбор фразы")
+        Text(
+            state.context,
+            style = WolfyTheme.typography.translation,
+            color = WolfyTheme.colors.ink,
+        )
+        val translated = (state.translation as? TranslationState.Ready)?.sentence.orEmpty()
+        if (translated.isNotBlank()) {
+            Text(
+                "«$translated»",
+                style = WolfyTheme.typography.body,
+                color = WolfyTheme.colors.inkMuted,
+            )
+        }
         SectionLabel("Связи слов в предложении")
         if (state.graphLinks.isEmpty()) {
             Text(
@@ -436,60 +516,101 @@ private fun WolfyPhraseTip(state: WordCardState) {
 @Composable
 private fun WolfyTip(text: String) {
     Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                WolfyTheme.colors.paper,
+                RoundedCornerShape(WolfyTheme.spacing.medium),
+            )
+            .border(
+                WolfyTheme.spacing.rule,
+                WolfyTheme.colors.rule,
+                RoundedCornerShape(WolfyTheme.spacing.medium),
+            )
+            .padding(WolfyTheme.spacing.small),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(WolfyTheme.spacing.small),
+        horizontalArrangement = Arrangement.spacedBy(WolfyTheme.spacing.medium),
     ) {
         // Крупнее подписи рядом: Вульфи единственное живое на карточке, и
         // размером с иконку он читался как значок, а не как зверь, которого
         // можно погладить.
-        WolfyCompanion(size = 104.dp)
-        Text(
-            text,
-            style = WolfyTheme.typography.caption,
-            color = WolfyTheme.colors.inkMuted,
+        WolfyCompanion(size = 152.dp)
+        Column(
             modifier = Modifier.weight(1f),
-        )
+            verticalArrangement = Arrangement.spacedBy(WolfyTheme.spacing.small),
+        ) {
+            SectionLabel("Вульфи замечает")
+            Text(
+                text.removePrefix("Вульфи: "),
+                style = WolfyTheme.typography.body,
+                color = WolfyTheme.colors.ink,
+            )
+        }
     }
 }
 
 @Composable
-private fun Header(state: WordCardState) {
+private fun Header(state: WordCardState, onPronounce: () -> Unit) {
     val colors = WolfyTheme.colors
     val typography = WolfyTheme.typography
+    val spacing = WolfyTheme.spacing
 
-    Row(
-        Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column {
-            Text(
-                text = state.analysis.surface,
-                style = typography.screenTitle,
-                color = colors.ink,
-            )
-            val tag = state.analysis.primaryPos
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(WolfyTheme.spacing.small),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                // Цвет части речи — тот же, которым слово покрашено на
-                // странице, и здесь он назван вслух. Читатель запоминает цвет
-                // раньше, чем название: «синее — существительное» усваивается
-                // с третьего раза, но только если цвет и слово встретились
-                // рядом. Квадратик в восемь точек такой встречи не создавал.
-                if (tag != null) {
-                    PosPill(tag)
-                } else {
-                    Chip("нет в словаре")
-                }
-                if (state.analysis.lemma != state.analysis.surface.lowercase()) {
-                    Chip("от «" + state.analysis.lemma + "»")
-                }
-            }
+    Column(verticalArrangement = Arrangement.spacedBy(spacing.small)) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            HighlightedWord(state)
+            CefrBadge(state.analysis.cefr)
         }
-        CefrBadge(state.analysis.cefr)
+        val tag = state.analysis.primaryPos
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(spacing.small),
+            verticalArrangement = Arrangement.spacedBy(spacing.small),
+        ) {
+            // Цвет части речи — тот же, которым слово покрашено на странице.
+            if (tag != null) PosPill(tag) else Chip("нет в лексиконе")
+            if (state.analysis.lemma != state.analysis.surface.lowercase()) {
+                Chip("от «" + state.analysis.lemma + "»")
+            }
+            val pronunciation = (state.definition as? DefinitionState.Ready)
+                ?.entry?.pronunciation.orEmpty()
+            if (pronunciation.isNotBlank()) Chip("/$pronunciation/")
+            Text(
+                text = "произнести",
+                style = typography.button,
+                color = colors.accent,
+                modifier = Modifier
+                    .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.huge))
+                    .pressable(onClick = onPronounce)
+                    .padding(horizontal = spacing.small, vertical = spacing.tight),
+            )
+        }
     }
+}
+
+/** Окончание выделено цветом: именно оно объясняет форму слова в тексте. */
+@Composable
+private fun HighlightedWord(state: WordCardState) {
+    val surface = state.analysis.surface
+    val ending = inflectionEnding(surface, state.analysis.lemma, state.analysis.form)
+    val colors = WolfyTheme.colors
+    if (ending == null) {
+        Text(surface, style = WolfyTheme.typography.screenTitle, color = colors.ink)
+        return
+    }
+
+    Text(
+        text = buildAnnotatedString {
+            append(surface.substring(0, ending))
+            withStyle(SpanStyle(color = colors.accent, fontWeight = FontWeight.Bold)) {
+                append(surface.substring(ending))
+            }
+        },
+        style = WolfyTheme.typography.screenTitle,
+        color = colors.ink,
+    )
 }
 
 /**
@@ -502,13 +623,21 @@ private fun Header(state: WordCardState) {
 private fun Translation(state: WordCardState) {
     val colors = WolfyTheme.colors
     val typography = WolfyTheme.typography
+    val offline = (state.definition as? DefinitionState.Ready)
+        ?.entry?.translations.orEmpty()
+        .distinct()
+        .joinToString(", ")
 
     when (val translation = state.translation) {
-        is TranslationState.Loading -> Text(
-            text = "Перевод загружается…",
-            style = typography.body,
-            color = colors.inkMuted,
-        )
+        is TranslationState.Loading -> if (offline.isNotBlank()) {
+            LocalTranslation(offline, "Перевод фразы загружается…")
+        } else {
+            Text(
+                text = "Перевод загружается…",
+                style = typography.body,
+                color = colors.inkMuted,
+            )
+        }
 
         // Перевод — единственное, чего читатель ждёт, и приходит он позже
         // всего остального. Проявление отмечает этот приход: без него строка
@@ -520,7 +649,7 @@ private fun Translation(state: WordCardState) {
                 // здесь не украшение — так набирают словарные статьи, и глаз
                 // отличает толкование от текста книги, не читая его.
                 Text(
-                    text = translation.word,
+                    text = translation.word.ifBlank { offline },
                     style = typography.translation,
                     color = colors.ink,
                 )
@@ -545,13 +674,67 @@ private fun Translation(state: WordCardState) {
             }
         }
 
-        is TranslationState.Failed -> Text(
-            text = translation.message,
+        is TranslationState.Failed -> if (offline.isNotBlank()) {
+            LocalTranslation(offline, "Перевод всей фразы требует связи с сервером.")
+        } else {
+            Text(
+                text = translation.message,
+                style = typography.caption,
+                color = colors.inkMuted,
+            )
+        }
+
+        TranslationState.Idle -> Unit
+    }
+}
+
+@Composable
+private fun LocalTranslation(value: String, note: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(WolfyTheme.spacing.tight)) {
+        SectionLabel("Перевод слова")
+        Text(
+            value,
+            style = WolfyTheme.typography.translation,
+            color = WolfyTheme.colors.ink,
+        )
+        Text(
+            note,
+            style = WolfyTheme.typography.caption,
+            color = WolfyTheme.colors.inkMuted,
+        )
+    }
+}
+
+/** Английское толкование: в отличие от перевода оно объясняет само слово. */
+@Composable
+private fun Definition(state: WordCardState) {
+    val colors = WolfyTheme.colors
+    val typography = WolfyTheme.typography
+    val spacing = WolfyTheme.spacing
+
+    when (val definition = state.definition) {
+        DefinitionState.Loading -> Text(
+            text = "Толкование загружается…",
             style = typography.caption,
             color = colors.inkMuted,
         )
-
-        TranslationState.Idle -> Unit
+        is DefinitionState.Ready -> Column(
+            verticalArrangement = Arrangement.spacedBy(spacing.small),
+        ) {
+            SectionLabel("Толкование")
+            definition.entry.senses.take(4).forEach { sense ->
+                Row(horizontalArrangement = Arrangement.spacedBy(spacing.small)) {
+                    if (sense.pos.isNotBlank()) PosPill(sense.pos)
+                    Text(
+                        text = sense.definition,
+                        style = typography.translation,
+                        color = colors.ink,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+        DefinitionState.Idle, DefinitionState.Missing -> Unit
     }
 }
 
@@ -723,6 +906,91 @@ private fun SaveButton(saved: Boolean, onSave: () -> Unit) {
             modifier = Modifier.fillMaxWidth(),
         )
     }
+}
+
+private data class WordPart(
+    val text: String,
+    val affix: Boolean,
+    val explanation: String = "",
+)
+
+private fun wordParts(surface: String, lemma: String, form: String): List<WordPart> {
+    val lower = surface.lowercase()
+    val inflection = inflectionEnding(surface, lemma, form)
+    if (inflection != null) {
+        val suffix = lower.substring(inflection)
+        return listOf(
+            WordPart(lower.substring(0, inflection), affix = false),
+            WordPart("-$suffix", affix = true, explanation = endingExplanation(suffix)),
+        )
+    }
+
+    val prefixes = listOf("under", "inter", "trans", "over", "anti", "non", "pre", "dis", "mis", "sub", "un", "re")
+    val suffixes = listOf("ation", "ition", "ment", "ness", "able", "ible", "less", "ful", "ous", "ive", "ity", "tion", "sion", "ly")
+    val prefix = prefixes.firstOrNull { lower.startsWith(it) && lower.length - it.length >= 4 }
+    val afterPrefix = prefix?.let { lower.substring(it.length) } ?: lower
+    val suffix = suffixes.firstOrNull { afterPrefix.endsWith(it) && afterPrefix.length - it.length >= 3 }
+    if (prefix == null && suffix == null) return listOf(WordPart(lower, affix = false))
+
+    val rootEnd = afterPrefix.length - (suffix?.length ?: 0)
+    return buildList {
+        if (prefix != null) add(WordPart("$prefix-", affix = true))
+        add(WordPart(afterPrefix.substring(0, rootEnd), affix = false))
+        if (suffix != null) {
+            add(WordPart("-$suffix", affix = true, explanation = endingExplanation(suffix)))
+        }
+    }
+}
+
+private fun inflectionEnding(surface: String, lemma: String, form: String): Int? {
+    if (form == "irregular" || form == "unknown") return null
+    val word = surface.lowercase()
+    val base = lemma.lowercase()
+    if (word == base) return null
+
+    if (word.startsWith(base) && word.length > base.length) return base.length
+    if (base.endsWith("e") && word.startsWith(base.dropLast(1)) &&
+        word.substring(base.length - 1) in setOf("ing", "ed")) {
+        return base.length - 1
+    }
+    if (base.endsWith("y")) {
+        val stem = base.dropLast(1)
+        if (word == stem + "ies" || word == stem + "ied") return stem.length
+    }
+    return listOf("ing", "ed", "es", "s", "er", "est")
+        .firstOrNull { word.endsWith(it) && word.length - it.length >= 3 }
+        ?.let { word.length - it.length }
+}
+
+private fun endingExplanation(suffix: String): String = when (suffix) {
+    "ing" -> "-ing показывает процесс, длительность или герундий; точную роль задаёт фраза."
+    "ed", "ied" -> "-ed показывает прошедшее время либо причастие; точную роль задаёт вспомогательный глагол."
+    "s", "es", "ies" -> "Окончание показывает множественное число либо третье лицо; часть речи снимает неоднозначность."
+    "er" -> "-er часто образует сравнительную степень или название действующего лица."
+    "est" -> "-est образует превосходную степень."
+    "ly" -> "-ly обычно превращает признак в наречие образа действия."
+    "ness", "ity", "tion", "sion", "ation", "ition", "ment" ->
+        "Суффикс образует абстрактное существительное."
+    "able", "ible", "ous", "ive", "less", "ful" ->
+        "Суффикс образует прилагательное и подсказывает значение признака."
+    else -> "Окончание меняет форму или часть речи слова."
+}
+
+private fun contextPhrases(context: String, selected: String): List<String> {
+    val words = Regex("[A-Za-z]+(?:'[A-Za-z]+)?")
+        .findAll(context)
+        .map { it.value }
+        .toList()
+    val index = words.indexOfFirst { it.equals(selected, ignoreCase = true) }
+    if (index < 0) return emptyList()
+
+    return buildList {
+        if (index > 0) add(words[index - 1] + " " + words[index])
+        if (index + 1 < words.size) add(words[index] + " " + words[index + 1])
+        if (index > 0 && index + 1 < words.size) {
+            add(words.subList(index - 1, index + 2).joinToString(" "))
+        }
+    }.distinct()
 }
 
 private fun posTitle(tag: String): String = when (tag) {

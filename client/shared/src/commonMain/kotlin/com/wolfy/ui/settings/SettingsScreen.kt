@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.wolfy.data.SyncStatus
+import com.wolfy.data.dictionary.DictionaryStatus
 import com.wolfy.theme.ReadingTheme
 import com.wolfy.theme.WolfyTheme
 import com.wolfy.widgets.Rule
@@ -47,6 +48,8 @@ fun SettingsScreen(
     serverUrl: String,
     signedIn: Boolean,
     onOpenReference: () -> Unit,
+    dictionary: DictionaryStatus,
+    onDownloadDictionary: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = WolfyTheme.colors
@@ -124,6 +127,42 @@ fun SettingsScreen(
             style = WolfyTheme.typography.caption,
             color = colors.inkMuted,
         )
+
+        Rule()
+        SectionLabel("Офлайн-словарь")
+        Fact(
+            label = "Состояние",
+            value = when (dictionary) {
+                DictionaryStatus.Ready -> "установлен"
+                DictionaryStatus.Offer, DictionaryStatus.Declined -> "не установлен"
+                is DictionaryStatus.Downloading -> dictionary.progress?.let {
+                    "установка ${(it * 100).toInt()}%"
+                } ?: "установка"
+                is DictionaryStatus.Failed -> "ошибка установки"
+            },
+        )
+        Text(
+            text = "Словарь добавляет русские переводы слов, МФА и английские " +
+                "толкования. Он работает без сети и занимает около 9 МБ.",
+            style = WolfyTheme.typography.caption,
+            color = colors.inkMuted,
+        )
+        if (dictionary !is DictionaryStatus.Ready) {
+            val downloading = dictionary is DictionaryStatus.Downloading
+            Text(
+                text = when {
+                    downloading -> "словарь устанавливается"
+                    dictionary is DictionaryStatus.Failed -> "повторить установку"
+                    else -> "установить словарь"
+                },
+                style = WolfyTheme.typography.button,
+                color = if (downloading) colors.inkMuted else colors.accent,
+                modifier = Modifier
+                    .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.huge))
+                    .pressable(enabled = !downloading, onClick = onDownloadDictionary)
+                    .padding(horizontal = spacing.large, vertical = spacing.small),
+            )
+        }
 
         Rule()
         SectionLabel("О приложении")

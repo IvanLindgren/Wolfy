@@ -2,6 +2,7 @@ package com.wolfy.data.library
 
 import com.wolfy.data.AppSettings
 import com.wolfy.ffi.WolfyCore
+import com.wolfy.ffi.DictionaryEntry
 import com.wolfy.srs.DeckCount
 import com.wolfy.srs.Drill
 import com.wolfy.srs.Queue
@@ -86,6 +87,14 @@ class CoreSession(
         return outcome
     }
 
+    /** Ищет слово в скачанном словаре, не перенося правило поиска в Kotlin. */
+    fun define(word: String, path: String): Outcome = run(
+        command("define") {
+            put("word", word)
+            put("path", path)
+        },
+    )
+
     fun close() {
         core.closeSession(handle)
     }
@@ -133,6 +142,9 @@ data class Outcome(
     val right: Boolean? = null,
     /** Готовый текст — например, снимки страниц, склеенные по правилу. */
     val text: String? = null,
+    val definition: DictionaryEntry? = null,
+    /** Файл словаря исправен; отсутствие статьи при `true` — обычный ответ. */
+    val dictionaryAvailable: Boolean? = null,
 )
 
 /** Собирает команду ядру. */

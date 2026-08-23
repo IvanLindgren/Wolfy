@@ -11,6 +11,19 @@ plugins {
     alias(libs.plugins.compose.compiler)
 }
 
+val dictionaryAssets = layout.buildDirectory.dir("generated/dictionaryAssets")
+val prepareBundledDictionary by tasks.registering(Sync::class) {
+    description = "Кладёт офлайн-словарь в APK"
+    from(rootProject.layout.projectDirectory.file("../dist/wolfy_dictionary.tsv.gz")) {
+        // AAPT считает .gz транспортной упаковкой, распаковывает файл и
+        // выбрасывает расширение. Собственное расширение сохраняет байты gzip
+        // как есть, чтобы общий установщик мог проверить и распаковать их сам.
+        rename { "wolfy_dictionary.wfd" }
+    }
+    from(rootProject.layout.projectDirectory.file("../THIRD_PARTY_NOTICES.md"))
+    into(dictionaryAssets)
+}
+
 android {
     namespace = "com.wolfy.android"
     compileSdk = libs.versions.androidCompileSdk.get().toInt()
@@ -19,8 +32,8 @@ android {
         applicationId = "com.wolfy.reader"
         minSdk = libs.versions.androidMinSdk.get().toInt()
         targetSdk = libs.versions.androidTargetSdk.get().toInt()
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 3
+        versionName = "0.1.2"
     }
 
     buildTypes {
@@ -38,7 +51,11 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
+    sourceSets["main"].assets.srcDir(dictionaryAssets)
 }
+
+tasks.named("preBuild") { dependsOn(prepareBundledDictionary) }
 
 dependencies {
     implementation(project(":shared"))

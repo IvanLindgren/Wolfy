@@ -15,7 +15,7 @@ import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.unit.dp
 
 /** Значки нижней навигации. */
-enum class NavIcon { Books, Shelves, Cards, More }
+enum class NavIcon { Books, Shelves, Discover, Cards, More }
 
 /**
  * Значок нижней навигации, нарисованный кодом.
@@ -31,10 +31,25 @@ fun NavGlyph(icon: NavIcon, tint: Color, modifier: Modifier = Modifier) {
         when (icon) {
             NavIcon.Books -> drawBook(tint)
             NavIcon.Shelves -> drawShelves(tint)
+            NavIcon.Discover -> drawDiscover(tint)
             NavIcon.Cards -> drawCards(tint)
             NavIcon.More -> drawGear(tint)
         }
     }
+}
+
+/** Компас ленты: ромбовидная стрелка без платформенного emoji-шрифта. */
+private fun DrawScope.drawDiscover(tint: Color) {
+    val line = size.minDimension * 0.09f
+    drawCircle(tint, radius = size.minDimension * 0.42f, style = Stroke(width = line))
+    val needle = Path().apply {
+        moveTo(size.width * 0.66f, size.height * 0.22f)
+        lineTo(size.width * 0.55f, size.height * 0.55f)
+        lineTo(size.width * 0.22f, size.height * 0.66f)
+        lineTo(size.width * 0.45f, size.height * 0.45f)
+        close()
+    }
+    drawPath(needle, tint)
 }
 
 /** Раскрытая книга: две страницы, сходящиеся к корешку. */

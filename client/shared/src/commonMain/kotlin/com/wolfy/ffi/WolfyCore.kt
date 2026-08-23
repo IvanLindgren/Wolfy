@@ -176,6 +176,24 @@ data class WordAnalysis(
     val primaryPos: String? get() = matchedPos ?: dominantPos ?: pos.firstOrNull()
 }
 
+/** Словарная статья из локального Rust-словаря или серверного fallback. */
+@Serializable
+data class DictionaryEntry(
+    val word: String,
+    /** Произношение в МФА без обрамляющих косых черт. */
+    val pronunciation: String = "",
+    /** Русские словарные эквиваленты, доступные полностью офлайн. */
+    val translations: List<String> = emptyList(),
+    val senses: List<DictionarySense> = emptyList(),
+)
+
+/** Одно англоязычное толкование слова. */
+@Serializable
+data class DictionarySense(
+    val pos: String = "",
+    val definition: String,
+)
+
 /**
  * Что грамматический движок нашёл в предложении.
  *

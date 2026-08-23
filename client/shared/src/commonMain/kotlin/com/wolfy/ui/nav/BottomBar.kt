@@ -19,9 +19,8 @@ import com.wolfy.widgets.pressable
 /**
  * Раздел приложения.
  *
- * Четыре и ровно четыре. Пятый раздел означал бы, что какой-то из этих четырёх
- * недостаточно самостоятелен, а нижняя панель с пятью подписями перестаёт
- * читаться на телефоне.
+ * Пять самостоятельных разделов. Лента вынесена отдельно: это ежедневный
+ * сценарий выбора следующего чтения, а не настройка библиотеки.
  */
 enum class Section(val title: String, val icon: NavIcon) {
     /** Библиотека и чтение — то, ради чего приложение открывают. */
@@ -29,6 +28,9 @@ enum class Section(val title: String, val icon: NavIcon) {
 
     /** Полки: как читатель разложил свои книги. */
     Shelves("Полки", NavIcon.Shelves),
+
+    /** Вертикальная персональная лента материалов. */
+    Discover("Лента", NavIcon.Discover),
 
     /**
      * Карточки: колоды слов, фраз и правил из прочитанного.
@@ -76,7 +78,7 @@ fun BottomBar(
                 Column(
                     Modifier
                         .pressable { onSelect(section) }
-                        .padding(horizontal = spacing.medium, vertical = spacing.tight),
+                        .padding(horizontal = spacing.small, vertical = spacing.tight),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(spacing.tight),
                 ) {

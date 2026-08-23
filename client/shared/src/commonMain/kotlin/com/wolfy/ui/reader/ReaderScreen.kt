@@ -1,5 +1,10 @@
 package com.wolfy.ui.reader
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -26,7 +31,9 @@ import kotlinx.coroutines.flow.first
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
 import com.wolfy.ui.card.WordCardSheet
+import com.wolfy.theme.ReadingTheme
 import com.wolfy.theme.WolfyTheme
 import com.wolfy.widgets.ChapterHeading
 import com.wolfy.widgets.DropCapParagraph
@@ -49,16 +56,24 @@ fun ReaderScreen(
     onDismissCard: () -> Unit,
     onSaveWord: () -> Unit,
     onSavePhrase: () -> Unit,
+    onPronounce: () -> Unit,
     onPreviousChapter: () -> Unit,
     onNextChapter: () -> Unit,
     onClose: () -> Unit,
     onScrolled: (Float) -> Unit,
     onChapter: (Int) -> Unit,
     onOpenRule: (String) -> Unit,
+    theme: ReadingTheme,
+    fontScale: Float,
+    lineScale: Float,
+    onThemeChange: (ReadingTheme) -> Unit,
+    onFontScaleChange: (Float) -> Unit,
+    onLineScaleChange: (Float) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = WolfyTheme.colors
     var contentsOpen by remember { mutableStateOf(false) }
+    var readingSettingsOpen by remember { mutableStateOf(false) }
 
     Box(modifier.fillMaxSize().background(colors.paper)) {
         Column(Modifier.fillMaxSize()) {
@@ -66,7 +81,22 @@ fun ReaderScreen(
                 state = state,
                 onClose = onClose,
                 onOpenContents = { contentsOpen = true },
+                onOpenSettings = { readingSettingsOpen = !readingSettingsOpen },
             )
+            AnimatedVisibility(
+                visible = readingSettingsOpen,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically(),
+            ) {
+                ReaderQuickSettings(
+                    theme = theme,
+                    fontScale = fontScale,
+                    lineScale = lineScale,
+                    onThemeChange = onThemeChange,
+                    onFontScaleChange = onFontScaleChange,
+                    onLineScaleChange = onLineScaleChange,
+                )
+            }
 
             when {
                 state.error != null -> Message(state.error)
@@ -98,6 +128,7 @@ fun ReaderScreen(
             onDismiss = onDismissCard,
             onSave = onSaveWord,
             onSavePhrase = onSavePhrase,
+            onPronounce = onPronounce,
             onOpenRule = onOpenRule,
         )
     }
@@ -105,7 +136,12 @@ fun ReaderScreen(
 
 /** Шапка: глава и полоса прогресса чтения. */
 @Composable
-private fun ReaderTopBar(state: ReaderState, onClose: () -> Unit, onOpenContents: () -> Unit) {
+private fun ReaderTopBar(
+    state: ReaderState,
+    onClose: () -> Unit,
+    onOpenContents: () -> Unit,
+    onOpenSettings: () -> Unit,
+) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
     val progress = if (state.chapterCount > 0) {
@@ -131,10 +167,13 @@ private fun ReaderTopBar(state: ReaderState, onClose: () -> Unit, onOpenContents
             // Название главы — вход в оглавление. Отдельный значок для этого
             // не нужен: читатель и так смотрит сюда, чтобы понять, где он.
             SectionLabel(
-                text = state.chapterTitle.ifBlank { state.bookTitle } + " ▾",
+                text = state.chapterTitle.ifBlank { state.bookTitle },
                 modifier = Modifier.pressable(onClick = onOpenContents),
             )
-            SectionLabel("${(progress * 100).toInt()}%")
+            Row(horizontalArrangement = Arrangement.spacedBy(spacing.small)) {
+                SectionLabel("Текст", Modifier.pressable(onClick = onOpenSettings))
+                SectionLabel("${(progress * 100).toInt()}%")
+            }
         }
         Box(
             Modifier
@@ -148,6 +187,87 @@ private fun ReaderTopBar(state: ReaderState, onClose: () -> Unit, onOpenContents
                     .height(spacing.hair)
                     .background(colors.accent),
             )
+        }
+    }
+}
+
+/** Настройки, доступные без выхода со страницы книги. */
+@Composable
+private fun ReaderQuickSettings(
+    theme: ReadingTheme,
+    fontScale: Float,
+    lineScale: Float,
+    onThemeChange: (ReadingTheme) -> Unit,
+    onFontScaleChange: (Float) -> Unit,
+    onLineScaleChange: (Float) -> Unit,
+) {
+    val colors = WolfyTheme.colors
+    val spacing = WolfyTheme.spacing
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(colors.surface)
+            .padding(horizontal = spacing.pageMargin, vertical = spacing.medium),
+        verticalArrangement = Arrangement.spacedBy(spacing.small),
+    ) {
+        SectionLabel("Тема страницы")
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(spacing.small),
+        ) {
+            ReadingTheme.entries.forEach { option ->
+                Text(
+                    text = option.title,
+                    style = WolfyTheme.typography.caption,
+                    color = if (theme == option) colors.onInverse else colors.ink,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .weight(1f)
+                        .background(
+                            if (theme == option) colors.inverse else colors.paper,
+                            androidx.compose.foundation.shape.RoundedCornerShape(spacing.huge),
+                        )
+                        .pressable(onClick = { onThemeChange(option) })
+                        .padding(vertical = spacing.small),
+                )
+            }
+        }
+        SettingStepper(
+            title = "Размер текста",
+            value = "${(fontScale * 100).toInt()}%",
+            onLess = { onFontScaleChange(fontScale - 0.1f) },
+            onMore = { onFontScaleChange(fontScale + 0.1f) },
+        )
+        SettingStepper(
+            title = "Интервал строк",
+            value = "${(lineScale * 100).toInt()}%",
+            onLess = { onLineScaleChange(lineScale - 0.1f) },
+            onMore = { onLineScaleChange(lineScale + 0.1f) },
+        )
+    }
+}
+
+@Composable
+private fun SettingStepper(
+    title: String,
+    value: String,
+    onLess: () -> Unit,
+    onMore: () -> Unit,
+) {
+    val spacing = WolfyTheme.spacing
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, style = WolfyTheme.typography.body, color = WolfyTheme.colors.ink)
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(spacing.small),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Меньше", style = WolfyTheme.typography.caption, modifier = Modifier.pressable(onClick = onLess))
+            Text(value, style = WolfyTheme.typography.body, color = WolfyTheme.colors.ink)
+            Text("Больше", style = WolfyTheme.typography.caption, modifier = Modifier.pressable(onClick = onMore))
         }
     }
 }

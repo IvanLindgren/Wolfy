@@ -7,6 +7,18 @@
 rootProject.name = "wolfy-client"
 
 pluginManagement {
+    buildscript {
+        repositories {
+            mavenCentral()
+            // Стабильные сборки R8, которые ещё не доехали до Google Maven.
+            maven("https://storage.googleapis.com/r8-releases/raw")
+        }
+        dependencies {
+            // AGP 8.13 приносит R8 8.13, который понимает метаданные только до
+            // Kotlin 2.3. Официальный минимум для Kotlin 2.4 — R8 9.1.29.
+            classpath("com.android.tools:r8:9.1.29")
+        }
+    }
     repositories {
         google()
         mavenCentral()

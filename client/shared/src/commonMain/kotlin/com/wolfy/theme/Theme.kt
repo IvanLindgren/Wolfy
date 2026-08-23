@@ -86,12 +86,13 @@ val LocalWolfySpacing: ProvidableCompositionLocal<WolfySpacing> =
 fun WolfyTheme(
     theme: ReadingTheme = ReadingTheme.Paper,
     fontScale: Float = 1f,
+    lineScale: Float = 1f,
     content: @Composable () -> Unit,
 ) {
     val fonts = rememberWolfyFonts()
     val base = rememberWolfyTypography(fonts)
-    val typography = remember(base, fontScale) {
-        if (fontScale == 1f) base else base.scaledForReading(fontScale)
+    val typography = remember(base, fontScale, lineScale) {
+        if (fontScale == 1f && lineScale == 1f) base else base.scaledForReading(fontScale, lineScale)
     }
 
     CompositionLocalProvider(

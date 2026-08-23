@@ -64,7 +64,22 @@ interface LibraryStore {
 
     /** Сохраняет загруженный EPUB без промежуточного файла платформы. */
     fun writeBook(fileName: String, bytes: ByteArray): String
+
+    /** Путь к установленному офлайн-словарю или пустая строка. */
+    fun dictionaryPath(): String
+
+    /** Атомарно распаковывает скачанный словарь и возвращает его путь. */
+    fun installDictionary(compressed: ByteArray): String
 }
 
 /** Хранилище для текущей платформы. */
 expect fun createLibraryStore(): LibraryStore
+
+/**
+ * Архив словаря, вложенный в приложение.
+ *
+ * Он нужен не как второй источник истины, а как гарантированный первый
+ * запуск: установленное приложение не должно зависеть от сервера разработчика
+ * на localhost. Сервер остаётся способом обновить архив в будущих версиях.
+ */
+expect fun readBundledDictionary(): ByteArray?

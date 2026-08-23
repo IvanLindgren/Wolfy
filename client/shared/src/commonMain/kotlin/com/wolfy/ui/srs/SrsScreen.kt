@@ -273,7 +273,7 @@ private fun DeckCard(
             )
 
             Text(
-                text = if (empty) "✓" else status.due.toString(),
+                text = if (empty) "0" else status.due.toString(),
                 style = WolfyTheme.typography.screenTitle,
                 color = if (empty) colors.inkMuted else colors.accent,
                 modifier = Modifier.align(Alignment.CenterHorizontally),

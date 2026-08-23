@@ -269,7 +269,7 @@ private fun BookTile(
                 // Книга без файла приехала по синхронизации: прогресс у неё
                 // есть, а открыть её здесь нечем, и молчать об этом нельзя.
                 !book.readable -> "нет файла"
-                book.finished -> "прочитана ✓"
+                book.finished -> "прочитана"
                 !book.started -> "новая"
                 else -> percent(book.fraction)
             },
@@ -281,11 +281,7 @@ private fun BookTile(
             },
         )
         Text(
-            text = if (savedWords > 0) {
-                "★ " + plural(savedWords, "слово", "слова", "слов")
-            } else {
-                "☆ 0 слов"
-            },
+            text = plural(savedWords, "слово", "слова", "слов"),
             style = WolfyTheme.typography.caption,
             color = colors.inkMuted,
             textAlign = TextAlign.Center,

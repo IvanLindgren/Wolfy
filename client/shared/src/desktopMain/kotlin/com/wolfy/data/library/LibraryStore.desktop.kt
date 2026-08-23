@@ -22,3 +22,24 @@ actual fun createLibraryStore(): LibraryStore {
     directory.mkdirs()
     return FileLibraryStore(directory)
 }
+
+actual fun readBundledDictionary(): ByteArray? {
+    val resources = System.getProperty("compose.application.resources.dir")
+        ?.takeIf(String::isNotBlank)
+        ?.let(::File)
+    val packaged = resources?.resolve(BUNDLED_DICTIONARY)
+
+    // Второй путь нужен только для desktopRun из репозитория. В установщике
+    // используется первый, заданный Compose Desktop при запуске приложения.
+    val development = sequenceOf(
+        File("dist", BUNDLED_DICTIONARY),
+        File("../dist", BUNDLED_DICTIONARY),
+    ).firstOrNull(File::isFile)
+
+    return sequenceOf(packaged, development)
+        .filterNotNull()
+        .firstOrNull(File::isFile)
+        ?.let { runCatching { it.readBytes() }.getOrNull() }
+}
+
+private const val BUNDLED_DICTIONARY = "wolfy_dictionary.tsv.gz"

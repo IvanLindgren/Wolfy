@@ -8,12 +8,14 @@ import com.wolfy.data.WolfyApi
 import com.wolfy.data.library.Library
 import com.wolfy.data.library.LibraryBook
 import com.wolfy.data.library.currentTimeMillis
+import com.wolfy.data.dictionary.DictionaryManager
 import com.wolfy.ffi.Chapter
 import com.wolfy.ffi.CoreException
 import com.wolfy.ffi.ParsedText
 import com.wolfy.ffi.Token
 import com.wolfy.ffi.WolfyCore
 import com.wolfy.ui.card.TranslationState
+import com.wolfy.ui.card.DefinitionState
 import com.wolfy.ui.card.WordCardState
 import com.wolfy.widgets.GraphLink
 import com.wolfy.widgets.GraphWord
@@ -104,6 +106,7 @@ class ReaderViewModel(
     private val core: WolfyCore,
     private val api: WolfyApi,
     private val library: Library,
+    private val dictionary: DictionaryManager,
     private val clock: () -> Long = { currentTimeMillis() },
 ) : ViewModel() {
 
@@ -118,6 +121,9 @@ class ReaderViewModel(
 
     /** Запрос перевода для текущей карточки — новый тап отменяет предыдущий. */
     private var translationJob: Job? = null
+
+    /** Поиск определения отделён от перевода: ни один не ждёт другого. */
+    private var definitionJob: Job? = null
 
     /** Последняя записанная доля главы — по ней отсекается лишняя запись. */
     private var lastReportedPlace: Float? = null
@@ -259,9 +265,26 @@ class ReaderViewModel(
                     graphWords = graph.first,
                     graphLinks = graph.second,
                     translation = TranslationState.Loading,
+                    definition = DefinitionState.Loading,
                     saved = analysis.lemma in it.savedLemmas,
                 ),
             )
+        }
+
+        definitionJob?.cancel()
+        definitionJob = viewModelScope.launch {
+            val entry = dictionary.define(analysis.lemma)
+            _state.update { current ->
+                val card = current.card ?: return@update current
+                if (current.selectedBlock != block || card.token.start != token.start) {
+                    return@update current
+                }
+                current.copy(
+                    card = card.copy(
+                        definition = entry?.let(DefinitionState::Ready) ?: DefinitionState.Missing,
+                    ),
+                )
+            }
         }
 
         translationJob?.cancel()
@@ -283,7 +306,9 @@ class ReaderViewModel(
             // другому слову — тогда ответ уже не про то, что на экране.
             _state.update { current ->
                 val card = current.card ?: return@update current
-                if (card.token.start != token.start) return@update current
+                if (current.selectedBlock != block || card.token.start != token.start) {
+                    return@update current
+                }
 
                 current.copy(
                     card = card.copy(
@@ -303,6 +328,7 @@ class ReaderViewModel(
 
     fun dismissCard() {
         translationJob?.cancel()
+        definitionJob?.cancel()
         _state.update { it.copy(card = null, selectedBlock = -1) }
     }
 
@@ -504,6 +530,37 @@ private fun buildSentenceGraph(
         }
         if (noun != null && noun - index <= 2) {
             links.add(spanLink(index, noun, "признак — слово"))
+        }
+    }
+
+    // Служебные слова особенно важны именно в английском: артикль, частица
+    // или предлог меняют роль соседнего слова сильнее, чем род, которого у
+    // английского существительного обычно вовсе нет. Показываем только
+    // ближайшую однозначную связь, не притворяясь полным dependency parser.
+    analyses.forEachIndexed { index, analysis ->
+        when (analysis?.primaryPos) {
+            "DET" -> (index + 1 until analyses.size).firstOrNull {
+                analyses[it]?.primaryPos in setOf("NOUN", "ADJ")
+            }?.takeIf { it - index <= 2 }?.let {
+                links.add(spanLink(index, it, "определитель — имя"))
+            }
+            "ADP" -> (index + 1 until analyses.size).firstOrNull {
+                analyses[it]?.primaryPos in setOf("NOUN", "PRON")
+            }?.takeIf { it - index <= 3 }?.let {
+                links.add(spanLink(index, it, "предлог — зависимое слово"))
+            }
+            "PART" -> (analyses.indices).minByOrNull { candidate ->
+                if (analyses[candidate]?.primaryPos == "VERB") kotlin.math.abs(candidate - index)
+                else Int.MAX_VALUE
+            }?.takeIf { analyses[it]?.primaryPos == "VERB" }?.let {
+                links.add(spanLink(index, it, "частица — действие"))
+            }
+            "ADV" -> (analyses.indices).minByOrNull { candidate ->
+                if (analyses[candidate]?.primaryPos == "VERB") kotlin.math.abs(candidate - index)
+                else Int.MAX_VALUE
+            }?.takeIf { analyses[it]?.primaryPos == "VERB" }?.let {
+                links.add(spanLink(index, it, "обстоятельство — действие"))
+            }
         }
     }
 

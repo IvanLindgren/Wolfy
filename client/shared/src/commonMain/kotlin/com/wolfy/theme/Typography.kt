@@ -173,10 +173,10 @@ fun rememberWolfyTypography(fonts: WolfyFonts): WolfyTypography = WolfyTypograph
  * Межстрочный интервал умножается вместе с кеглем: набор, где вырос кегль, но
  * не выросли пробелы между строками, читается хуже мелкого.
  */
-internal fun WolfyTypography.scaledForReading(scale: Float): WolfyTypography = copy(
+internal fun WolfyTypography.scaledForReading(scale: Float, lineScale: Float): WolfyTypography = copy(
     reader = reader.copy(
         fontSize = reader.fontSize * scale,
-        lineHeight = reader.lineHeight * scale,
+        lineHeight = reader.lineHeight * scale * lineScale,
     ),
     translation = translation.copy(
         fontSize = translation.fontSize * scale,

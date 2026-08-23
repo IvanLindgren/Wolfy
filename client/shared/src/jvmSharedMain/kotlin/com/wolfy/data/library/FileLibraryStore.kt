@@ -2,6 +2,9 @@ package com.wolfy.data.library
 
 import java.io.File
 import java.security.MessageDigest
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.util.zip.GZIPInputStream
 
 /**
  * Библиотека в файлах — общая реализация для Android и Windows.
@@ -69,6 +72,58 @@ internal class FileLibraryStore(private val directory: File) : LibraryStore {
         return file.absolutePath
     }
 
+    override fun writeBook(fileName: String, bytes: ByteArray): String {
+        books.mkdirs()
+        val file = uniqueFile(fileName)
+        file.writeBytes(bytes)
+        return file.absolutePath
+    }
+
+    override fun dictionaryPath(): String =
+        File(directory, DICTIONARY_FILE).takeIf { dictionary ->
+            dictionary.isFile && dictionary.length() > 0L && runCatching {
+                dictionary.bufferedReader(Charsets.UTF_8).use { it.readLine() == DICTIONARY_HEADER }
+            }.getOrDefault(false)
+        }?.absolutePath.orEmpty()
+
+    override fun installDictionary(compressed: ByteArray): String {
+        directory.mkdirs()
+        val target = File(directory, DICTIONARY_FILE)
+        val temporary = File(directory, "$DICTIONARY_FILE.tmp")
+
+        try {
+            compressed.inputStream().use { bytes ->
+                GZIPInputStream(bytes).use { input ->
+                    temporary.outputStream().buffered().use { output -> input.copyTo(output) }
+                }
+            }
+            require(temporary.length() > 0L) { "словарь пуст" }
+            val header = temporary.bufferedReader(Charsets.UTF_8).use { it.readLine().orEmpty() }
+            require(header == DICTIONARY_HEADER) { "неверный формат словаря" }
+
+            try {
+                Files.move(
+                    temporary.toPath(),
+                    target.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING,
+                )
+            } catch (_: Exception) {
+                // Не все файловые системы умеют атомарную замену, но даже
+                // там REPLACE_EXISTING безопаснее ручного delete + rename:
+                // исправный словарь не исчезает до самого переноса.
+                Files.move(
+                    temporary.toPath(),
+                    target.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING,
+                )
+            }
+            return target.absolutePath
+        } finally {
+            temporary.delete()
+        }
+    }
+
     /**
      * Отпечаток — SHA-256 содержимого.
      *
@@ -125,6 +180,11 @@ internal class FileLibraryStore(private val directory: File) : LibraryStore {
             if (!next.exists()) return next
             attempt++
         }
+    }
+
+    private companion object {
+        const val DICTIONARY_FILE = "wolfy_dictionary.tsv"
+        const val DICTIONARY_HEADER = "# wolfy english dictionary v2"
     }
 }
 

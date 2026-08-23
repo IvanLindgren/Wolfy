@@ -2,6 +2,7 @@ package com.wolfy.ui.card
 
 import androidx.compose.runtime.Immutable
 import com.wolfy.ffi.Finding
+import com.wolfy.ffi.DictionaryEntry
 import com.wolfy.ffi.Token
 import com.wolfy.ffi.WordAnalysis
 import com.wolfy.widgets.GraphLink
@@ -34,6 +35,7 @@ data class WordCardState(
     val graphWords: List<GraphWord> = emptyList(),
     val graphLinks: List<GraphLink> = emptyList(),
     val translation: TranslationState = TranslationState.Idle,
+    val definition: DefinitionState = DefinitionState.Idle,
     /** Лежит ли слово уже в колоде книги. */
     val saved: Boolean = false,
     /**
@@ -45,6 +47,16 @@ data class WordCardState(
      */
     val phraseSaved: Boolean = false,
 )
+
+/** Толкование приезжает независимо от перевода: локально либо с сервера. */
+@Immutable
+sealed interface DefinitionState {
+    data object Idle : DefinitionState
+    data object Loading : DefinitionState
+    data class Ready(val entry: DictionaryEntry) : DefinitionState
+    /** Слова нет в базе либо без локального файла сейчас нет сети. */
+    data object Missing : DefinitionState
+}
 
 /** Что сейчас с переводом. */
 @Immutable
