@@ -50,6 +50,7 @@ import com.wolfy.widgets.SectionLabel
 import com.wolfy.widgets.SentenceGraph
 import com.wolfy.widgets.WolfyCompanion
 import com.wolfy.widgets.pressable
+import kotlin.math.pow
 import kotlinx.coroutines.delay
 
 /**
@@ -165,7 +166,11 @@ private fun CardBody(
             CardModeTabs(mode = mode, onMode = { mode = it })
             AnimatedContent(targetState = mode, label = "card mode") { selected ->
                 when (selected) {
-                    CardMode.Word -> WordDetails(state = state, onSave = onSave)
+                    CardMode.Word -> WordDetails(
+                        state = state,
+                        onSave = onSave,
+                        onOpenRule = onOpenRule,
+                    )
                     CardMode.Phrase -> PhraseDetails(
                         state = state,
                         onSave = onSavePhrase,
@@ -209,7 +214,11 @@ private fun CardModeTabs(mode: CardMode, onMode: (CardMode) -> Unit) {
 }
 
 @Composable
-private fun WordDetails(state: WordCardState, onSave: () -> Unit) {
+private fun WordDetails(
+    state: WordCardState,
+    onSave: () -> Unit,
+    onOpenRule: (String) -> Unit,
+) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
     val typography = WolfyTheme.typography
@@ -217,8 +226,23 @@ private fun WordDetails(state: WordCardState, onSave: () -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(spacing.medium)) {
         Appear(0) { Facts(state) }
         Appear(1) { Frequency(state.analysis.zipf) }
-        Appear(2) { WolfyLexicalTip(state) }
-        Appear(3) { SaveButton(saved = state.saved, onSave = onSave) }
+        // Грамматика фразы стоит и здесь, а не только на вкладке «Фраза».
+        // Читатель тапнул по слову внутри предложения, и правило, которое это
+        // предложение строит, — часть ответа на вопрос «почему слово выглядит
+        // так». Прятать его за вкладку значит требовать догадаться, что там
+        // что-то есть.
+        if (state.grammar.isNotEmpty()) {
+            Appear(2) {
+                Column(verticalArrangement = Arrangement.spacedBy(spacing.small)) {
+                    SectionLabel("Грамматика этой фразы")
+                    state.grammar.forEach { finding ->
+                        GrammarNote(finding, onOpen = { onOpenRule(finding.rule) })
+                    }
+                }
+            }
+        }
+        Appear(3) { WolfyLexicalTip(state) }
+        Appear(4) { SaveButton(saved = state.saved, onSave = onSave) }
     }
 }
 
@@ -415,7 +439,10 @@ private fun WolfyTip(text: String) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(WolfyTheme.spacing.small),
     ) {
-        WolfyCompanion(size = 64.dp)
+        // Крупнее подписи рядом: Вульфи единственное живое на карточке, и
+        // размером с иконку он читался как значок, а не как зверь, которого
+        // можно погладить.
+        WolfyCompanion(size = 104.dp)
         Text(
             text,
             style = WolfyTheme.typography.caption,
@@ -487,22 +514,36 @@ private fun Translation(state: WordCardState) {
         // всего остального. Проявление отмечает этот приход: без него строка
         // просто возникает, и половину раз читатель не замечает, что она
         // сменила «Перевод загружается…».
-        is TranslationState.Ready -> Appear(0) { Column(
-            verticalArrangement = Arrangement.spacedBy(WolfyTheme.spacing.tight),
-        ) {
-            Text(
-                text = "«${translation.text}»",
-                style = typography.translation,
-                color = colors.ink,
-            )
-            if (translation.context.isNotBlank()) {
+        is TranslationState.Ready -> Appear(0) {
+            Column(verticalArrangement = Arrangement.spacedBy(WolfyTheme.spacing.small)) {
+                // Словарная строка: что значит само слово. Курсив гарамона
+                // здесь не украшение — так набирают словарные статьи, и глаз
+                // отличает толкование от текста книги, не читая его.
                 Text(
-                    text = translation.context,
-                    style = typography.caption,
-                    color = colors.inkMuted,
+                    text = translation.word,
+                    style = typography.translation,
+                    color = colors.ink,
                 )
+                // А это уже другой вопрос — что сказано во всей фразе. Ради
+                // него слово и переводится в контексте, а не по словарю.
+                if (translation.sentence.isNotBlank()) {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .background(colors.paper, RoundedCornerShape(WolfyTheme.spacing.small))
+                            .padding(WolfyTheme.spacing.small),
+                        verticalArrangement = Arrangement.spacedBy(WolfyTheme.spacing.hair),
+                    ) {
+                        SectionLabel("Фраза целиком")
+                        Text(
+                            text = translation.sentence,
+                            style = typography.body,
+                            color = colors.ink,
+                        )
+                    }
+                }
             }
-        } }
+        }
 
         is TranslationState.Failed -> Text(
             text = translation.message,
@@ -600,10 +641,12 @@ private fun Frequency(zipf: Float) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             SectionLabel("Как часто встречается")
-            // Само число Zipf читателю посреди книги ни о чём: «6.2» это
-            // жаргон корпусной лингвистики. Слово — говорит.
+            // Полоска показывает «много или мало», но не отвечает «сколько».
+            // Zipf-6.2 читателю посреди книги ни о чём: это жаргон корпусной
+            // лингвистики. А «примерно раз на тысячу слов» — понятно всем и
+            // сразу переводится в опыт: столько слов в двух страницах.
             Text(
-                text = frequencyTitle(zipf),
+                text = frequencyTitle(zipf) + " · " + frequencyRate(zipf),
                 style = WolfyTheme.typography.caption,
                 color = tint,
             )
@@ -638,7 +681,7 @@ private fun Frequency(zipf: Float) {
 @Composable
 private fun PhraseButton(state: WordCardState, onSave: () -> Unit) {
     val colors = WolfyTheme.colors
-    val ready = (state.translation as? TranslationState.Ready)?.context.orEmpty()
+    val ready = (state.translation as? TranslationState.Ready)?.sentence.orEmpty()
     if (ready.isBlank()) return
 
     Text(
@@ -710,6 +753,30 @@ private fun frequencyTitle(zipf: Float): String = when {
     zipf > 0f -> "редкое"
     else -> "нет в корпусе"
 }
+
+/**
+ * Частотность в словах, которые можно себе представить.
+ *
+ * Шкала Zipf логарифмическая: Zipf 6 — тысяча слов на миллион, Zipf 3 — одно.
+ * Отсюда и «раз на столько-то»: делим миллион на частоту и округляем до
+ * круглого — читателю нужен порядок, а не точность до единицы.
+ */
+private fun frequencyRate(zipf: Float): String {
+    if (zipf <= 0f) return "в корпусе не встретилось"
+    val perMillion = 10.0.pow((zipf - 3f).toDouble())
+    val everyN = (1_000_000 / perMillion).toLong()
+    val round = when {
+        everyN < 10 -> everyN
+        everyN < 1_000 -> everyN / 10 * 10
+        everyN < 100_000 -> everyN / 1_000 * 1_000
+        else -> everyN / 100_000 * 100_000
+    }.coerceAtLeast(1)
+    return "примерно раз на " + spaced(round) + " слов"
+}
+
+/** Разряды пробелом: «100 000» читается, «100000» — нет. */
+private fun spaced(value: Long): String =
+    value.toString().reversed().chunked(3).joinToString("\u00A0").reversed()
 
 /** Достаточная для учебной подсказки оценка английских слогов. */
 private fun syllableCount(word: String): Int {

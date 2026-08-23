@@ -4,6 +4,8 @@ import androidx.compose.runtime.Immutable
 import com.wolfy.ffi.Finding
 import com.wolfy.ffi.Token
 import com.wolfy.ffi.WordAnalysis
+import com.wolfy.widgets.GraphLink
+import com.wolfy.widgets.GraphWord
 
 /**
  * Состояние открытой карточки слова.
@@ -28,6 +30,9 @@ data class WordCardState(
      * каждом предложении есть чему учиться.
      */
     val grammar: List<Finding> = emptyList(),
+    /** Слова и связи фразы, уже подготовленные вне композиции. */
+    val graphWords: List<GraphWord> = emptyList(),
+    val graphLinks: List<GraphLink> = emptyList(),
     val translation: TranslationState = TranslationState.Idle,
     /** Лежит ли слово уже в колоде книги. */
     val saved: Boolean = false,
@@ -53,11 +58,18 @@ sealed interface TranslationState {
     /**
      * Перевод пришёл.
      *
-     * @param text перевод самого слова или фразы.
-     * @param context перевод предложения целиком — то, ради чего слово вообще
-     *   переводится в контексте, а не по словарю.
+     * Два перевода, а не один, и это не роскошь. Слово, переведённое отдельно,
+     * — это словарная статья: «library — библиотека». Предложение, переведённое
+     * целиком, отвечает на другой вопрос: что здесь вообще сказано. Читателю
+     * посреди книги нужны оба, и подменять первое вторым нельзя — перевод
+     * фразы в строке «что значит слово» выглядит так, будто слово значит всё
+     * предложение.
+     *
+     * @param word перевод самого слова — словарная строка карточки.
+     * @param sentence перевод предложения целиком, на язык читателя. Пусто,
+     *   если по слову тапнули вне предложения.
      */
-    data class Ready(val text: String, val context: String = "") : TranslationState
+    data class Ready(val word: String, val sentence: String = "") : TranslationState
 
     /**
      * Перевода не будет.

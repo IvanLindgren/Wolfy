@@ -15,12 +15,15 @@ import com.wolfy.ffi.Token
 import com.wolfy.ffi.WolfyCore
 import com.wolfy.ui.card.TranslationState
 import com.wolfy.ui.card.WordCardState
+import com.wolfy.widgets.GraphLink
+import com.wolfy.widgets.GraphWord
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -243,6 +246,7 @@ class ReaderViewModel(
         // же предложение и стоит доли миллисекунды. Тянуть её вторым шагом
         // значило бы показать карточку, которая потом дёрнется.
         val grammar = core.explain(context)
+        val graph = buildSentenceGraph(core, context, grammar)
 
         _state.update {
             it.copy(
@@ -252,6 +256,8 @@ class ReaderViewModel(
                     analysis = analysis,
                     context = context,
                     grammar = grammar,
+                    graphWords = graph.first,
+                    graphLinks = graph.second,
                     translation = TranslationState.Loading,
                     saved = analysis.lemma in it.savedLemmas,
                 ),
@@ -260,7 +266,19 @@ class ReaderViewModel(
 
         translationJob?.cancel()
         translationJob = viewModelScope.launch {
-            val result = api.translate(context)
+            // Два перевода разом: слово отдельно и предложение целиком. Слово,
+            // переведённое внутри фразы, теряется — в русском переводе «she
+            // left the library» слова «library» может не оказаться вовсе, а
+            // читатель тапнул именно по нему.
+            //
+            // Параллельно, а не по очереди: последовательно карточка ждала бы
+            // две сети вместо одной.
+            val word = async { api.translate(token.text) }
+            val sentence = if (context == token.text) null else async { api.translate(context) }
+
+            val wordResult = word.await()
+            val sentenceResult = sentence?.await()
+
             // Пока ходили в сеть, читатель мог закрыть карточку или нажать по
             // другому слову — тогда ответ уже не про то, что на экране.
             _state.update { current ->
@@ -269,11 +287,13 @@ class ReaderViewModel(
 
                 current.copy(
                     card = card.copy(
-                        translation = when (result) {
-                            is TranslateResult.Ready ->
-                                TranslationState.Ready(result.text, context)
+                        translation = when (wordResult) {
+                            is TranslateResult.Ready -> TranslationState.Ready(
+                                word = wordResult.text,
+                                sentence = (sentenceResult as? TranslateResult.Ready)?.text.orEmpty(),
+                            )
                             is TranslateResult.Failed ->
-                                TranslationState.Failed(result.message)
+                                TranslationState.Failed(wordResult.message)
                         },
                     ),
                 )
@@ -316,7 +336,7 @@ class ReaderViewModel(
                     bookId = it,
                     surface = card.analysis.surface,
                     lemma = lemma,
-                    translation = (card.translation as? TranslationState.Ready)?.text.orEmpty(),
+                    translation = (card.translation as? TranslationState.Ready)?.word.orEmpty(),
                     context = card.context,
                     pos = card.analysis.primaryPos.orEmpty(),
                     cefr = card.analysis.cefr,
@@ -345,7 +365,7 @@ class ReaderViewModel(
     fun savePhrase() {
         val card = _state.value.card ?: return
         val id = bookId ?: return
-        val translation = (card.translation as? TranslationState.Ready)?.context.orEmpty()
+        val translation = (card.translation as? TranslationState.Ready)?.sentence.orEmpty()
         if (translation.isBlank()) return
 
         library.savePhrase(bookId = id, sentence = card.context, translation = translation)
@@ -428,3 +448,70 @@ private fun Chapter.toReaderBlocks(core: WolfyCore): List<ReaderBlock> =
             alt = block.alt,
         )
     }
+
+/**
+ * Готовит понятную схему фразы без тяжёлого синтаксического парсера.
+ *
+ * Точные скобки грамматических конструкций приходят из движка. Поверх них
+ * добавляются только безопасные локальные связи: ближайшее имя до сказуемого
+ * как исполнитель, ближайшее после как дополнение и прилагательное с
+ * ближайшим существительным. Это подсказки для чтения, а не заявление о
+ * полном академическом dependency parse, поэтому неоднозначные случаи
+ * намеренно пропускаются.
+ */
+private fun buildSentenceGraph(
+    core: WolfyCore,
+    sentence: String,
+    grammar: List<com.wolfy.ffi.Finding>,
+): Pair<List<GraphWord>, List<GraphLink>> {
+    val parsed = core.tokenize(sentence)
+    val visible = parsed.tokens.withIndex().filter { it.value.kind != "space" }
+    val originalToVisible = mutableMapOf<Int, Int>()
+    val analyses = visible.mapIndexed { visibleIndex, indexed ->
+        originalToVisible[indexed.index] = visibleIndex
+        if (indexed.value.kind == "word") core.analyzeWord(indexed.value.text) else null
+    }
+    val words = visible.mapIndexed { index, indexed ->
+        GraphWord(indexed.value.text, analyses[index]?.primaryPos)
+    }
+    if (words.isEmpty()) return emptyList<GraphWord>() to emptyList()
+
+    val links = grammar.mapNotNull { finding ->
+        val covered = (finding.start until finding.end).mapNotNull(originalToVisible::get)
+        if (covered.isEmpty()) null else GraphLink(
+            from = covered.minOrNull() ?: return@mapNotNull null,
+            to = (covered.maxOrNull() ?: return@mapNotNull null) + 1,
+            label = finding.title,
+        )
+    }.toMutableList()
+
+    val root = analyses.indexOfFirst { it?.primaryPos == "VERB" }.takeIf { it >= 0 }
+    if (root != null) {
+        val subject = (root - 1 downTo 0).firstOrNull {
+            analyses[it]?.primaryPos in setOf("NOUN", "PRON")
+        }
+        val target = (root + 1 until analyses.size).firstOrNull {
+            analyses[it]?.primaryPos in setOf("NOUN", "PRON")
+        }
+        subject?.let { links.add(spanLink(it, root, "исполнитель — действие")) }
+        target?.let { links.add(spanLink(root, it, "действие — дополнение")) }
+    }
+
+    analyses.forEachIndexed { index, analysis ->
+        if (analysis?.primaryPos != "ADJ") return@forEachIndexed
+        val noun = (index + 1 until analyses.size).firstOrNull {
+            analyses[it]?.primaryPos == "NOUN"
+        }
+        if (noun != null && noun - index <= 2) {
+            links.add(spanLink(index, noun, "признак — слово"))
+        }
+    }
+
+    return words to links.distinctBy { Triple(it.from, it.to, it.label) }
+}
+
+private fun spanLink(first: Int, second: Int, label: String): GraphLink = GraphLink(
+    from = minOf(first, second),
+    to = maxOf(first, second) + 1,
+    label = label,
+)
