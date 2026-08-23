@@ -26,6 +26,7 @@
 //! Заголовок для компоновщика — `core/include/wolfy_core.h`.
 
 mod dto;
+pub mod session;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -38,6 +39,8 @@ use std::sync::Mutex;
 use crate::lexicon::{analyze, Lexicon};
 use crate::parser::{self, Book};
 use crate::tokenizer::{split, tokenize};
+
+use session::{Command, Session};
 
 use dto::{
     ArticleDto, BookDto, ChapterDto, ExerciseDto, ExercisesDto, FindingDto, GrammarDto,
@@ -56,6 +59,13 @@ thread_local! {
 /// Открытые книги. Клиент держит не указатель, а число: указатель, пришедший
 /// с чужой стороны, невозможно проверить, а несуществующий номер — можно.
 static BOOKS: Mutex<Option<HashMap<i64, Box<dyn Book>>>> = Mutex::new(None);
+
+/// Открытые сессии — библиотека и настройки читателя. Номер вместо указателя
+/// по той же причине, что у книг.
+static SESSIONS: Mutex<Option<HashMap<i64, Session>>> = Mutex::new(None);
+
+/// Общий счётчик номеров. Один на книги и сессии: перепутать их нельзя, а
+/// два счётчика выдавали бы одинаковые числа и путали бы при чтении журнала.
 static NEXT_HANDLE: AtomicI64 = AtomicI64::new(1);
 
 /// Версия ядра. Клиент сверяет её со своей и показывает в диагностике.
@@ -323,6 +333,40 @@ where
     }
 }
 
+/// Достаёт сессию из реестра и что-то с ней делает.
+fn with_session<T, F>(handle: i64, body: F) -> Option<T>
+where
+    F: FnOnce(&mut Session) -> T,
+{
+    let mut guard = match SESSIONS.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            set_error("реестр сессий повреждён");
+            return None;
+        }
+    };
+
+    match guard.as_mut().and_then(|sessions| sessions.get_mut(&handle)) {
+        Some(session) => Some(body(session)),
+        None => {
+            set_error("сессия уже закрыта или не открывалась");
+            None
+        }
+    }
+}
+
+/// Читает необязательную C-строку: `null` здесь означает «записи ещё нет».
+///
+/// # Safety
+/// `raw` — либо `null`, либо корректная строка с нулевым байтом на конце.
+unsafe fn read_optional(raw: *const c_char) -> Option<String> {
+    if raw.is_null() {
+        return None;
+    }
+    // SAFETY: проверили на null; за корректность строки отвечает вызывающий.
+    unsafe { CStr::from_ptr(raw) }.to_str().ok().map(str::to_string)
+}
+
 /// Читает C-строку, полученную с чужой стороны.
 ///
 /// # Safety
@@ -365,6 +409,155 @@ fn set_error(message: &str) {
 
 fn clear_error() {
     LAST_ERROR.with(|slot| *slot.borrow_mut() = None);
+}
+
+// --- сессия: библиотека и настройки ---
+
+/// Открывает сессию на сохранённом состоянии.
+///
+/// Оба аргумента — записи, прочитанные клиентом с диска, или `null`, если их
+/// ещё нет. Битую запись ядро молча заменяет пустой: падение на старте не
+/// оставило бы читателю ничего, а так приложение откроется, и книги, лежащие
+/// на диске, добавляются заново.
+///
+/// Возвращает номер сессии или ноль при ошибке.
+///
+/// # Safety
+/// `library` и `settings` — либо `null`, либо корректные UTF-8 строки с нулём
+/// на конце.
+#[no_mangle]
+pub unsafe extern "C" fn wolfy_session_open(
+    library: *const c_char,
+    settings: *const c_char,
+) -> i64 {
+    let opened = catch_unwind(AssertUnwindSafe(|| {
+        // Пустой указатель здесь не ошибка, а «записи ещё нет», поэтому
+        // read_string с его диагностикой тут не годится.
+        let library = unsafe { read_optional(library) };
+        let settings = unsafe { read_optional(settings) };
+        let session = Session::open(library.as_deref(), settings.as_deref());
+
+        let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
+        let mut guard = SESSIONS.lock().ok()?;
+        guard.get_or_insert_with(HashMap::new).insert(handle, session);
+        Some(handle)
+    }));
+
+    match opened {
+        Ok(Some(handle)) => {
+            clear_error();
+            handle
+        }
+        Ok(None) => 0,
+        Err(_) => {
+            set_error("ядро не смогло открыть сессию");
+            0
+        }
+    }
+}
+
+/// Выполняет команду над библиотекой или настройками.
+///
+/// `command` — JSON с полем `op`; остальные поля зависят от команды. Ответ —
+/// JSON с полем `changed` и тем, что команда вернула. Полный перечень —
+/// в `session::Command`.
+///
+/// # Safety
+/// `handle` — номер, выданный [`wolfy_session_open`] и ещё не закрытый.
+/// `command` — корректная UTF-8 строка с нулём на конце.
+#[no_mangle]
+pub unsafe extern "C" fn wolfy_session_run(
+    handle: i64,
+    command: *const c_char,
+) -> *mut c_char {
+    guard(|| {
+        let text = unsafe { read_string(command) }?;
+        let command: Command = match serde_json::from_str(&text) {
+            Ok(command) => command,
+            Err(err) => {
+                // Имя незнакомой команды попадает в описание ошибки: без него
+                // расхождение клиента и ядра ищется вслепую.
+                set_error(&format!("ядро не поняло команду: {err}"));
+                return None;
+            }
+        };
+        with_session(handle, |session| to_json(&session.run(command)))?
+    })
+}
+
+/// Библиотека целиком — то, что клиент пишет на диск.
+///
+/// # Safety
+/// `handle` — номер, выданный [`wolfy_session_open`] и ещё не закрытый.
+#[no_mangle]
+pub extern "C" fn wolfy_session_library(handle: i64) -> *mut c_char {
+    guard(|| with_session(handle, |session| to_json(&session.library))?)
+}
+
+/// Настройки целиком.
+///
+/// # Safety
+/// `handle` — номер, выданный [`wolfy_session_open`] и ещё не закрытый.
+#[no_mangle]
+pub extern "C" fn wolfy_session_settings(handle: i64) -> *mut c_char {
+    guard(|| with_session(handle, |session| to_json(&session.settings))?)
+}
+
+/// Что изменилось с последней записи на диск.
+///
+/// Отвечает `{"library":bool,"settings":bool}`. Считает ядро, а не клиент:
+/// только оно знает, изменила ли команда хоть что-нибудь, — повторное
+/// сохранение слова, которое уже в колоде, не меняет ничего.
+///
+/// # Safety
+/// `handle` — номер, выданный [`wolfy_session_open`] и ещё не закрытый.
+#[no_mangle]
+pub extern "C" fn wolfy_session_dirty(handle: i64) -> *mut c_char {
+    guard(|| {
+        with_session(handle, |session| {
+            to_json(&serde_json::json!({
+                "library": session.library_dirty,
+                "settings": session.settings_dirty,
+            }))
+        })?
+    })
+}
+
+/// Отмечает, что состояние записано на диск.
+///
+/// Отдельным вызовом, а не внутри чтения: между «отдай мне библиотеку» и
+/// «файл лёг на диск» запись может не удаться, и снимать пометку до того, как
+/// это подтвердилось, значит однажды потерять главу.
+///
+/// # Safety
+/// `handle` — номер, выданный [`wolfy_session_open`] и ещё не закрытый.
+#[no_mangle]
+pub extern "C" fn wolfy_session_saved(handle: i64, library: bool, settings: bool) {
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        with_session(handle, |session| {
+            if library {
+                session.library_dirty = false;
+            }
+            if settings {
+                session.settings_dirty = false;
+            }
+        });
+    }));
+}
+
+/// Закрывает сессию.
+///
+/// Несохранённое при этом теряется: записать его самостоятельно ядро не может
+/// — оно не знает, где у этой платформы файлы.
+#[no_mangle]
+pub extern "C" fn wolfy_session_close(handle: i64) {
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        if let Ok(mut guard) = SESSIONS.lock() {
+            if let Some(sessions) = guard.as_mut() {
+                sessions.remove(&handle);
+            }
+        }
+    }));
 }
 
 #[cfg(test)]
