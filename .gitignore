@@ -46,3 +46,7 @@ tmp/
 # Go
 server/wolfy-server
 dist/
+
+# Выгрузка graphify: четырнадцать мегабайт отчётов, которые
+# пересобираются одной командой.
+graphify-out/
