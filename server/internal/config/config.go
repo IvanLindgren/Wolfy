@@ -38,8 +38,14 @@ type Config struct {
 	OCRModel string
 	OCRURL   string
 
-	// CitavukLoginURL — единственная точка выдачи общей сессии.
-	CitavukLoginURL string
+	// Читавук выдаёт общую сессию и заводит аккаунты. Каждый адрес
+	// настраивается отдельно: сервис, поднятый только ради чтения, вправе
+	// уметь вход и не уметь регистрацию. Пустой адрес прячет кнопку в
+	// приложении — кнопка, которая всегда отвечает ошибкой, хуже её
+	// отсутствия.
+	CitavukLoginURL    string
+	CitavukRegisterURL string
+	CitavukResendURL   string
 
 	// StandardEbooks* — официальный Atom-каталог. Открытая лента новых
 	// релизов работает без учётных данных; полный /all требует разрешения
@@ -71,7 +77,9 @@ func Load() (Config, error) {
 		OCRModel: envOr("WOLFY_OCR_MODEL", "google/gemini-3.7-flash"),
 		OCRURL:   envOr("WOLFY_OCR_URL", "https://api.polza.ai/api/v1/chat/completions"),
 
-		CitavukLoginURL: envOr("WOLFY_CITAVUK_LOGIN_URL", "https://api.citavuk.ru/v1/auth/login"),
+		CitavukLoginURL:    envOr("WOLFY_CITAVUK_LOGIN_URL", "https://api.citavuk.ru/v1/auth/login"),
+		CitavukRegisterURL: envOr("WOLFY_CITAVUK_REGISTER_URL", "https://api.citavuk.ru/v1/auth/register"),
+		CitavukResendURL:   envOr("WOLFY_CITAVUK_RESEND_URL", "https://api.citavuk.ru/v1/auth/resend-verification"),
 		StandardEbooksFeedURL: envOr(
 			"WOLFY_STANDARD_EBOOKS_FEED_URL",
 			"https://standardebooks.org/feeds/atom/new-releases",

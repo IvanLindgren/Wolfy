@@ -6,6 +6,7 @@
 package api
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -41,6 +42,8 @@ type Server struct {
 
 	// Ограничитель для открытого перевода — см. Handler.
 	translateLimit *rateLimiter
+	// И отдельный, куда более строгий, для входа и регистрации.
+	authLimit *rateLimiter
 }
 
 func NewServer(
@@ -62,6 +65,7 @@ func NewServer(
 		// чем читатель успевает выбрать следующее слово, но много быстрее,
 		// чем перебор словаря скриптом.
 		translateLimit: newRateLimiter(200, 1, 30*time.Minute),
+		authLimit:      newRateLimiter(8, 0.1, 30*time.Minute),
 	}
 }
 
@@ -73,7 +77,23 @@ func (s *Server) Handler() http.Handler {
 	// у которого токена нет и быть не может.
 	mux.HandleFunc("GET /healthz", s.health)
 	// Вход публичный по определению: токен как раз получается этим запросом.
-	mux.HandleFunc("POST /v1/auth/login", s.postLogin)
+	// Вход, регистрация и повторное письмо — под общим ограничителем.
+	// Читавук считает частоту и сам, но пропускать через себя перебор паролей
+	// значит работать усилителем чужой атаки: адрес нападающего Читавук
+	// увидит наш, и заблокирует тоже нас.
+	//
+	// Восемь попыток залпом и одна в десять секунд сверху: человек, забывший
+	// пароль, пробует три-четыре раза подряд, а перебору такая скорость
+	// бесполезна.
+	mux.Handle("POST /v1/auth/login", s.authLimit.withRateLimit(
+		http.HandlerFunc(s.postLogin),
+	))
+	mux.Handle("POST /v1/auth/register", s.authLimit.withRateLimit(
+		http.HandlerFunc(s.postRegister),
+	))
+	mux.Handle("POST /v1/auth/resend-verification", s.authLimit.withRateLimit(
+		http.HandlerFunc(s.postResendVerification),
+	))
 
 	// Перевод — без аккаунта. Читатель, поставивший приложение, должен
 	// получить перевод в первую же минуту: без него книга на чужом языке
@@ -110,15 +130,49 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) postLogin(w http.ResponseWriter, r *http.Request) {
+	s.proxyAccount(w, r, "вход", s.account.Login)
+}
+
+func (s *Server) postRegister(w http.ResponseWriter, r *http.Request) {
+	s.proxyAccount(w, r, "регистрация", s.account.Register)
+}
+
+func (s *Server) postResendVerification(w http.ResponseWriter, r *http.Request) {
+	s.proxyAccount(w, r, "письмо с подтверждением", s.account.ResendVerification)
+}
+
+// proxyAccount передаёт запрос Читавуку и возвращает его ответ как есть.
+//
+// Как есть — вплоть до текста ошибки: «Аккаунт с такой почтой уже есть» и
+// «Подтвердите почту по ссылке из письма» написаны там для человека, и
+// переписывать их здесь значит однажды разойтись с тем, что человек увидит на
+// сайте того же аккаунта.
+//
+// Пятисотые заменяются на 502: чужая внутренняя поломка для нашего клиента —
+// это неисправность вышестоящего сервиса, а не наша.
+func (s *Server) proxyAccount(
+	w http.ResponseWriter,
+	r *http.Request,
+	what string,
+	forward func(context.Context, []byte) (account.Result, error),
+) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 16<<10))
 	if err != nil || !json.Valid(body) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "запрос не разобран"})
 		return
 	}
-	result, err := s.account.Login(r.Context(), body)
+	result, err := forward(r.Context(), body)
+	if errors.Is(err, account.ErrNotConfigured) {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{
+			"error": what + " на этом сервере не настроен",
+		})
+		return
+	}
 	if err != nil {
-		s.log.Warn("вход через Читавук недоступен", "error", err)
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "вход сейчас недоступен"})
+		s.log.Warn("Читавук недоступен", "что", what, "error", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": what + " сейчас недоступен",
+		})
 		return
 	}
 	status := result.Status
@@ -247,6 +301,10 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		// которая всегда отвечает ошибкой, хуже её отсутствия.
 		"ocr":        s.ocr.Configured(),
 		"dictionary": s.dictionary.Configured(),
+		// По этим двум клиент решает, показывать ли «Создать аккаунт» и
+		// «Выслать письмо ещё раз».
+		"signIn":   s.account.Configured(),
+		"register": s.account.CanRegister(),
 	})
 }
 

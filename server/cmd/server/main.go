@@ -64,7 +64,12 @@ func run() error {
 		// контекстного перевода. Знать об этом на старте полезно.
 		log.Warn("DEEPL_API_KEY не задан — контекстный перевод отключён")
 	}
-	accountService := account.New(cfg.CitavukLoginURL, cfg.RequestTimeout)
+	accountService := account.New(
+		cfg.CitavukLoginURL,
+		cfg.CitavukRegisterURL,
+		cfg.CitavukResendURL,
+		cfg.RequestTimeout,
+	)
 	discoveryService := discovery.New(
 		db,
 		discovery.NewAtomSource(
