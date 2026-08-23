@@ -9,12 +9,17 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/wolfy/server/internal/account"
 	"github.com/wolfy/server/internal/auth"
+	"github.com/wolfy/server/internal/discovery"
 	"github.com/wolfy/server/internal/library"
 	"github.com/wolfy/server/internal/ocr"
 	"github.com/wolfy/server/internal/store"
@@ -28,7 +33,12 @@ type Server struct {
 	translate *translate.Service
 	library   *library.Service
 	ocr       *ocr.Service
+	account   *account.Service
+	discovery *discovery.Service
 	log       *slog.Logger
+
+	// Ограничитель для открытого перевода — см. Handler.
+	translateLimit *rateLimiter
 }
 
 func NewServer(
@@ -37,9 +47,19 @@ func NewServer(
 	t *translate.Service,
 	l *library.Service,
 	o *ocr.Service,
+	a *account.Service,
+	d *discovery.Service,
 	log *slog.Logger,
 ) *Server {
-	return &Server{store: s, verifier: v, translate: t, library: l, ocr: o, log: log}
+	return &Server{
+		store: s, verifier: v, translate: t, library: l, ocr: o,
+		account: a, discovery: d, log: log,
+		// Двести переводов залпом и один в секунду сверху: страница книги
+		// редко даёт больше двухсот незнакомых слов, а секунда — это дольше,
+		// чем читатель успевает выбрать следующее слово, но много быстрее,
+		// чем перебор словаря скриптом.
+		translateLimit: newRateLimiter(200, 1, 30*time.Minute),
+	}
 }
 
 // Handler собирает маршруты сервиса.
@@ -49,17 +69,157 @@ func (s *Server) Handler() http.Handler {
 	// Проверка живости. Без авторизации намеренно: её дёргает балансировщик,
 	// у которого токена нет и быть не может.
 	mux.HandleFunc("GET /healthz", s.health)
+	// Вход публичный по определению: токен как раз получается этим запросом.
+	mux.HandleFunc("POST /v1/auth/login", s.postLogin)
+
+	// Перевод — без аккаунта. Читатель, поставивший приложение, должен
+	// получить перевод в первую же минуту: без него книга на чужом языке
+	// остаётся просто книгой на чужом языке, а требовать регистрацию за то,
+	// ради чего приложение и ставят, — верный способ его удалить.
+	//
+	// За каждым запросом стоит платный сервис, поэтому маршрут открыт не
+	// настежь, а под ограничителем частоты. Он пропускает залп — трудная
+	// страница разбирается подряд — и останавливает того, кто гонит через
+	// него книгу целиком.
+	mux.Handle("POST /v1/translate", s.translateLimit.withRateLimit(
+		http.HandlerFunc(s.postTranslate),
+	))
 
 	// Всё остальное — только для вошедших.
 	private := http.NewServeMux()
 	private.HandleFunc("GET /v1/me", s.me)
-	private.HandleFunc("POST /v1/translate", s.postTranslate)
 	private.HandleFunc("POST /v1/sync", s.postSync)
 	private.HandleFunc("POST /v1/ocr", s.postOCR)
+	private.HandleFunc("GET /v1/discovery/profile", s.getDiscoveryProfile)
+	private.HandleFunc("PUT /v1/discovery/profile", s.putDiscoveryProfile)
+	private.HandleFunc("GET /v1/discovery/feed", s.getDiscoveryFeed)
+	private.HandleFunc("POST /v1/discovery/items/{itemId}/like", s.postDiscoveryLike)
+	private.HandleFunc("POST /v1/discovery/items/{itemId}/add", s.postDiscoveryAdd)
 
 	mux.Handle("/v1/", s.verifier.Middleware(private))
 
 	return s.withLogging(mux)
+}
+
+func (s *Server) postLogin(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 16<<10))
+	if err != nil || !json.Valid(body) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "запрос не разобран"})
+		return
+	}
+	result, err := s.account.Login(r.Context(), body)
+	if err != nil {
+		s.log.Warn("вход через Читавук недоступен", "error", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "вход сейчас недоступен"})
+		return
+	}
+	status := result.Status
+	if status >= 500 {
+		status = http.StatusBadGateway
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_, _ = w.Write(result.Body)
+}
+
+func (s *Server) getDiscoveryProfile(w http.ResponseWriter, r *http.Request) {
+	user, ok := auth.FromContext(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "нужен вход"})
+		return
+	}
+	profile, err := s.discovery.Profile(r.Context(), user.ID)
+	if err != nil {
+		s.log.Error("профиль рекомендаций не прочитан", "error", err, "user", user.ID)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "профиль недоступен"})
+		return
+	}
+	writeJSON(w, http.StatusOK, profile)
+}
+
+func (s *Server) putDiscoveryProfile(w http.ResponseWriter, r *http.Request) {
+	user, ok := auth.FromContext(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "нужен вход"})
+		return
+	}
+	var profile store.DiscoveryProfile
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&profile); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "профиль не разобран"})
+		return
+	}
+	if err := s.discovery.SaveProfile(r.Context(), user.ID, profile); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	profile, _ = s.discovery.Profile(r.Context(), user.ID)
+	writeJSON(w, http.StatusOK, profile)
+}
+
+func (s *Server) getDiscoveryFeed(w http.ResponseWriter, r *http.Request) {
+	user, ok := auth.FromContext(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "нужен вход"})
+		return
+	}
+	cursor, _ := strconv.Atoi(r.URL.Query().Get("cursor"))
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	page, err := s.discovery.Feed(r.Context(), user.ID, cursor, limit)
+	switch {
+	case errors.Is(err, discovery.ErrOnboarding):
+		writeJSON(w, http.StatusPreconditionRequired, map[string]string{"error": err.Error()})
+	case err != nil:
+		s.log.Warn("лента недоступна", "error", err, "user", user.ID)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "лента сейчас недоступна"})
+	default:
+		writeJSON(w, http.StatusOK, page)
+	}
+}
+
+func (s *Server) postDiscoveryLike(w http.ResponseWriter, r *http.Request) {
+	user, ok := auth.FromContext(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "нужен вход"})
+		return
+	}
+	if err := s.discovery.Like(r.Context(), user.ID, r.PathValue("itemId")); err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, discovery.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		writeJSON(w, status, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"liked": true})
+}
+
+func (s *Server) postDiscoveryAdd(w http.ResponseWriter, r *http.Request) {
+	user, ok := auth.FromContext(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "нужен вход"})
+		return
+	}
+	download, err := s.discovery.DownloadAndAdd(r.Context(), user.ID, r.PathValue("itemId"))
+	switch {
+	case errors.Is(err, discovery.ErrNotFound):
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	case errors.Is(err, discovery.ErrTooLarge):
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": err.Error()})
+		return
+	case err != nil:
+		s.log.Warn("книга не загрузилась", "error", err, "item", r.PathValue("itemId"))
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "книга сейчас не загружается"})
+		return
+	}
+	w.Header().Set("Content-Type", "application/epub+zip")
+	w.Header().Set("Content-Length", strconv.Itoa(len(download.Bytes)))
+	w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.PathEscape(download.FileName))
+	w.Header().Set("X-Wolfy-Title", url.QueryEscape(download.Item.Title))
+	w.Header().Set("X-Wolfy-Author", url.QueryEscape(download.Item.Author))
+	w.Header().Set("X-Wolfy-Source", url.QueryEscape(download.Item.ID))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(download.Bytes)
 }
 
 // health отвечает, готов ли сервис принимать запросы.
