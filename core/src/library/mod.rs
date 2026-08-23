@@ -11,6 +11,8 @@
 
 pub mod book;
 pub mod merge;
+pub mod ops;
 
 pub use book::{LibraryBook, LibraryState, Progress, Shelf};
 pub use merge::{apply_server, migrate, Sent};
+pub use ops::AddPlan;
