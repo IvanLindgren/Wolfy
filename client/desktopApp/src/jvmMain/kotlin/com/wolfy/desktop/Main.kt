@@ -1,5 +1,7 @@
 package com.wolfy.desktop
 
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
@@ -7,6 +9,7 @@ import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import com.wolfy.ui.WolfyApplication
 import java.awt.GraphicsEnvironment
+import java.awt.SplashScreen
 
 fun main() = application {
     val state = rememberWindowState(size = defaultWindowSize())
@@ -16,6 +19,8 @@ fun main() = application {
         title = "Wolfy",
         state = state,
     ) {
+        LaunchedEffect(Unit) { hideSplash() }
+
         // Адрес сервиса и токен берутся из окружения: в разработке они разные
         // у каждого, а зашивать их в код значит однажды выложить чужой токен
         // в репозиторий.
@@ -24,6 +29,24 @@ fun main() = application {
             sessionToken = System.getenv("WOLFY_SESSION_TOKEN"),
         )
     }
+}
+
+/**
+ * Убирает заставку, которую показал запускатель JVM.
+ *
+ * Именно после первого кадра, а не после первой композиции. Композиция
+ * заканчивается раньше, чем окно нарисовано, и заставка, снятая по ней,
+ * оставляет читателя перед пустым прямоугольником — то есть возвращает ровно
+ * ту дыру, ради которой её и заводили.
+ *
+ * Если заставки не было — запуск из исходников, чужая сборка, — метод
+ * возвращает `null`, и делать ничего не нужно. `close` на уже закрытой
+ * заставке бросает исключение, поэтому вызов обёрнут: снять её могло и само
+ * окно.
+ */
+private suspend fun hideSplash() {
+    withFrameNanos { }
+    runCatching { SplashScreen.getSplashScreen()?.close() }
 }
 
 /**

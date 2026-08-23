@@ -69,6 +69,12 @@ val copyCoreLibrary by tasks.registering(Copy::class) {
         include("wolfy_dictionary.tsv.gz")
     }
     from(rootProject.layout.projectDirectory.file("../THIRD_PARTY_NOTICES.md"))
+    // Заставка. Её рисует tools/build_splash.py из тех же стикера, шрифта и
+    // палитры, что и приложение, — чтобы через две секунды окно не оказалось
+    // непохожим на то, что читатель уже увидел.
+    from(project.file("icons")) {
+        include("splash.png", "splash@2x.png")
+    }
     into(coreLibFiles)
 }
 
@@ -107,6 +113,20 @@ tasks.matching { it.name == "run" || it.name == "runRelease" }.configureEach {
 compose.desktop {
     application {
         mainClass = "com.wolfy.desktop.MainKt"
+
+        // Заставка.
+        //
+        // От щелчка по значку до окна проходит около двух секунд, и быстрее
+        // JVM со Skia не стартует. Но всё это время на экране не происходит
+        // ровно ничего, и читатель щёлкает по значку второй раз. Заставку
+        // рисует сам запускатель JVM, до загрузки первого класса приложения,
+        // — она появляется за десятую долю секунды.
+        //
+        // `$APPDIR` подставляет запускатель установленного приложения; при
+        // запуске из исходников подстановки не происходит, файла по такому
+        // пути нет, и JVM молча обходится без заставки. Разработчику она и не
+        // нужна, а прятать довод за условием — лишняя развилка в сборке.
+        jvmArgs += "-splash:\$APPDIR/resources/splash.png"
 
         // JNA находит C-функции динамически. Обычный shrink/optimize не видит
         // эти обращения и удаляет в release-сборке необходимые методы самой
