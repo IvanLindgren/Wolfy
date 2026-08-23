@@ -1,9 +1,12 @@
 package com.wolfy.ui.card
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
@@ -14,13 +17,13 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -28,17 +31,26 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.wolfy.ffi.Finding
 import com.wolfy.theme.WolfyTheme
 import com.wolfy.widgets.CefrBadge
-import com.wolfy.widgets.Rule
 import com.wolfy.widgets.SectionLabel
+import com.wolfy.widgets.SentenceGraph
+import com.wolfy.widgets.WolfyCompanion
 import com.wolfy.widgets.pressable
+import kotlinx.coroutines.delay
 
 /**
  * Карточка слова, всплывающая снизу.
@@ -121,6 +133,7 @@ private fun CardBody(
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
     val typography = WolfyTheme.typography
+    var mode by remember(state.token.start, state.context) { mutableStateOf(CardMode.Word) }
 
     Column(
         Modifier
@@ -149,41 +162,266 @@ private fun CardBody(
         ) {
             Header(state)
             Translation(state)
-
-            if (state.analysis.facts.isNotEmpty()) {
-                Rule()
-                SectionLabel("Разбор слова")
-                state.analysis.facts.forEach { fact ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(spacing.small)) {
-                        Text(
-                            text = fact.label,
-                            style = typography.caption,
-                            color = colors.inkMuted,
-                        )
-                        Text(
-                            text = fact.value,
-                            style = typography.body,
-                            color = colors.ink,
-                        )
-                    }
+            CardModeTabs(mode = mode, onMode = { mode = it })
+            AnimatedContent(targetState = mode, label = "card mode") { selected ->
+                when (selected) {
+                    CardMode.Word -> WordDetails(state = state, onSave = onSave)
+                    CardMode.Phrase -> PhraseDetails(
+                        state = state,
+                        onSave = onSavePhrase,
+                        onOpenRule = onOpenRule,
+                    )
                 }
             }
-
-            if (state.grammar.isNotEmpty()) {
-                Rule()
-                SectionLabel("Грамматика предложения")
-                state.grammar.forEach { finding ->
-                    GrammarNote(finding, onOpen = { onOpenRule(finding.rule) })
-                }
-            }
-
-            Rule()
-            SectionLabel("Частотность в живой речи")
-            FrequencyBar(state.analysis.zipf)
-
-            SaveButton(saved = state.saved, onSave = onSave)
-            PhraseButton(state = state, onSave = onSavePhrase)
         }
+    }
+}
+
+private enum class CardMode { Word, Phrase }
+
+@Composable
+private fun CardModeTabs(mode: CardMode, onMode: (CardMode) -> Unit) {
+    val colors = WolfyTheme.colors
+    val spacing = WolfyTheme.spacing
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(colors.paper, RoundedCornerShape(spacing.huge))
+            .padding(spacing.tight),
+    ) {
+        listOf(CardMode.Word to "Слово", CardMode.Phrase to "Фраза").forEach { (item, title) ->
+            Text(
+                text = title,
+                style = WolfyTheme.typography.button,
+                color = if (mode == item) colors.onInverse else colors.inkMuted,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .weight(1f)
+                    .background(
+                        if (mode == item) colors.inverse else colors.paper,
+                        RoundedCornerShape(spacing.huge),
+                    )
+                    .pressable(onClick = { onMode(item) })
+                    .padding(vertical = spacing.small),
+            )
+        }
+    }
+}
+
+@Composable
+private fun WordDetails(state: WordCardState, onSave: () -> Unit) {
+    val colors = WolfyTheme.colors
+    val spacing = WolfyTheme.spacing
+    val typography = WolfyTheme.typography
+
+    Column(verticalArrangement = Arrangement.spacedBy(spacing.medium)) {
+        Appear(0) { Facts(state) }
+        Appear(1) { Frequency(state.analysis.zipf) }
+        Appear(2) { WolfyLexicalTip(state) }
+        Appear(3) { SaveButton(saved = state.saved, onSave = onSave) }
+    }
+}
+
+/**
+ * Свойства слова плитками, а не списком.
+ *
+ * Раньше здесь стояло шесть строк «подпись — значение» одинакового вида:
+ * лемма, части речи, форма, уровень, длина, распространённость. Одинаковый
+ * вид и означал, что всё одинаково важно, — а это неправда. Уровень уже
+ * написан в углу карточки, лемма — в шапке, а «7 букв» и «неправильная
+ * форма» это вещи совершенно разного веса.
+ *
+ * Плитка снимает подпись вовсе: «2 слога» не нуждается в слове «длина»
+ * перед собой. А что осталось без значения, то не показывается: строка
+ * «Форма: начальная» сообщает ровно ничего.
+ */
+@Composable
+private fun Facts(state: WordCardState) {
+    val spacing = WolfyTheme.spacing
+    val analysis = state.analysis
+    val primary = analysis.primaryPos
+
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(spacing.small),
+        verticalArrangement = Arrangement.spacedBy(spacing.small),
+    ) {
+        // Вторая часть речи — не мелочь: слово, которое бывает и глаголом, и
+        // существительным, читается неверно чаще всего именно поэтому.
+        analysis.pos.filter { it != primary }.forEach { PosPill(it) }
+
+        if (analysis.form.isNotBlank() && analysis.form != "base") {
+            Chip(formTitle(analysis.form))
+        }
+        val syllables = syllableCount(analysis.lemma)
+        if (syllables > 0) Chip(plural(syllables, "слог", "слога", "слогов"))
+
+        analysis.facts.forEach { fact -> Chip(fact.value, label = fact.label) }
+    }
+}
+
+/**
+ * Плитка: короткое свойство без подписи-заголовка.
+ *
+ * Подпись бывает нужна — «прошедшее время» объясняет себя само, а «read»
+ * без слов «третья форма» рядом непонятно, — но тогда она стоит внутри
+ * плитки и приглушена, а не задаёт ей ширину.
+ */
+@Composable
+private fun Chip(
+    text: String,
+    label: String? = null,
+    tint: Color? = null,
+) {
+    val colors = WolfyTheme.colors
+    val spacing = WolfyTheme.spacing
+
+    Row(
+        Modifier
+            .background(
+                tint?.copy(alpha = TINT) ?: colors.paper,
+                RoundedCornerShape(spacing.small),
+            )
+            .padding(horizontal = spacing.small, vertical = spacing.tight),
+        horizontalArrangement = Arrangement.spacedBy(spacing.hair),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (label != null) {
+            Text(label, style = WolfyTheme.typography.caption, color = colors.inkMuted)
+        }
+        Text(
+            text = text,
+            style = WolfyTheme.typography.caption,
+            color = tint ?: colors.ink,
+        )
+    }
+}
+
+/** Часть речи цветом и словом сразу. */
+@Composable
+private fun PosPill(tag: String) {
+    // Служебным частям речи своего цвета не досталось намеренно: их пять
+    // видов, они встречаются в каждой строке, и раскрашенная страница
+    // перестала бы читаться. Серый — это «служебное слово».
+    val tint = WolfyTheme.colors.partsOfSpeech.forTag(tag) ?: WolfyTheme.colors.inkMuted
+    Chip(text = posTitle(tag), tint = tint)
+}
+
+/**
+ * Появление с задержкой.
+ *
+ * Карточка выезжала собранной целиком, и взгляду некуда было сесть первым:
+ * слово, перевод и шесть строк разбора приезжали одновременно и весили
+ * одинаково. Здесь они приходят по очереди — сначала главное, — и порядок
+ * чтения задаётся движением, а не размером шрифта.
+ *
+ * Шаг маленький: сорок миллисекунд между блоками читаются как «оживает», а
+ * не как «подтормаживает». Всё вместе укладывается в треть секунды.
+ */
+@Composable
+private fun Appear(order: Int, content: @Composable () -> Unit) {
+    val shown = remember { Animatable(0f) }
+    LaunchedEffect(Unit) {
+        delay(order * STEP)
+        shown.animateTo(1f, tween(durationMillis = 260))
+    }
+    Box(
+        Modifier.graphicsLayer {
+            alpha = shown.value
+            // Подъём снизу, а не падение сверху: содержимое приходит из-под
+            // края карточки, как продолжение её собственного выезда.
+            translationY = (1f - shown.value) * RISE.toPx()
+        },
+    ) {
+        content()
+    }
+}
+
+/** Шаг между блоками при появлении. */
+private const val STEP = 40L
+
+/** Насколько блок приподнят перед тем, как встать на место. */
+private val RISE = 10.dp
+
+/** Насколько разбавлен цвет части речи под плиткой. */
+private const val TINT = 0.14f
+
+/** «2 слога», «5 слогов» — иначе выходит «5 слог». */
+private fun plural(count: Int, one: String, few: String, many: String): String {
+    val tens = count % 100
+    val ones = count % 10
+    val word = when {
+        tens in 11..14 -> many
+        ones == 1 -> one
+        ones in 2..4 -> few
+        else -> many
+    }
+    return "$count $word"
+}
+
+@Composable
+private fun PhraseDetails(
+    state: WordCardState,
+    onSave: () -> Unit,
+    onOpenRule: (String) -> Unit,
+) {
+    val spacing = WolfyTheme.spacing
+    Column(verticalArrangement = Arrangement.spacedBy(spacing.medium)) {
+        SectionLabel("Связи слов в предложении")
+        if (state.graphLinks.isEmpty()) {
+            Text(
+                "В этой фразе нет однозначных связей, которые можно показать без догадки.",
+                style = WolfyTheme.typography.caption,
+                color = WolfyTheme.colors.inkMuted,
+            )
+        } else {
+            SentenceGraph(words = state.graphWords, links = state.graphLinks)
+        }
+
+        if (state.grammar.isNotEmpty()) {
+            SectionLabel("Грамматика фразы")
+            state.grammar.forEach { finding ->
+                GrammarNote(finding, onOpen = { onOpenRule(finding.rule) })
+            }
+        }
+        WolfyPhraseTip(state)
+        PhraseButton(state = state, onSave = onSave)
+    }
+}
+
+@Composable
+private fun WolfyLexicalTip(state: WordCardState) {
+    val tip = when {
+        !state.analysis.known -> "Вульфи: слово редкое или авторское. Сначала проверь контекст, а затем перевод."
+        state.analysis.form == "irregular" -> "Вульфи: это неправильная форма. Запоминай её вместе с леммой."
+        state.analysis.zipf >= 5f -> "Вульфи: частое слово. Полезнее запомнить его в этой фразе, чем отдельно."
+        else -> "Вульфи: слово книжное. Сохрани пример, если оборот хочется использовать самому."
+    }
+    WolfyTip(tip)
+}
+
+@Composable
+private fun WolfyPhraseTip(state: WordCardState) {
+    val tip = if (state.grammar.isEmpty()) {
+        "Вульфи: здесь важнее порядок и смысл слов, чем отдельное грамматическое правило."
+    } else {
+        "Вульфи: цвет показывает часть речи, а скобка — слова, которые работают вместе."
+    }
+    WolfyTip(tip)
+}
+
+@Composable
+private fun WolfyTip(text: String) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(WolfyTheme.spacing.small),
+    ) {
+        WolfyCompanion(size = 64.dp)
+        Text(
+            text,
+            style = WolfyTheme.typography.caption,
+            color = WolfyTheme.colors.inkMuted,
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 
@@ -204,47 +442,27 @@ private fun Header(state: WordCardState) {
                 color = colors.ink,
             )
             val tag = state.analysis.primaryPos
-            val pos = tag?.let(::posTitle)
-            val subtitle = when {
-                pos == null -> "нет в словаре"
-                state.analysis.lemma == state.analysis.surface.lowercase() -> pos
-                else -> "$pos · от «${state.analysis.lemma}»"
-            }
             Row(
                 horizontalArrangement = Arrangement.spacedBy(WolfyTheme.spacing.small),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // Метка цвета части речи — та же, что красит грамматику на
-                // странице. Читатель запоминает цвет раньше, чем название:
-                // «синее — существительное» усваивается с третьего раза.
-                tag?.let { PosMark(it) }
-                Text(text = subtitle, style = typography.body, color = colors.inkMuted)
+                // Цвет части речи — тот же, которым слово покрашено на
+                // странице, и здесь он назван вслух. Читатель запоминает цвет
+                // раньше, чем название: «синее — существительное» усваивается
+                // с третьего раза, но только если цвет и слово встретились
+                // рядом. Квадратик в восемь точек такой встречи не создавал.
+                if (tag != null) {
+                    PosPill(tag)
+                } else {
+                    Chip("нет в словаре")
+                }
+                if (state.analysis.lemma != state.analysis.surface.lowercase()) {
+                    Chip("от «" + state.analysis.lemma + "»")
+                }
             }
         }
         CefrBadge(state.analysis.cefr)
     }
-}
-
-/** Квадратик цвета части речи. */
-@Composable
-private fun PosMark(tag: String) {
-    val palette = WolfyTheme.colors.partsOfSpeech
-    val color = when (tag) {
-        "NOUN" -> palette.noun
-        "VERB" -> palette.verb
-        "ADJ" -> palette.adjective
-        "ADV" -> palette.adverb
-        "PRON" -> palette.pronoun
-        // Служебным частям речи своего цвета не досталось намеренно: их пять
-        // видов, они встречаются в каждой строке, и раскрашенная страница
-        // перестала бы читаться. Серый — это «служебное слово».
-        else -> WolfyTheme.colors.inkMuted
-    }
-    Box(
-        Modifier
-            .size(WolfyTheme.spacing.small)
-            .background(color, RoundedCornerShape(WolfyTheme.spacing.hair)),
-    )
 }
 
 /**
@@ -265,7 +483,11 @@ private fun Translation(state: WordCardState) {
             color = colors.inkMuted,
         )
 
-        is TranslationState.Ready -> Column(
+        // Перевод — единственное, чего читатель ждёт, и приходит он позже
+        // всего остального. Проявление отмечает этот приход: без него строка
+        // просто возникает, и половину раз читатель не замечает, что она
+        // сменила «Перевод загружается…».
+        is TranslationState.Ready -> Appear(0) { Column(
             verticalArrangement = Arrangement.spacedBy(WolfyTheme.spacing.tight),
         ) {
             Text(
@@ -280,7 +502,7 @@ private fun Translation(state: WordCardState) {
                     color = colors.inkMuted,
                 )
             }
-        }
+        } }
 
         is TranslationState.Failed -> Text(
             text = translation.message,
@@ -327,43 +549,77 @@ private fun GrammarNote(finding: Finding, onOpen: () -> Unit) {
         // книги. Захочет разобраться — справочник объяснит то же самое, но с
         // примерами и советом, когда правило уместно.
         Text(
-            text = "подробнее в справочнике →",
+            text = "Подробнее в справочнике",
             style = typography.caption,
             color = colors.accent,
         )
     }
 }
 
+/**
+ * Насколько часто слово встречается в живой речи.
+ *
+ * Цвет здесь работает, а не украшает. Редкое слово и частое требуют разного:
+ * первое стоит сохранить, второе — узнать в лицо и идти дальше. Полоска
+ * одного цвета этого не говорила, и читателю приходилось считать проценты
+ * глазами.
+ *
+ * Заполняется движением от нуля, а не появляется готовой: глаз следит за
+ * растущей полосой и успевает заметить, где она остановилась, — а вот
+ * готовую он считывает как фон.
+ */
 @Composable
-private fun FrequencyBar(zipf: Float) {
+private fun Frequency(zipf: Float) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
     // Шкала Zipf уже логарифмическая и потому линейна для восприятия:
     // 7 — «the», 0 — слово, которого в корпусе нет вовсе.
     val fraction = (zipf / 7f).coerceIn(0f, 1f)
 
-    Column(Modifier.fillMaxWidth()) {
+    // Цвет здесь работает, а не украшает: редкое слово и частое требуют
+    // разного. Первое стоит сохранить, второе — узнать в лицо и идти дальше.
+    val tint = when {
+        zipf >= 5f -> colors.partsOfSpeech.adjective
+        zipf >= 3f -> colors.gold
+        zipf > 0f -> colors.accent
+        else -> colors.inkMuted
+    }
+
+    // Полоска заполняется от нуля, а не появляется готовой: глаз следит за
+    // растущей полосой и успевает заметить, где она остановилась, а готовую
+    // считывает как фон.
+    val grown = remember { Animatable(0f) }
+    LaunchedEffect(fraction) {
+        grown.animateTo(fraction, tween(durationMillis = 520))
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(spacing.small)) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            SectionLabel("Как часто встречается")
+            // Само число Zipf читателю посреди книги ни о чём: «6.2» это
+            // жаргон корпусной лингвистики. Слово — говорит.
+            Text(
+                text = frequencyTitle(zipf),
+                style = WolfyTheme.typography.caption,
+                color = tint,
+            )
+        }
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(spacing.tight)
-                .background(colors.rule, CircleShape),
+                .height(spacing.small)
+                .background(colors.paper, CircleShape),
         ) {
             Box(
                 Modifier
-                    .fillMaxWidth(fraction)
-                    .height(spacing.tight)
-                    .background(colors.accent, CircleShape),
+                    .fillMaxWidth(grown.value)
+                    .height(spacing.small)
+                    .background(tint, CircleShape),
             )
-        }
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(top = spacing.tight),
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Text("редко", style = WolfyTheme.typography.caption, color = colors.inkMuted)
-            Text("часто", style = WolfyTheme.typography.caption, color = colors.inkMuted)
         }
     }
 }
@@ -386,7 +642,7 @@ private fun PhraseButton(state: WordCardState, onSave: () -> Unit) {
     if (ready.isBlank()) return
 
     Text(
-        text = if (state.phraseSaved) "Фраза в колоде ✓" else "+ Сохранить фразу целиком",
+        text = if (state.phraseSaved) "Фраза уже в колоде" else "Сохранить фразу целиком",
         style = WolfyTheme.typography.caption,
         color = if (state.phraseSaved) colors.inkMuted else colors.accent,
         textAlign = TextAlign.Center,
@@ -417,7 +673,7 @@ private fun SaveButton(saved: Boolean, onSave: () -> Unit) {
             .padding(vertical = spacing.medium),
     ) {
         Text(
-            text = if (saved) "В колоде книги ✓ · убрать" else "+ В колоду книги",
+            text = if (saved) "В колоде книги · убрать" else "В колоду книги",
             style = WolfyTheme.typography.button,
             color = if (saved) colors.inkMuted else colors.onInverse,
             textAlign = TextAlign.Center,
@@ -438,4 +694,35 @@ private fun posTitle(tag: String): String = when (tag) {
     "PART" -> "частица"
     "NUM" -> "числительное"
     else -> tag
+}
+
+private fun formTitle(form: String): String = when (form) {
+    "lemma" -> "словарная"
+    "regular" -> "регулярная форма"
+    "irregular" -> "неправильная форма"
+    else -> "неизвестная"
+}
+
+private fun frequencyTitle(zipf: Float): String = when {
+    zipf >= 6f -> "очень частое"
+    zipf >= 5f -> "частое"
+    zipf >= 4f -> "обычное"
+    zipf > 0f -> "редкое"
+    else -> "нет в корпусе"
+}
+
+/** Достаточная для учебной подсказки оценка английских слогов. */
+private fun syllableCount(word: String): Int {
+    val normalized = word.lowercase().filter { it in 'a'..'z' }
+    if (normalized.isEmpty()) return 0
+    val vowels = "aeiouy"
+    var count = 0
+    var previousWasVowel = false
+    normalized.forEach { char ->
+        val vowel = char in vowels
+        if (vowel && !previousWasVowel) count += 1
+        previousWasVowel = vowel
+    }
+    if (normalized.endsWith('e') && count > 1 && !normalized.endsWith("le")) count -= 1
+    return count.coerceAtLeast(1)
 }
