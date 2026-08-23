@@ -14,13 +14,6 @@ use std::path::Path;
 use crate::error::{CoreError, Result};
 use crate::parser::{Block, Book, Chapter, ChapterInfo, Metadata};
 
-/// Сколько страниц кладём в одну главу.
-///
-/// Разбивка условная: PDF не размечает главы, а листать книгу одним куском в
-/// сотни страниц читалке тяжело. Двадцать страниц — примерно печатный лист,
-/// удобный шаг и для прогресса чтения, и для фоновой загрузки.
-const PAGES_PER_CHAPTER: usize = 20;
-
 /// Открытая книга PDF.
 pub struct PdfBook {
     metadata: Metadata,
@@ -30,10 +23,10 @@ pub struct PdfBook {
 
 impl PdfBook {
     pub fn open(path: &Path) -> Result<Self> {
-        let text = pdf_extract::extract_text(path)
+        let pages = pdf_extract::extract_text_by_pages(path)
             .map_err(|e| CoreError::Malformed(format!("не удалось извлечь текст из PDF: {e}")))?;
 
-        if text.trim().is_empty() {
+        if pages.iter().all(|page| page.trim().is_empty()) {
             // Скан без текстового слоя. Читалке он бесполезен, но пользователю
             // есть что предложить, и сообщение обязано на это указать.
             return Err(CoreError::Malformed(
@@ -47,7 +40,7 @@ impl PdfBook {
             .and_then(|s| s.to_str())
             .map(str::to_string);
 
-        let chapters = split_pages(&text);
+        let chapters = split_pages(&pages);
         let contents = chapters
             .iter()
             .map(|c| ChapterInfo {
@@ -93,24 +86,15 @@ impl Book for PdfBook {
 }
 
 /// Режет извлечённый текст на главы по страницам.
-fn split_pages(text: &str) -> Vec<Chapter> {
-    // `pdf-extract` разделяет страницы переводом формата.
-    let pages: Vec<&str> = text.split('\u{c}').collect();
-
+fn split_pages(pages: &[String]) -> Vec<Chapter> {
     let mut chapters = Vec::new();
-    for (number, group) in pages.chunks(PAGES_PER_CHAPTER).enumerate() {
-        let mut blocks = Vec::new();
-        for page in group {
-            blocks.extend(page_blocks(page));
-        }
-        if blocks.is_empty() {
-            continue;
-        }
-        let first = number * PAGES_PER_CHAPTER + 1;
-        let last = first + group.len() - 1;
+    for (number, page) in pages.iter().enumerate() {
         chapters.push(Chapter {
-            title: Some(format!("Страницы {first}–{last}")),
-            blocks,
+            title: Some(format!("Страница {}", number + 1)),
+            // Пустая страница остаётся в книге: если её выкинуть, номер в
+            // читалке перестанет совпадать с напечатанной колонцифрой, а
+            // прогресс сдвинется после каждой иллюстрации без текстового слоя.
+            blocks: page_blocks(page),
         });
     }
 
@@ -224,12 +208,26 @@ mod tests {
     }
 
     #[test]
-    fn страницы_группируются_в_главы() {
+    fn каждая_страница_остаётся_отдельной() {
         let pages: Vec<String> = (1..=45).map(|n| format!("Page {n} text here.\n")).collect();
-        let chapters = split_pages(&pages.join("\u{c}"));
+        let chapters = split_pages(&pages);
+
+        assert_eq!(chapters.len(), 45);
+        assert_eq!(chapters[0].title.as_deref(), Some("Страница 1"));
+        assert_eq!(chapters[44].title.as_deref(), Some("Страница 45"));
+    }
+
+    #[test]
+    fn пустая_страница_не_сдвигает_нумерацию() {
+        let pages = vec![
+            "First page.".to_string(),
+            String::new(),
+            "Third page.".to_string(),
+        ];
+        let chapters = split_pages(&pages);
 
         assert_eq!(chapters.len(), 3);
-        assert_eq!(chapters[0].title.as_deref(), Some("Страницы 1–20"));
-        assert_eq!(chapters[2].title.as_deref(), Some("Страницы 41–45"));
+        assert!(chapters[1].blocks.is_empty());
+        assert_eq!(chapters[2].title.as_deref(), Some("Страница 3"));
     }
 }

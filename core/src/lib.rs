@@ -15,11 +15,15 @@
 // упавший тест должен сказать, что именно он ждал.
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
+mod clock;
+pub use clock::{at_local_hour, local_day, local_hour};
+
 mod error;
 pub mod ffi;
 pub mod grammar;
 pub mod lexicon;
 pub mod parser;
+pub mod settings;
 pub mod srs;
 pub mod tagger;
 pub mod tokenizer;

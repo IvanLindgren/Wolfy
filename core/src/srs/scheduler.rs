@@ -2,6 +2,7 @@
 
 use super::card::Card;
 use super::intensity::Intensity;
+use crate::clock::{at_local_hour, local_hour, DAY_MS, MINUTE_MS};
 
 /// Прочность новой карточки.
 pub const FULL_HP: i32 = 100;
@@ -12,10 +13,8 @@ pub const FULL_HP: i32 = 100;
 /// слишком много мучений, выше слишком много лишних показов.
 pub const TARGET_RECALL: f32 = 0.9;
 
-const MINUTE: i64 = 60_000;
+/// Минут в сутках — лесенка сроков задана в минутах.
 const DAY: i64 = 1440;
-const HOUR_MS: i64 = 3_600_000;
-const DAY_MS: i64 = 24 * HOUR_MS;
 
 /// Сроки в минутах.
 ///
@@ -83,7 +82,7 @@ pub fn review(card: &Card, right: bool, intensity: Intensity, ease: f32, now: i6
         next.hp = (card.hp + MISS).min(FULL_HP);
         next.streak = 0;
         next.interval_days = 0;
-        next.due_at = now + RETRY_MINUTES * MINUTE;
+        next.due_at = now + RETRY_MINUTES * MINUTE_MS;
         return next;
     }
 
@@ -94,7 +93,7 @@ pub fn review(card: &Card, right: bool, intensity: Intensity, ease: f32, now: i6
     next.hp = (card.hp - damage(card.streak)).max(0);
     next.streak = streak;
     next.interval_days = (minutes / DAY) as i32;
-    next.due_at = now + minutes * MINUTE;
+    next.due_at = now + minutes * MINUTE_MS;
     next
 }
 
@@ -217,24 +216,6 @@ pub fn waking(at: i64, offset_minutes: i32) -> i64 {
     }
 }
 
-/// Час местного времени, 0..23.
-pub fn local_hour(at: i64, offset_minutes: i32) -> i32 {
-    let local = at + offset_minutes as i64 * MINUTE;
-    local.div_euclid(HOUR_MS).rem_euclid(24) as i32
-}
-
-/// Ближайший наступающий местный час, не раньше `from`.
-pub fn at_local_hour(from: i64, hour: i32, offset_minutes: i32) -> i64 {
-    let offset = offset_minutes as i64 * MINUTE;
-    let local = from + offset;
-    let midnight = local.div_euclid(DAY_MS) * DAY_MS;
-    let mut target = midnight + hour as i64 * HOUR_MS;
-    if target < local {
-        target += DAY_MS;
-    }
-    target - offset
-}
-
 /// Поправка на то, как читатель отвечает на самом деле.
 ///
 /// Расписание рассчитано на девять верных ответов из десяти. Тот, кто
@@ -261,8 +242,7 @@ mod tests {
     use super::*;
 
     const START: i64 = 1_700_000_000_000;
-    const MINUTE_MS: i64 = 60_000;
-    const DAY_LEN: i64 = 24 * 60 * MINUTE_MS;
+    const DAY_LEN: i64 = DAY_MS;
     /// Москва: ядро часовых поясов не знает, пояс приходит числом.
     const MSK: i32 = 180;
 
@@ -437,24 +417,20 @@ mod tests {
         );
     }
 
-    /// Западные пояса — то место, где наивная реализация местного часа врёт.
+    /// Ночь сдвигается на утро, вечер остаётся вечером.
     ///
-    /// Деление отрицательного числа в Rust округляет к нулю, а не вниз, и
-    /// час до полуночи по Гринвичу превращался бы в отрицательный. Тест
-    /// стоит здесь потому, что в Kotlin этого кода не было вовсе: там час
-    /// спрашивали у системы, а ядро считает его само.
+    /// Сама календарная арифметика проверена в [`crate::clock`]; здесь —
+    /// только правило приличного времени, которое поверх неё лежит.
     #[test]
-    fn местный_час_верен_и_к_западу_от_гринвича() {
-        // 1 января 1970, 02:00 UTC.
-        let at = 2 * HOUR_MS;
-        assert_eq!(local_hour(at, 0), 2);
-        // Нью-Йорк: −5 часов, то есть 31 декабря 1969, 21:00 — вчерашний
-        // день и, значит, отрицательное число часов до вычета остатка.
-        assert_eq!(local_hour(at, -300), 21);
-        // Девять вечера читателя не разбудит, и трогать этот срок незачем.
-        assert_eq!(waking(at, -300), at);
+    fn напоминание_не_приходит_ночью() {
+        use crate::clock::HOUR_MS;
 
-        // А вот четыре утра в Нью-Йорке — это девять утра по Гринвичу.
+        // 21:00 в Нью-Йорке: читателя это не разбудит, трогать нечего.
+        let вечер = 2 * HOUR_MS;
+        assert_eq!(local_hour(вечер, -300), 21);
+        assert_eq!(waking(вечер, -300), вечер);
+
+        // А 04:00 там же — это девять утра по Гринвичу, и срок переносится.
         let ночь = 9 * HOUR_MS;
         assert_eq!(local_hour(ночь, -300), 4);
         let утро = waking(ночь, -300);
