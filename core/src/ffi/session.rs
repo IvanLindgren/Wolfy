@@ -51,8 +51,14 @@ pub struct Session {
 /// `now` и `id` приходят снаружи везде, где нужны: своих часов и своей
 /// случайности у ядра нет, и заводить их ради удобства значит потерять
 /// возможность проиграть любую последовательность команд тестом.
+/// `rename_all` переименовывает только имена вариантов, а поля внутри них —
+/// нет; для полей нужен `rename_all_fields`. Без него вариант с полем из двух
+/// слов молча ждёт `within_chapter`, пока клиент шлёт `withinChapter`, и
+/// команда отвергается целиком. Один раз это уже случилось — открытие книги
+/// перестало запоминать страницу, — поэтому правило стоит на перечислении, а
+/// не развешано по вариантам: развешанное однажды забудут.
 #[derive(Debug, Deserialize)]
-#[serde(tag = "op", rename_all = "camelCase")]
+#[serde(tag = "op", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Command {
     /// Решить, заводить ли книгу заново. Ничего не меняет.
     PlanAdd { fingerprint: String },
@@ -79,7 +85,6 @@ pub enum Command {
         within_chapter: f32,
         now: i64,
     },
-    #[serde(rename_all = "camelCase")]
     SaveWord {
         book_id: String,
         surface: String,
@@ -95,7 +100,6 @@ pub enum Command {
         id: String,
         now: i64,
     },
-    #[serde(rename_all = "camelCase")]
     SavePhrase {
         book_id: String,
         sentence: String,
@@ -110,7 +114,6 @@ pub enum Command {
         id: String,
         now: i64,
     },
-    #[serde(rename_all = "camelCase")]
     RemoveWord { book_id: String, lemma: String },
     RemoveBook {
         id: String,
@@ -134,7 +137,6 @@ pub enum Command {
     /// Одной командой, а не двумя, потому что это одно событие. Двумя оно
     /// разъезжалось бы: ответ засчитан в серию, а карточка не пересчитана —
     /// и наоборот.
-    #[serde(rename_all = "camelCase")]
     Review {
         card_id: String,
         right: bool,
@@ -158,17 +160,14 @@ pub enum Command {
         now: i64,
     },
     /// Задание по карточке.
-    #[serde(rename_all = "camelCase")]
     DrillFor { card_id: String },
     /// Задание по правилу, у которого карточки ещё нет.
-    #[serde(rename_all = "camelCase")]
     RuleDrill { rule: String, card_id: String },
     /// Сходятся ли собранный ответ и ожидаемый.
     SameText { assembled: String, expected: String },
     /// Как приклеить снятую страницу к уже снятым.
     AppendedPage { before: String, page: String },
     /// Когда напомнить о повторении.
-    #[serde(rename_all = "camelCase")]
     ReminderAt {
         now: i64,
         #[serde(default)]
@@ -177,7 +176,6 @@ pub enum Command {
     /// Книга, к которой стоит вернуться.
     ContinueReading,
     /// Колода книги.
-    #[serde(rename_all = "camelCase")]
     Deck { book_id: String },
 
     SetTheme {
@@ -201,7 +199,6 @@ pub enum Command {
     /// Что изменено на этом устройстве и ещё не отправлено.
     Pending,
     /// Принять ответ сервера.
-    #[serde(rename_all = "camelCase")]
     ApplyServer {
         cursor: i64,
         #[serde(default)]
@@ -214,7 +211,6 @@ pub enum Command {
         now: i64,
     },
     /// Привести прочитанное состояние к нынешнему виду.
-    #[serde(rename_all = "camelCase")]
     Migrate { fresh_ids: Vec<String> },
 }
 
@@ -237,8 +233,12 @@ pub struct SentDto {
 #[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Outcome {
-    /// Изменилось ли состояние. По нему клиент решает, писать ли на диск.
+    /// Изменилось ли хоть что-нибудь. По нему клиент решает, писать ли на диск.
     pub changed: bool,
+    /// Что именно изменилось — чтобы не переписывать настройки при каждой
+    /// прокрутке страницы и библиотеку при каждой смене темы.
+    pub library_changed: bool,
+    pub settings_changed: bool,
     /// Что делать с добавляемой книгой: `known`, `attach` или `fresh`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plan: Option<String>,
@@ -562,55 +562,37 @@ impl Session {
             Command::SetTheme { theme } => {
                 self.settings.theme = theme;
                 self.settings_dirty = true;
-                Outcome {
-                    changed: true,
-                    ..Outcome::default()
-                }
+                self.done(Outcome::default())
             }
 
             Command::SetFontScale { scale } => {
                 self.settings = self.settings.with_font_scale(scale);
                 self.settings_dirty = true;
-                Outcome {
-                    changed: true,
-                    ..Outcome::default()
-                }
+                self.done(Outcome::default())
             }
 
             Command::SetLineScale { scale } => {
                 self.settings = self.settings.with_line_scale(scale);
                 self.settings_dirty = true;
-                Outcome {
-                    changed: true,
-                    ..Outcome::default()
-                }
+                self.done(Outcome::default())
             }
 
             Command::SetIntensity { intensity } => {
                 self.settings.intensity = intensity;
                 self.settings_dirty = true;
-                Outcome {
-                    changed: true,
-                    ..Outcome::default()
-                }
+                self.done(Outcome::default())
             }
 
             Command::MarkDemoAdded => {
                 self.settings.demo_added = true;
                 self.settings_dirty = true;
-                Outcome {
-                    changed: true,
-                    ..Outcome::default()
-                }
+                self.done(Outcome::default())
             }
 
             Command::ReplaceSettings { settings } => {
                 self.settings = self.settings.replaced_by(&settings);
                 self.settings_dirty = true;
-                Outcome {
-                    changed: true,
-                    ..Outcome::default()
-                }
+                self.done(Outcome::default())
             }
 
             Command::Pending => {
@@ -668,6 +650,8 @@ impl Session {
     fn done(&self, outcome: Outcome) -> Outcome {
         Outcome {
             changed: self.library_dirty || self.settings_dirty,
+            library_changed: self.library_dirty,
+            settings_changed: self.settings_dirty,
             ..outcome
         }
     }
@@ -849,5 +833,96 @@ mod tests {
         assert_eq!(снова.library.books[0].title, "Гэтсби");
         assert_eq!(снова.settings.theme, "Oled");
         assert!(!снова.library_dirty, "свежепрочитанное просится на запись");
+    }
+
+    /// Каждая команда, которую шлёт клиент, — ровно в том написании.
+    ///
+    /// Список полный намеренно. Разбор команды идёт по одному правилу на всё
+    /// перечисление, но правило это невидимое: поле из двух слов, названное в
+    /// ядре `within_chapter`, молча не совпадёт с `withinChapter` клиента, и
+    /// команда будет отвергнута целиком. Один раз так и вышло — открытие
+    /// книги перестало запоминать страницу.
+    ///
+    /// Поэтому здесь не выборка, а перечень: новая команда без строки в этом
+    /// списке уронит тест на пересчёте, а не у читателя.
+    #[test]
+    fn клиентские_команды_разбираются_все() {
+        let команды: Vec<&str> = vec![
+            r#"{"op":"planAdd","fingerprint":"abc"}"#,
+            r#"{"op":"addBook","book":{"id":"b1","title":"Гэтсби","addedAt":1}}"#,
+            r#"{"op":"attachFile","id":"b1","path":"books/g.epub","fingerprint":"abc"}"#,
+            r#"{"op":"describe","id":"b1","title":"Гэтсби","author":null,"chapters":9}"#,
+            r#"{"op":"rememberProgress","id":"b1","chapter":3,"withinChapter":0.4,"now":1}"#,
+            r#"{"op":"saveWord","bookId":"b1","surface":"libraries","lemma":"library",
+                "translation":"библиотека","context":"","pos":"","cefr":"","id":"c1","now":1}"#,
+            r#"{"op":"savePhrase","bookId":"b1","sentence":"She left.","translation":"",
+                "id":"c2","now":1}"#,
+            r#"{"op":"ruleCard","rule":"present-perfect","title":"Present Perfect",
+                "id":"c3","now":1}"#,
+            r#"{"op":"removeWord","bookId":"b1","lemma":"library"}"#,
+            r#"{"op":"removeBook","id":"b1"}"#,
+            r#"{"op":"moveToShelf","id":"b1","shelf":"Классика","now":1}"#,
+            r#"{"op":"moveToShelf","id":"b1","now":1}"#,
+            r#"{"op":"addShelf","name":"Классика","now":1}"#,
+            r#"{"op":"removeShelf","name":"Классика"}"#,
+            r#"{"op":"continueReading"}"#,
+            r#"{"op":"deck","bookId":"b1"}"#,
+            r#"{"op":"pending"}"#,
+            r#"{"op":"applyServer","cursor":9,"books":[],"cards":[],"now":1,
+                "sent":{"revision":0,"books":[],"cards":[]}}"#,
+            r#"{"op":"migrate","freshIds":["3f1c2b4a-0000-4000-8000-000000000001"]}"#,
+            r#"{"op":"setTheme","theme":"Sepia"}"#,
+            r#"{"op":"setFontScale","scale":1.2}"#,
+            r#"{"op":"setLineScale","scale":1.1}"#,
+            r#"{"op":"setIntensity","intensity":"Strong"}"#,
+            r#"{"op":"markDemoAdded"}"#,
+            r#"{"op":"replaceSettings","settings":{"theme":"Oled"}}"#,
+            r#"{"op":"deckStatus","kind":"word","now":1}"#,
+            r#"{"op":"trainingQueue","kind":"rule","now":1}"#,
+            r#"{"op":"drillFor","cardId":"c1"}"#,
+            r#"{"op":"ruleDrill","rule":"present-perfect","cardId":"c3"}"#,
+            r#"{"op":"sameText","assembled":"she left","expected":"She left."}"#,
+            r#"{"op":"review","cardId":"c1","right":true,"now":1,"offsetMinutes":180}"#,
+            r#"{"op":"reminderAt","now":1,"offsetMinutes":180}"#,
+            r#"{"op":"due","now":1}"#,
+            r#"{"op":"appendedPage","before":"Первая","page":"Вторая"}"#,
+        ];
+
+        let mut session = сессия();
+        for текст in команды {
+            let command: Command = serde_json::from_str(текст)
+                .unwrap_or_else(|e| panic!("команда не разобралась: {e}\n{текст}"));
+            // Заодно проверяем, что ни одна не паникует на пустой библиотеке.
+            session.run(command);
+        }
+    }
+
+    /// Поле из двух слов приходит в camelCase — и только в нём.
+    ///
+    /// Отдельно от перечня выше: тот проверяет, что команда разбирается, а
+    /// этот — что она разбирается именно в клиентском написании, а не потому,
+    /// что серверная форма случайно совпала.
+    #[test]
+    fn составные_поля_читаются_в_клиентском_написании() {
+        let command: Command = serde_json::from_str(
+            r#"{"op":"rememberProgress","id":"b1","chapter":3,"withinChapter":0.4,"now":1}"#,
+        )
+        .expect("клиентское написание не разобралось");
+        match command {
+            Command::RememberProgress { within_chapter, .. } => {
+                assert!((within_chapter - 0.4).abs() < 1e-6);
+            }
+            other => panic!("разобралось не в ту команду: {other:?}"),
+        }
+
+        // А змеиное написание ядру больше не родное: оно осталось бы в коде
+        // незамеченным ровно так же, как незамеченным было camelCase.
+        assert!(
+            serde_json::from_str::<Command>(
+                r#"{"op":"rememberProgress","id":"b1","chapter":3,"within_chapter":0.4,"now":1}"#,
+            )
+            .is_err(),
+            "ядро принимает оба написания — значит, правило не действует"
+        );
     }
 }
