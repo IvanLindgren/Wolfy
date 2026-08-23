@@ -12,6 +12,7 @@
 //! окажется неверным.
 
 pub mod card;
+pub mod chunks;
 pub mod intensity;
 pub mod scheduler;
 
