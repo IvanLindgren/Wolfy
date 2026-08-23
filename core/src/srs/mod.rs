@@ -13,8 +13,10 @@
 
 pub mod card;
 pub mod chunks;
+pub mod drill;
 pub mod intensity;
 pub mod scheduler;
 
 pub use card::Card;
+pub use drill::{Deck, Drill, DrillKind};
 pub use intensity::Intensity;
