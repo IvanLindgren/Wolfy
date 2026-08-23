@@ -9,6 +9,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -37,6 +38,20 @@ type Config struct {
 	OCRModel string
 	OCRURL   string
 
+	// CitavukLoginURL — единственная точка выдачи общей сессии.
+	CitavukLoginURL string
+
+	// StandardEbooks* — официальный Atom-каталог. Открытая лента новых
+	// релизов работает без учётных данных; полный /all требует разрешения
+	// Standard Ebooks и Basic Auth.
+	StandardEbooksFeedURL string
+	StandardEbooksUser    string
+	StandardEbooksPass    string
+
+	// DictionaryPath — распакованный TSV. Рядом обязан лежать файл .tsv.gz,
+	// который сервер отдаёт устройствам для офлайн-установки.
+	DictionaryPath string
+
 	// RequestTimeout — сколько сервис готов ждать ответа от внешнего API.
 	// Клиент не должен ждать дольше, чем ему обещано.
 	RequestTimeout time.Duration
@@ -56,6 +71,18 @@ func Load() (Config, error) {
 		OCRModel: envOr("WOLFY_OCR_MODEL", "google/gemini-3.7-flash"),
 		OCRURL:   envOr("WOLFY_OCR_URL", "https://api.polza.ai/api/v1/chat/completions"),
 
+		CitavukLoginURL: envOr("WOLFY_CITAVUK_LOGIN_URL", "https://api.citavuk.ru/v1/auth/login"),
+		StandardEbooksFeedURL: envOr(
+			"WOLFY_STANDARD_EBOOKS_FEED_URL",
+			"https://standardebooks.org/feeds/atom/new-releases",
+		),
+		StandardEbooksUser: strings.TrimSpace(os.Getenv("WOLFY_STANDARD_EBOOKS_USER")),
+		StandardEbooksPass: strings.TrimSpace(os.Getenv("WOLFY_STANDARD_EBOOKS_PASSWORD")),
+		DictionaryPath: envOr(
+			"WOLFY_DICTIONARY_PATH",
+			defaultDictionaryPath(),
+		),
+
 		RequestTimeout: 20 * time.Second,
 	}
 
@@ -65,6 +92,30 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("не задан WOLFY_DB_URL: без базы сервис работать не может")
 	}
 	return cfg, nil
+}
+
+// defaultDictionaryPath не зависит от того, запустили `go run` из корня
+// проекта или из server. Раньше один и тот же сервер в первом случае молча
+// отключал словарь, потому что относительный путь указывал на соседний каталог.
+func defaultDictionaryPath() string {
+	const name = "wolfy_dictionary.tsv"
+	candidates := []string{
+		filepath.Join("dist", name),
+		filepath.Join("..", "dist", name),
+	}
+	if executable, err := os.Executable(); err == nil {
+		folder := filepath.Dir(executable)
+		candidates = append(candidates,
+			filepath.Join(folder, name),
+			filepath.Join(folder, "dist", name),
+		)
+	}
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
+			return filepath.Clean(candidate)
+		}
+	}
+	return filepath.Clean(candidates[0])
 }
 
 // Development — включён ли режим разработки.

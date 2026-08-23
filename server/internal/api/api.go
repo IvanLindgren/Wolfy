@@ -19,6 +19,7 @@ import (
 
 	"github.com/wolfy/server/internal/account"
 	"github.com/wolfy/server/internal/auth"
+	"github.com/wolfy/server/internal/dictionary"
 	"github.com/wolfy/server/internal/discovery"
 	"github.com/wolfy/server/internal/library"
 	"github.com/wolfy/server/internal/ocr"
@@ -28,14 +29,15 @@ import (
 
 // Server связывает слои и раздаёт маршруты.
 type Server struct {
-	store     *store.Store
-	verifier  *auth.Verifier
-	translate *translate.Service
-	library   *library.Service
-	ocr       *ocr.Service
-	account   *account.Service
-	discovery *discovery.Service
-	log       *slog.Logger
+	store      *store.Store
+	verifier   *auth.Verifier
+	translate  *translate.Service
+	library    *library.Service
+	ocr        *ocr.Service
+	account    *account.Service
+	discovery  *discovery.Service
+	dictionary *dictionary.Service
+	log        *slog.Logger
 
 	// Ограничитель для открытого перевода — см. Handler.
 	translateLimit *rateLimiter
@@ -49,11 +51,12 @@ func NewServer(
 	o *ocr.Service,
 	a *account.Service,
 	d *discovery.Service,
+	dict *dictionary.Service,
 	log *slog.Logger,
 ) *Server {
 	return &Server{
 		store: s, verifier: v, translate: t, library: l, ocr: o,
-		account: a, discovery: d, log: log,
+		account: a, discovery: d, dictionary: dict, log: log,
 		// Двести переводов залпом и один в секунду сверху: страница книги
 		// редко даёт больше двухсот незнакомых слов, а секунда — это дольше,
 		// чем читатель успевает выбрать следующее слово, но много быстрее,
@@ -84,6 +87,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/translate", s.translateLimit.withRateLimit(
 		http.HandlerFunc(s.postTranslate),
 	))
+	// Толкование публично: это fallback для тех, кто не скачал тот же словарь
+	// на устройство. Архив тоже не требует аккаунта — в нём свободные данные,
+	// а вход не должен быть условием офлайн-чтения.
+	mux.HandleFunc("GET /v1/define", s.getDefinition)
+	mux.HandleFunc("GET /v1/dictionary", s.getDictionary)
 
 	// Всё остальное — только для вошедших.
 	private := http.NewServeMux()
@@ -237,8 +245,45 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		"translate": s.translate.Configured(),
 		// Клиент прячет съёмку, если распознавание не настроено: кнопка,
 		// которая всегда отвечает ошибкой, хуже её отсутствия.
-		"ocr": s.ocr.Configured(),
+		"ocr":        s.ocr.Configured(),
+		"dictionary": s.dictionary.Configured(),
 	})
+}
+
+func (s *Server) getDefinition(w http.ResponseWriter, r *http.Request) {
+	if !s.dictionary.Configured() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "словарь не настроен"})
+		return
+	}
+	word := strings.TrimSpace(r.URL.Query().Get("word"))
+	if word == "" || len(word) > 128 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "слово не задано"})
+		return
+	}
+	entry, ok := s.dictionary.Define(word)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "слово не найдено"})
+		return
+	}
+	writeJSON(w, http.StatusOK, entry)
+}
+
+func (s *Server) getDictionary(w http.ResponseWriter, r *http.Request) {
+	file, err := s.dictionary.OpenArchive()
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "словарь не настроен"})
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "словарь недоступен"})
+		return
+	}
+	w.Header().Set("Content-Type", "application/gzip")
+	w.Header().Set("Content-Disposition", `attachment; filename="wolfy_dictionary.tsv.gz"`)
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	http.ServeContent(w, r, "wolfy_dictionary.tsv.gz", info.ModTime(), file)
 }
 
 // me возвращает пользователя, опознанного по токену Читавука. Клиент зовёт

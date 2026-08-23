@@ -16,9 +16,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/wolfy/server/internal/account"
 	"github.com/wolfy/server/internal/api"
 	"github.com/wolfy/server/internal/auth"
 	"github.com/wolfy/server/internal/config"
+	"github.com/wolfy/server/internal/dictionary"
+	"github.com/wolfy/server/internal/discovery"
 	"github.com/wolfy/server/internal/library"
 	"github.com/wolfy/server/internal/ocr"
 	"github.com/wolfy/server/internal/store"
@@ -61,6 +64,24 @@ func run() error {
 		// контекстного перевода. Знать об этом на старте полезно.
 		log.Warn("DEEPL_API_KEY не задан — контекстный перевод отключён")
 	}
+	accountService := account.New(cfg.CitavukLoginURL, cfg.RequestTimeout)
+	discoveryService := discovery.New(
+		db,
+		discovery.NewAtomSource(
+			cfg.StandardEbooksFeedURL,
+			cfg.StandardEbooksUser,
+			cfg.StandardEbooksPass,
+			cfg.RequestTimeout,
+		),
+		cfg.RequestTimeout,
+	)
+	dictionaryService, err := dictionary.Open(cfg.DictionaryPath)
+	if err != nil {
+		log.Warn("словарь не развёрнут — офлайн-загрузка и fallback отключены", "error", err)
+		dictionaryService = dictionary.Unavailable()
+	} else {
+		log.Info("словарь загружен", "path", cfg.DictionaryPath)
+	}
 
 	server := &http.Server{
 		Addr: cfg.Addr,
@@ -70,6 +91,9 @@ func run() error {
 			translator,
 			library.New(db),
 			ocr.New(cfg.OCRKey, cfg.OCRURL, cfg.OCRModel, cfg.RequestTimeout),
+			accountService,
+			discoveryService,
+			dictionaryService,
 			log,
 		).Handler(),
 		// Таймауты обязательны: без них одно зависшее соединение держит
