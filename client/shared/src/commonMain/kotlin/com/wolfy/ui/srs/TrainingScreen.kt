@@ -32,6 +32,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.key
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.input.ImeAction
@@ -42,6 +44,9 @@ import com.wolfy.srs.Drill
 import com.wolfy.srs.DrillKind
 import com.wolfy.srs.TrainingState
 import com.wolfy.theme.WolfyTheme
+import com.wolfy.ui.nav.LocalKeyboard
+import com.wolfy.ui.nav.digitOf
+import com.wolfy.ui.nav.shortcutsUnlessTyping
 import com.wolfy.widgets.SectionLabel
 import com.wolfy.widgets.Sticker
 import com.wolfy.widgets.WolfySticker
@@ -73,7 +78,45 @@ fun TrainingScreen(
     val deck = state.deck ?: return
 
     LazyColumn(
-        modifier = modifier.fillMaxSize().background(colors.paper),
+        modifier = modifier
+            .fillMaxSize()
+            .background(colors.paper)
+            // Клавиши после полей ввода, а не до: в задании «набери слово»
+            // цифры и Enter принадлежат полю. За подход читатель нажимает
+            // около сотни раз, и каждое нажатие сейчас — это прицеливание
+            // мышью в один из четырёх прямоугольников.
+            .shortcutsUnlessTyping { event ->
+                val drill = state.drill
+                val answered = state.verdict != null
+                when {
+                    event.key == Key.Escape -> { onClose(); true }
+
+                    // Enter ведёт дальше только когда ответ уже разобран:
+                    // иначе он проскакивал бы задание, которого читатель
+                    // ещё не видел.
+                    answered && (event.key == Key.Enter || event.key == Key.NumPadEnter) -> {
+                        onNext()
+                        true
+                    }
+
+                    // Цифры выбирают вариант — и только там, где варианты
+                    // есть. В конструкторе фраз тот же ключ означал бы блок,
+                    // а не ответ, и нажатие уходило бы не туда.
+                    !answered && drill != null &&
+                        (drill.kind == DrillKind.Choice || drill.kind == DrillKind.Gap) -> {
+                        val choice = digitOf(event.key)
+                        val option = choice?.let { drill.pieces.getOrNull(it - 1) }
+                        if (option != null) {
+                            onAnswer(option)
+                            true
+                        } else {
+                            false
+                        }
+                    }
+
+                    else -> false
+                }
+            },
         contentPadding = PaddingValues(spacing.pageMargin),
         verticalArrangement = Arrangement.spacedBy(spacing.large),
     ) {
@@ -224,7 +267,10 @@ private fun ChoiceDrill(drill: Drill, answered: Boolean, onAnswer: (String) -> U
             )
         }
 
-        drill.pieces.forEach { option ->
+        // Номер варианта показывается только там, где его есть чем нажать.
+        val numbered = LocalKeyboard.current
+
+        drill.pieces.forEachIndexed { index, option ->
             val picked = chosen == option
             val right = option == drill.answer
             // Цвет появляется только после ответа: до него все варианты равны,
@@ -250,7 +296,19 @@ private fun ChoiceDrill(drill: Drill, answered: Boolean, onAnswer: (String) -> U
                     }
                     .padding(spacing.large),
             ) {
-                Text(text = option, style = WolfyTheme.typography.body, color = colors.ink)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(spacing.medium),
+                ) {
+                    if (numbered && index < 9) {
+                        Text(
+                            text = "${index + 1}",
+                            style = WolfyTheme.typography.caption,
+                            color = colors.inkMuted,
+                        )
+                    }
+                    Text(text = option, style = WolfyTheme.typography.body, color = colors.ink)
+                }
             }
         }
     }
@@ -646,3 +704,4 @@ private fun PrimaryButton(text: String, onClick: () -> Unit) {
         )
     }
 }
+

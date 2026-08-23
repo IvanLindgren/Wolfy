@@ -15,7 +15,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Text
@@ -24,15 +27,25 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import com.wolfy.widgets.pressable
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.wolfy.ui.card.WordCardSheet
+import com.wolfy.ui.nav.shortcuts
+import com.wolfy.ui.nav.LocalKeyboard
+import androidx.compose.ui.backhandler.BackHandler
 import com.wolfy.theme.ReadingTheme
 import com.wolfy.theme.WolfyTheme
 import com.wolfy.widgets.ChapterHeading
@@ -49,6 +62,12 @@ import com.wolfy.widgets.SectionLabel
  * нажатии. Так его можно показать в превью и проверить тестом, не поднимая ни
  * ядра, ни сети.
  */
+// BackHandler помечен и как временный, и как устаревший: Compose 1.11 зовёт
+// переходить на NavigationEventHandler. Не переходим пока намеренно — замена
+// живёт в отдельной библиотеке, которой в сборке ещё нет, и заводить её ради
+// одного обращения дороже, чем однажды это обращение переписать.
+@OptIn(ExperimentalComposeUiApi::class)
+@Suppress("DEPRECATION")
 @Composable
 fun ReaderScreen(
     state: ReaderState,
@@ -75,7 +94,74 @@ fun ReaderScreen(
     var contentsOpen by remember { mutableStateOf(false) }
     var readingSettingsOpen by remember { mutableStateOf(false) }
 
-    Box(modifier.fillMaxSize().background(colors.paper)) {
+    // Прокрутка живёт здесь, а не в теле главы: её же двигают клавиши, а они
+    // ловятся на самом верху экрана.
+    val scroll = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val cardOpen = state.card != null
+
+    // Уход назад разбирает то, что открыто, по одному слою за раз: сначала
+    // оглавление, потом карточка, и только потом сама книга. Закрывать всё
+    // разом — значит выбрасывать читателя из книги за жест, которым он хотел
+    // убрать карточку.
+    //
+    // Одна лестница на Esc и на системный «назад»: на телефоне и на настольной
+    // машине это одно и то же намерение, и разойтись они не должны.
+    val goBack = {
+        when {
+            contentsOpen -> contentsOpen = false
+            cardOpen -> onDismissCard()
+            else -> onClose()
+        }
+    }
+    BackHandler(enabled = true, onBack = goBack)
+
+    Box(
+        modifier
+            .fillMaxSize()
+            .background(colors.paper)
+            .chapterSwipe(
+                enabled = !cardOpen && !contentsOpen && !LocalKeyboard.current,
+                onPrevious = onPreviousChapter,
+                onNext = onNextChapter,
+            )
+            .shortcuts { event ->
+                when {
+                    event.key == Key.Escape -> {
+                        goBack()
+                        true
+                    }
+
+                    // При открытой карточке клавиши принадлежат ей: листать
+                    // страницу под карточкой читатель не просил.
+                    cardOpen -> when (event.key) {
+                        Key.Enter, Key.NumPadEnter -> { onSaveWord(); true }
+                        Key.S -> { onPronounce(); true }
+                        else -> false
+                    }
+
+                    event.key == Key.Spacebar ->
+                        { scope.launch { scroll.turnPage(forward = !event.isShiftPressed) }; true }
+                    event.key == Key.PageDown || event.key == Key.DirectionDown ->
+                        { scope.launch { scroll.turnPage(forward = true) }; true }
+                    event.key == Key.PageUp || event.key == Key.DirectionUp ->
+                        { scope.launch { scroll.turnPage(forward = false) }; true }
+
+                    event.key == Key.DirectionLeft -> { onPreviousChapter(); true }
+                    event.key == Key.DirectionRight -> { onNextChapter(); true }
+
+                    event.key == Key.MoveHome -> { scope.launch { scroll.scrollToItem(0) }; true }
+                    event.key == Key.MoveEnd -> {
+                        scope.launch {
+                            scroll.scrollToItem((scroll.layoutInfo.totalItemsCount - 1).coerceAtLeast(0))
+                        }
+                        true
+                    }
+
+                    else -> false
+                }
+            },
+    ) {
         Column(Modifier.fillMaxSize()) {
             ReaderTopBar(
                 state = state,
@@ -103,6 +189,7 @@ fun ReaderScreen(
                 state.loading -> Message("Книга открывается…")
                 else -> ChapterBody(
                     state = state,
+                    scroll = scroll,
                     onWordTap = onWordTap,
                     onPreviousChapter = onPreviousChapter,
                     onNextChapter = onNextChapter,
@@ -275,6 +362,7 @@ private fun SettingStepper(
 @Composable
 private fun ChapterBody(
     state: ReaderState,
+    scroll: LazyListState,
     onWordTap: (Int, com.wolfy.ffi.Token, com.wolfy.ffi.ParsedText) -> Unit,
     onPreviousChapter: () -> Unit,
     onNextChapter: () -> Unit,
@@ -282,9 +370,6 @@ private fun ChapterBody(
     modifier: Modifier = Modifier,
 ) {
     val spacing = WolfyTheme.spacing
-    // Состояние прокрутки заводится на каждую главу заново: иначе, перейдя к
-    // следующей, читатель оказался бы в её середине.
-    val scroll = rememberLazyListState()
 
     // Возвращение на место: один раз на открытие книги. Ждём, пока список
     // сообщит, сколько в нём блоков, — до первой раскладки их ноль, и
@@ -458,5 +543,66 @@ private fun Message(text: String) {
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(WolfyTheme.spacing.pageMargin),
         )
+    }
+}
+
+/**
+ * Какую часть окна страница оставляет от предыдущей.
+ *
+ * Прокрутка ровно на высоту окна кажется правильной и читается плохо: строка,
+ * на которой читатель остановился, уезжает за верхний край, и глазу не за что
+ * зацепиться — он ищет продолжение по смыслу, а не по месту. Десятая часть
+ * окна — это примерно две строки, и их достаточно.
+ */
+private const val PAGE_OVERLAP = 0.1f
+
+/** Страница вперёд или назад — по высоте окна за вычетом перекрытия. */
+private suspend fun LazyListState.turnPage(forward: Boolean) {
+    val viewport = layoutInfo.viewportSize.height
+    if (viewport <= 0) return
+    val step = viewport * (1f - PAGE_OVERLAP)
+    animateScrollBy(if (forward) step else -step)
+}
+
+/**
+ * Сколько надо провести пальцем вбок, чтобы сменилась глава.
+ *
+ * Сто точек — это движение, которое не сделаешь случайно, отрывая палец от
+ * страницы при прокрутке, но и не размах через весь экран.
+ */
+private val SWIPE_TO_CHAPTER = 100.dp
+
+/**
+ * Смена главы движением пальца вбок.
+ *
+ * Только там, где нет клавиатуры. На машине с мышью тот же обработчик ловил бы
+ * протяжку указателем по странице — движение, которым ничего не хотели, — и
+ * уносил читателя в соседнюю главу.
+ *
+ * Вертикальной прокрутке жест не мешает: горизонтальная протяжка начинает
+ * считаться только после того, как палец ушёл вбок дальше порога системы, а
+ * движение вниз до этого порога не доходит никогда.
+ */
+@Composable
+private fun Modifier.chapterSwipe(
+    enabled: Boolean,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+): Modifier {
+    if (!enabled) return this
+    return pointerInput(onPrevious, onNext) {
+        var travelled = 0f
+        val enough = SWIPE_TO_CHAPTER.toPx()
+        detectHorizontalDragGestures(
+            onDragStart = { travelled = 0f },
+            onDragCancel = { travelled = 0f },
+            onDragEnd = {
+                // Палец влево — вперёд: страница уезжает влево, как в книге.
+                when {
+                    travelled <= -enough -> onNext()
+                    travelled >= enough -> onPrevious()
+                }
+            },
+        ) { _, amount -> travelled += amount }
     }
 }

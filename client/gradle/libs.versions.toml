@@ -31,6 +31,10 @@ androidCompileSdk = "36"
 androidTargetSdk = "36"
 
 [libraries]
+# Системный «назад»: на Android это жест и кнопка, на настольной машине —
+# ничего, и то же обращение там просто не срабатывает. Отдельной зависимостью,
+# потому что в compose.ui этот модуль приезжает только на выполнение.
+compose-ui-backhandler = { module = "org.jetbrains.compose.ui:ui-backhandler", version.ref = "compose" }
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
 kotlinx-coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-swing", version.ref = "coroutines" }
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }

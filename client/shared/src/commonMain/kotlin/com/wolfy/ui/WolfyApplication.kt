@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -30,6 +31,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.wolfy.data.Settings
@@ -67,6 +72,10 @@ import com.wolfy.ui.library.LibraryScreen
 import com.wolfy.ui.library.LibraryViewModel
 import com.wolfy.ui.library.ShelvesScreen
 import com.wolfy.ui.nav.BottomBar
+import com.wolfy.ui.nav.LocalKeyboard
+import com.wolfy.ui.nav.globalShortcuts
+import com.wolfy.ui.nav.digitOf
+import com.wolfy.ui.nav.ShortcutsSheet
 import com.wolfy.ui.nav.Section
 import com.wolfy.ui.reader.ReaderScreen
 import com.wolfy.ui.reader.ReaderViewModel
@@ -167,6 +176,10 @@ fun WolfyApplication(
     val dictionaryStatus by parts.dictionary.status.collectAsState()
     val scope = rememberCoroutineScope()
 
+    // Клавиатура объявляется один раз на всё приложение: от неё зависят и
+    // сочетания клавиш, и подсказки к ним. `onPhone` уже отвечает на тот же
+    // вопрос с другой стороны — у телефона её нет.
+    CompositionLocalProvider(LocalKeyboard provides !onPhone) {
     WolfyTheme(
         theme = settings.readingTheme,
         fontScale = settings.fontScale,
@@ -204,6 +217,7 @@ fun WolfyApplication(
                 onLater = parts.dictionary::dismissOffer,
             )
         }
+    }
     }
 }
 
@@ -265,6 +279,10 @@ private fun Shell(
     val askForNotifications = rememberReminderPermission()
     // Список слов по книгам: он подробнее хаба и потому лежит под ним.
     var decksOpen by remember { mutableStateOf(false) }
+
+    // Список сочетаний клавиш. Только там, где эти клавиши есть.
+    val hasKeyboard = LocalKeyboard.current
+    var helpOpen by remember { mutableStateOf(false) }
 
     // Книга, которой не хватает файла: она приехала синхронизацией, и читатель
     // сейчас покажет, где держит его на этом устройстве.
@@ -333,10 +351,40 @@ private fun Shell(
         Section.More -> reference?.let(Route::Reference) ?: Route.Settings
     }
 
+    Box(Modifier.fillMaxSize()) {
     Column(
         Modifier
             .fillMaxSize()
             .background(WolfyTheme.colors.paper)
+            // Клавиши всего приложения — последними в очереди: сначала своё
+            // разбирает открытый экран, сюда доходит только то, что он не
+            // взял. Иначе Ctrl+2 из читалки уводил бы в раздел прямо посреди
+            // набора, а пробел переставал бы листать страницу.
+            .globalShortcuts { event ->
+                when {
+                    event.isCtrlPressed -> {
+                        val target = digitOf(event.key)?.let { Section.entries.getOrNull(it - 1) }
+                        if (target != null) {
+                            section = target
+                            // Переход в раздел выводит из книги: иначе
+                            // «Книги» показали бы ту же открытую страницу, и
+                            // казалось бы, что нажатие не сработало.
+                            if (target != Section.Books) reading = null
+                            true
+                        } else {
+                            false
+                        }
+                    }
+
+                    // «?» — это Shift и косая черта на большинстве раскладок.
+                    hasKeyboard && event.key == Key.Slash && event.isShiftPressed -> {
+                        helpOpen = !helpOpen
+                        true
+                    }
+
+                    else -> false
+                }
+            }
             // Системные панели: газетная полоса доходит до края экрана, но
             // текст под часами и жестовой полосой читать невозможно.
             .systemBarsPadding()
@@ -454,6 +502,9 @@ private fun Shell(
         }
 
         BottomBar(selected = section, onSelect = { section = it })
+    }
+
+        ShortcutsSheet(visible = helpOpen, onDismiss = { helpOpen = false })
     }
 }
 

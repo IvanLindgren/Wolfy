@@ -38,6 +38,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.SpanStyle
@@ -154,15 +156,34 @@ private fun CardBody(
             .padding(spacing.large),
         verticalArrangement = Arrangement.spacedBy(spacing.medium),
     ) {
-        // Ручка для перетаскивания: показывает, что панель можно закрыть.
+        // Ручка для перетаскивания.
+        //
+        // Тянуть можно только за неё, а не за карточку целиком: внутри
+        // карточки свой прокручиваемый столбец, и жест «вниз» там означает
+        // «читать дальше», а не «закрыть». Ручка нарочно шире и выше, чем
+        // видимая полоска: три точки в высоту пальцем не поймать.
         Box(
             Modifier
                 .align(Alignment.CenterHorizontally)
-                .width(36.dp)
-                .height(spacing.tight)
-                .background(colors.rule, CircleShape)
+                .pointerInput(Unit) {
+                    var travelled = 0f
+                    val enough = SWIPE_TO_CLOSE.toPx()
+                    detectVerticalDragGestures(
+                        onDragStart = { travelled = 0f },
+                        onDragEnd = { if (travelled > enough) onDismiss() },
+                        onDragCancel = { travelled = 0f },
+                    ) { _, amount -> travelled += amount }
+                }
+                .padding(horizontal = spacing.large, vertical = spacing.small)
                 .pressable(onClick = onDismiss),
-        )
+        ) {
+            Box(
+                Modifier
+                    .width(36.dp)
+                    .height(spacing.tight)
+                    .background(colors.rule, CircleShape),
+            )
+        }
 
         Column(
             Modifier.verticalScroll(rememberScrollState()),
@@ -1061,3 +1082,12 @@ private fun syllableCount(word: String): Int {
     if (normalized.endsWith('e') && count > 1 && !normalized.endsWith("le")) count -= 1
     return count.coerceAtLeast(1)
 }
+
+/**
+ * Насколько надо потянуть карточку вниз, чтобы она закрылась.
+ *
+ * Шестьдесят точек — это заметное движение, но не размах. Меньше — и карточка
+ * будет улетать от случайного касания ручки при прокрутке; больше — и жест
+ * перестанет ощущаться как жест.
+ */
+private val SWIPE_TO_CLOSE = 60.dp
