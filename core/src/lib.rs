@@ -20,6 +20,7 @@ pub mod ffi;
 pub mod grammar;
 pub mod lexicon;
 pub mod parser;
+pub mod srs;
 pub mod tagger;
 pub mod tokenizer;
 
