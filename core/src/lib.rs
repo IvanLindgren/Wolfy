@@ -21,6 +21,7 @@ pub use clock::{at_local_hour, local_day, local_hour};
 mod error;
 pub mod ffi;
 pub mod grammar;
+pub mod library;
 pub mod lexicon;
 pub mod parser;
 pub mod settings;

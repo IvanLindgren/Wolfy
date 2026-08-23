@@ -1,0 +1,303 @@
+//! Что библиотека хранит между запусками.
+
+use crate::srs::Card;
+use serde::{Deserialize, Serialize};
+
+/// Где пользователь остановился.
+///
+/// Глава и доля внутри неё, а не общий процент: процент пришлось бы
+/// пересчитывать при каждом изменении разбивки на главы, а глава с долей
+/// переживает и смену версии ядра, и перенос книги на другое устройство.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Progress {
+    #[serde(default)]
+    pub chapter: i32,
+    /// Доля прочитанного внутри главы, от нуля до единицы.
+    #[serde(default)]
+    pub within_chapter: f32,
+    /// Когда книгу открывали в последний раз. Ноль — ни разу.
+    #[serde(default)]
+    pub opened_at: i64,
+}
+
+/// Книга в библиотеке пользователя.
+///
+/// Хранится отдельно от самого файла книги и переживает его переоткрытие:
+/// файл ядро разбирает заново при каждом запуске, а прогресс, колода и полка —
+/// это то, что пользователь накопил, и терять его нельзя.
+///
+/// Идентификатор придумывает устройство, а не сервер, и он обязан быть UUID:
+/// книга получает номер до того, как впервые дойдёт до сети, иначе её нельзя
+/// добавить в самолёте, а на сервере под этот номер отведена колонка uuid.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryBook {
+    /// Устойчивый номер книги: переживает перенос файла и синхронизацию.
+    pub id: String,
+    /// Файл внутри хранилища приложения.
+    ///
+    /// Пустой путь — книга известна по синхронизации, но файла на этом
+    /// устройстве нет. Такое бывает всегда: сервер хранит, что вы читаете, но
+    /// не сами книги — книга пользователя это его файл.
+    #[serde(default)]
+    pub path: String,
+    pub title: String,
+    #[serde(default)]
+    pub author: Option<String>,
+    /// `epub`, `txt`, `pdf` — по нему видно, чем книга была.
+    #[serde(default)]
+    pub format: String,
+    /// Отпечаток содержимого файла.
+    ///
+    /// По нему один и тот же файл, добавленный на телефоне и на компьютере,
+    /// узнаётся как одна книга, а не превращается в две с одинаковым
+    /// названием.
+    #[serde(default)]
+    pub source_key: String,
+    /// Когда книгу добавили — по нему библиотека сортируется.
+    #[serde(default)]
+    pub added_at: i64,
+    /// Сколько глав нашло ядро. Ноль значит, что книгу ещё не открывали.
+    #[serde(default)]
+    pub chapters: i32,
+    #[serde(default)]
+    pub progress: Progress,
+    /// Название полки, на которой стоит книга. `None` — книга не разобрана.
+    #[serde(default)]
+    pub shelf: Option<String>,
+
+    /// Ревизия сервера, с которой запись согласована. Ноль — ни разу.
+    #[serde(default)]
+    pub rev: i64,
+    /// Изменена на этом устройстве и ещё не отправлена.
+    #[serde(default = "yes")]
+    pub dirty: bool,
+    /// Удалена.
+    ///
+    /// Запись остаётся с пометкой, а не стирается: стёртую второе устройство
+    /// не заметит, и книга там воскреснет.
+    #[serde(default)]
+    pub deleted: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl LibraryBook {
+    /// Новая книга с номером и названием; остальное добирается по мере чтения.
+    pub fn new(id: impl Into<String>, title: impl Into<String>) -> LibraryBook {
+        LibraryBook {
+            id: id.into(),
+            path: String::new(),
+            title: title.into(),
+            author: None,
+            format: String::new(),
+            source_key: String::new(),
+            added_at: 0,
+            chapters: 0,
+            progress: Progress::default(),
+            shelf: None,
+            rev: 0,
+            dirty: true,
+            deleted: false,
+        }
+    }
+
+    /// Прочитанная доля от нуля до единицы.
+    pub fn fraction(&self) -> f32 {
+        if self.chapters <= 0 {
+            return 0.0;
+        }
+        ((self.progress.chapter as f32 + self.progress.within_chapter) / self.chapters as f32)
+            .clamp(0.0, 1.0)
+    }
+
+    /// Открывали ли книгу хоть раз.
+    pub fn started(&self) -> bool {
+        self.progress.opened_at > 0
+    }
+
+    pub fn finished(&self) -> bool {
+        self.fraction() >= 0.999
+    }
+
+    /// Можно ли книгу открыть на этом устройстве.
+    pub fn readable(&self) -> bool {
+        !self.path.trim().is_empty()
+    }
+}
+
+/// Полка: имя, под которым читатель сложил несколько книг вместе.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Shelf {
+    pub name: String,
+    #[serde(default)]
+    pub created_at: i64,
+}
+
+/// Всё, что библиотека хранит между запусками.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryState {
+    #[serde(default)]
+    pub books: Vec<LibraryBook>,
+    #[serde(default)]
+    pub cards: Vec<Card>,
+    #[serde(default)]
+    pub shelves: Vec<Shelf>,
+    /// Ревизия сервера, по которую состояние согласовано.
+    ///
+    /// Ноль — синхронизации ещё не было. Именно этот номер уходит на сервер
+    /// как «покажи всё, что новее».
+    #[serde(default)]
+    pub cursor: i64,
+    /// Локальный счётчик изменений — по нему видно, что писать на диск.
+    #[serde(default)]
+    pub revision: i64,
+}
+
+impl LibraryState {
+    /// Карточки книги, кроме удалённых.
+    pub fn deck(&self, book_id: &str) -> Vec<&Card> {
+        self.cards
+            .iter()
+            .filter(|card| card.book_id == book_id && !card.deleted)
+            .collect()
+    }
+
+    /// Книги, которые видит пользователь.
+    pub fn visible(&self) -> Vec<&LibraryBook> {
+        self.books.iter().filter(|book| !book.deleted).collect()
+    }
+
+    /// Книга по номеру — включая удалённую: синхронизации она ещё нужна.
+    pub fn book(&self, id: &str) -> Option<&LibraryBook> {
+        self.books.iter().find(|book| book.id == id)
+    }
+
+    /// Записи, изменённые на этом устройстве и ещё не отправленные.
+    pub fn pending(&self) -> (Vec<&LibraryBook>, Vec<&Card>) {
+        (
+            self.books.iter().filter(|book| book.dirty).collect(),
+            self.cards.iter().filter(|card| card.dirty).collect(),
+        )
+    }
+
+    /// Отмечает изменение состояния.
+    ///
+    /// Счётчик растёт при любой правке и нужен ровно для одного: отличить
+    /// «библиотека не менялась, пока шёл запрос» от «менялась». См.
+    /// [`super::merge::apply_server`].
+    pub fn touched(&self) -> LibraryState {
+        LibraryState {
+            revision: self.revision + 1,
+            ..self.clone()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn доля_прочитанного_не_выходит_за_единицу() {
+        let mut book = LibraryBook::new("1", "Гэтсби");
+        assert_eq!(book.fraction(), 0.0, "книгу не открывали, а доля не ноль");
+
+        book.chapters = 4;
+        book.progress.chapter = 2;
+        book.progress.within_chapter = 0.5;
+        assert!((book.fraction() - 0.625).abs() < 1e-6);
+
+        // Ядро пересчитало главы и нашло меньше, чем было: доля не должна
+        // вылезти за единицу и показать «107 процентов».
+        book.chapters = 2;
+        assert_eq!(book.fraction(), 1.0);
+        assert!(book.finished());
+    }
+
+    #[test]
+    fn книга_без_файла_читается_только_на_другом_устройстве() {
+        let mut book = LibraryBook::new("1", "Гэтсби");
+        assert!(!book.readable(), "книга без пути объявлена читаемой");
+        book.path = "books/gatsby.epub".to_string();
+        assert!(book.readable());
+    }
+
+    #[test]
+    fn удалённое_остаётся_в_состоянии_но_не_на_виду() {
+        let mut удалённая = LibraryBook::new("2", "Ушла");
+        удалённая.deleted = true;
+        let state = LibraryState {
+            books: vec![LibraryBook::new("1", "Осталась"), удалённая],
+            ..Default::default()
+        };
+
+        assert_eq!(state.visible().len(), 1);
+        // Но синхронизации она по-прежнему видна: иначе второе устройство не
+        // узнает, что книгу удалили, и вернёт её обратно.
+        assert!(state.book("2").is_some());
+        assert_eq!(state.books.len(), 2);
+    }
+
+    #[test]
+    fn колода_книги_не_берёт_чужих_и_удалённых() {
+        let mut своя = Card::new("c1", "book", "book");
+        своя.book_id = "1".to_string();
+        let mut чужая = Card::new("c2", "shelf", "shelf");
+        чужая.book_id = "2".to_string();
+        let mut выброшенная = Card::new("c3", "dusk", "dusk");
+        выброшенная.book_id = "1".to_string();
+        выброшенная.deleted = true;
+
+        let state = LibraryState {
+            cards: vec![своя, чужая, выброшенная],
+            ..Default::default()
+        };
+        let колода = state.deck("1");
+        assert_eq!(колода.len(), 1);
+        assert_eq!(колода[0].id, "c1");
+    }
+
+    #[test]
+    fn читается_библиотека_записанная_клиентом() {
+        let сохранённое = r#"{
+            "books": [{
+                "id": "3f1c2b4a-0000-4000-8000-000000000001",
+                "path": "books/gatsby.epub",
+                "title": "The Great Gatsby",
+                "author": "F. Scott Fitzgerald",
+                "format": "epub",
+                "sourceKey": "abc",
+                "addedAt": 1700000000000,
+                "chapters": 9,
+                "progress": {"chapter": 2, "withinChapter": 0.5, "openedAt": 1700000001000},
+                "shelf": "Классика",
+                "rev": 7,
+                "dirty": false,
+                "deleted": false
+            }],
+            "cards": [],
+            "shelves": [{"name": "Классика", "createdAt": 1700000000000}],
+            "cursor": 7,
+            "revision": 12
+        }"#;
+        let state: LibraryState =
+            serde_json::from_str(сохранённое).expect("библиотека клиента не читается");
+
+        assert_eq!(state.books.len(), 1);
+        assert_eq!(state.books[0].chapters, 9);
+        assert_eq!(state.books[0].shelf.as_deref(), Some("Классика"));
+        assert_eq!(state.books[0].progress.chapter, 2);
+        assert_eq!(state.cursor, 7);
+
+        // И обратно — теми же именами.
+        let json = serde_json::to_string(&state).expect("библиотека не пишется");
+        assert!(json.contains("\"sourceKey\""), "поле переименовалось");
+        assert!(json.contains("\"withinChapter\""), "поле переименовалось");
+    }
+}
