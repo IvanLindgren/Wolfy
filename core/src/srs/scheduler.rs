@@ -21,7 +21,15 @@ const DAY: i64 = 1440;
 /// Первая ступень — сутки: повторить назавтра то, что впервые встретил
 /// сегодня. Последняя — полгода; дальше растягивать нечего, слово к этому
 /// моменту либо в языке, либо не нужно.
-const LADDER: [i64; 7] = [DAY, 3 * DAY, 7 * DAY, 16 * DAY, 35 * DAY, 75 * DAY, 160 * DAY];
+const LADDER: [i64; 7] = [
+    DAY,
+    3 * DAY,
+    7 * DAY,
+    16 * DAY,
+    35 * DAY,
+    75 * DAY,
+    160 * DAY,
+];
 
 /// Через сколько вернуть карточку, на которой ошиблись.
 const RETRY_MINUTES: i64 = 10;
@@ -147,7 +155,11 @@ pub fn due(cards: &[Card], at: i64) -> Vec<Card> {
 
 /// Выученные: прочность сведена к нулю.
 pub fn learned(cards: &[Card]) -> Vec<Card> {
-    cards.iter().filter(|card| card.learned()).cloned().collect()
+    cards
+        .iter()
+        .filter(|card| card.learned())
+        .cloned()
+        .collect()
 }
 
 /// Когда напомнить о повторении.
@@ -192,7 +204,10 @@ pub fn reminder_at(
     let mut ripe: Vec<i64> = active.iter().map(|card| card.due_at).collect();
     ripe.sort_unstable();
     let batch = ripe.get(target - 1).copied();
-    let urgent = active.iter().filter_map(|card| half_forgotten_at(card)).min();
+    let urgent = active
+        .iter()
+        .filter_map(|card| half_forgotten_at(card))
+        .min();
 
     let at = match (batch, urgent) {
         (Some(batch), Some(urgent)) => batch.min(urgent),
@@ -366,10 +381,14 @@ mod tests {
                 )
             })
             .collect();
-        let at = reminder_at(&cards, Intensity::Normal, START, MSK).expect("напоминание не назначено");
+        let at =
+            reminder_at(&cards, Intensity::Normal, START, MSK).expect("напоминание не назначено");
 
         let hour = local_hour(at, MSK);
-        assert!((9..=21).contains(&hour), "напоминание назначено на {hour} часов");
+        assert!(
+            (9..=21).contains(&hour),
+            "напоминание назначено на {hour} часов"
+        );
         assert!(at >= START, "напоминание назначено в прошлое");
     }
 
@@ -408,11 +427,17 @@ mod tests {
 
         let all = [learned_card, ripe, later];
         assert_eq!(
-            learned(&all).iter().map(|c| c.id.clone()).collect::<Vec<_>>(),
+            learned(&all)
+                .iter()
+                .map(|c| c.id.clone())
+                .collect::<Vec<_>>(),
             vec!["a"]
         );
         assert_eq!(
-            due(&all, START).iter().map(|c| c.id.clone()).collect::<Vec<_>>(),
+            due(&all, START)
+                .iter()
+                .map(|c| c.id.clone())
+                .collect::<Vec<_>>(),
             vec!["b"]
         );
     }

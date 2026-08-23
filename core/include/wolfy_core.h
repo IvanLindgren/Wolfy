@@ -126,6 +126,7 @@ int64_t wolfy_session_open(const char *library, const char *settings);
  * NULL, а её имя попадает в wolfy_last_error.
  *
  * Запрос:
+ *   {"op":"define","word":"library","path":".../wolfy_dictionary.tsv"}
  *   {"op":"saveWord","bookId":"...","surface":"libraries","lemma":"library",
  *    "translation":"библиотека","id":"<uuid>","now":1700000000000}
  *   {"op":"rememberProgress","id":"...","chapter":3,"withinChapter":0.4,

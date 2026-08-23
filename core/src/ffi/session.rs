@@ -23,7 +23,9 @@
 //! ошибку с именем, а не тихо ничего не делает.
 
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
+use crate::dictionary::{Dictionary, Entry as DictionaryEntry};
 use crate::grammar::Exercise;
 use crate::lexicon::Lexicon;
 use crate::library::book::{LibraryBook, LibraryState, Shelf};
@@ -44,6 +46,11 @@ pub struct Session {
     /// не меняет — и записывать библиотеку заново из-за него незачем.
     pub library_dirty: bool,
     pub settings_dirty: bool,
+    /// Скачанный словарь держится открытым между тапами. Путь хранится рядом,
+    /// чтобы новый файл после обновления можно было открыть без перезапуска
+    /// приложения.
+    dictionary: Option<Dictionary>,
+    dictionary_path: Option<PathBuf>,
 }
 
 /// Что клиент просит сделать.
@@ -60,8 +67,15 @@ pub struct Session {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "op", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Command {
+    /// Найти словарную статью в скачанном файле.
+    Define {
+        word: String,
+        path: String,
+    },
     /// Решить, заводить ли книгу заново. Ничего не меняет.
-    PlanAdd { fingerprint: String },
+    PlanAdd {
+        fingerprint: String,
+    },
     AddBook {
         book: Box<LibraryBook>,
     },
@@ -114,7 +128,10 @@ pub enum Command {
         id: String,
         now: i64,
     },
-    RemoveWord { book_id: String, lemma: String },
+    RemoveWord {
+        book_id: String,
+        lemma: String,
+    },
     RemoveBook {
         id: String,
     },
@@ -160,13 +177,24 @@ pub enum Command {
         now: i64,
     },
     /// Задание по карточке.
-    DrillFor { card_id: String },
+    DrillFor {
+        card_id: String,
+    },
     /// Задание по правилу, у которого карточки ещё нет.
-    RuleDrill { rule: String, card_id: String },
+    RuleDrill {
+        rule: String,
+        card_id: String,
+    },
     /// Сходятся ли собранный ответ и ожидаемый.
-    SameText { assembled: String, expected: String },
+    SameText {
+        assembled: String,
+        expected: String,
+    },
     /// Как приклеить снятую страницу к уже снятым.
-    AppendedPage { before: String, page: String },
+    AppendedPage {
+        before: String,
+        page: String,
+    },
     /// Когда напомнить о повторении.
     ReminderAt {
         now: i64,
@@ -176,7 +204,9 @@ pub enum Command {
     /// Книга, к которой стоит вернуться.
     ContinueReading,
     /// Колода книги.
-    Deck { book_id: String },
+    Deck {
+        book_id: String,
+    },
 
     SetTheme {
         theme: String,
@@ -211,7 +241,9 @@ pub enum Command {
         now: i64,
     },
     /// Привести прочитанное состояние к нынешнему виду.
-    Migrate { fresh_ids: Vec<String> },
+    Migrate {
+        fresh_ids: Vec<String>,
+    },
 }
 
 /// Снимок отправки в том виде, в каком его держит клиент.
@@ -273,6 +305,14 @@ pub struct Outcome {
     /// Готовый текст — например, снимки страниц, склеенные по правилу.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    /// Словарная статья. `None` при нормальном отсутствии слова.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub definition: Option<DictionaryEntry>,
+    /// Удалось ли открыть и прочитать локальный словарь. Отдельно от статьи:
+    /// неизвестное слово в исправном словаре и отсутствующий файл — разные
+    /// причины, и только во втором случае клиенту нужен сетевой fallback.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dictionary_available: Option<bool>,
 }
 
 impl Session {
@@ -291,12 +331,15 @@ impl Session {
                 .unwrap_or_default(),
             library_dirty: false,
             settings_dirty: false,
+            ..Session::default()
         }
     }
 
     /// Выполняет команду.
     pub fn run(&mut self, command: Command) -> Outcome {
         match command {
+            Command::Define { word, path } => self.define(&word, &path),
+
             Command::PlanAdd { fingerprint } => {
                 let (plan, id) = match ops::plan_add(&self.library, &fingerprint) {
                     ops::AddPlan::Known(id) => ("known", Some(id)),
@@ -465,10 +508,9 @@ impl Session {
             } => {
                 let intensity = self.settings.review_intensity();
                 let ease = self.settings.ease();
-                let next =
-                    ops::update_card(&self.library, &card_id, |card| {
-                        scheduler::review(card, right, intensity, ease, now)
-                    });
+                let next = ops::update_card(&self.library, &card_id, |card| {
+                    scheduler::review(card, right, intensity, ease, now)
+                });
                 self.change_library(next);
 
                 // Серия дней двигается тем же событием: ответ засчитан один
@@ -495,12 +537,22 @@ impl Session {
             },
 
             Command::DeckStatus { kind, now } => Outcome {
-                status: Some(training::status(&self.library.cards, &kind, now, exercises())),
+                status: Some(training::status(
+                    &self.library.cards,
+                    &kind,
+                    now,
+                    exercises(),
+                )),
                 ..Outcome::default()
             },
 
             Command::TrainingQueue { kind, now } => Outcome {
-                queue: Some(training::queue(&self.library.cards, &kind, now, exercises())),
+                queue: Some(training::queue(
+                    &self.library.cards,
+                    &kind,
+                    now,
+                    exercises(),
+                )),
                 ..Outcome::default()
             },
 
@@ -638,6 +690,58 @@ impl Session {
         }
     }
 
+    /// Ищет статью, переиспользуя уже открытый файл.
+    fn define(&mut self, word: &str, path: &str) -> Outcome {
+        let requested = PathBuf::from(path);
+        if requested.as_os_str().is_empty() {
+            return Outcome {
+                dictionary_available: Some(false),
+                ..Outcome::default()
+            };
+        }
+
+        if self.dictionary_path.as_ref() != Some(&requested) || self.dictionary.is_none() {
+            match Dictionary::open(&requested) {
+                Ok(dictionary) => {
+                    self.dictionary = Some(dictionary);
+                    self.dictionary_path = Some(requested);
+                }
+                Err(_) => {
+                    self.dictionary = None;
+                    self.dictionary_path = None;
+                    return Outcome {
+                        dictionary_available: Some(false),
+                        ..Outcome::default()
+                    };
+                }
+            }
+        }
+
+        let Some(dictionary) = self.dictionary.as_mut() else {
+            return Outcome {
+                dictionary_available: Some(false),
+                ..Outcome::default()
+            };
+        };
+        match dictionary.lookup(word) {
+            Ok(definition) => Outcome {
+                definition,
+                dictionary_available: Some(true),
+                ..Outcome::default()
+            },
+            Err(_) => {
+                // Повреждённый или исчезнувший файл не остаётся в кэше:
+                // после повторной загрузки тот же путь должен открыться снова.
+                self.dictionary = None;
+                self.dictionary_path = None;
+                Outcome {
+                    dictionary_available: Some(false),
+                    ..Outcome::default()
+                }
+            }
+        }
+    }
+
     /// Записывает новое состояние и запоминает, изменилось ли оно.
     fn change_library(&mut self, next: LibraryState) {
         if next.revision != self.library.revision {
@@ -676,6 +780,7 @@ fn exercises() -> &'static [Exercise] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
     const NOW: i64 = 1_700_000_000_000;
 
@@ -703,6 +808,31 @@ mod tests {
             ошибка.to_string().contains("полетелиНаМарс"),
             "в ошибке нет имени команды: {ошибка}"
         );
+    }
+
+    #[test]
+    fn словарь_доступен_через_единую_команду_сессии() {
+        let mut file = tempfile::NamedTempFile::new().expect("файл не создался");
+        write!(
+            file,
+            "# wolfy english dictionary v1\n\
+             # generated\t2026-08-23\n\
+             library\tˈlaɪˌbɹɛɹi\tn|a room where books are kept\n"
+        )
+        .expect("словарь не записался");
+        file.flush().expect("словарь не сбросился");
+
+        let mut session = сессия();
+        let outcome = session.run(Command::Define {
+            word: "Library".to_string(),
+            path: file.path().to_string_lossy().into_owned(),
+        });
+
+        assert_eq!(outcome.dictionary_available, Some(true));
+        let entry = outcome.definition.expect("статья не нашлась");
+        assert_eq!(entry.word, "library");
+        assert_eq!(entry.pronunciation, "ˈlaɪˌbɹɛɹi");
+        assert_eq!(entry.senses[0].pos, "NOUN");
     }
 
     #[test]
@@ -758,7 +888,9 @@ mod tests {
     #[test]
     fn план_добавления_не_меняет_состояния() {
         let mut session = сессия();
-        let outcome = session.run(команда(r#"{"op":"planAdd","fingerprint":"отпечаток"}"#));
+        let outcome = session.run(команда(
+            r#"{"op":"planAdd","fingerprint":"отпечаток"}"#,
+        ));
         assert_eq!(outcome.plan.as_deref(), Some("fresh"));
         assert!(!outcome.changed);
         assert!(!session.library_dirty);
@@ -848,6 +980,7 @@ mod tests {
     #[test]
     fn клиентские_команды_разбираются_все() {
         let команды: Vec<&str> = vec![
+            r#"{"op":"define","word":"library","path":""}"#,
             r#"{"op":"planAdd","fingerprint":"abc"}"#,
             r#"{"op":"addBook","book":{"id":"b1","title":"Гэтсби","addedAt":1}}"#,
             r#"{"op":"attachFile","id":"b1","path":"books/g.epub","fingerprint":"abc"}"#,

@@ -21,7 +21,10 @@ use serde::Serialize;
 pub const PORTION: usize = 20;
 
 /// Сколько новых правил подмешивать за раз.
-pub const NEW_RULES: usize = 3;
+///
+/// Пять: меньше — и шесть десятков правил растянутся на два месяца, больше —
+/// и колода грамматики забьёт собой обе остальные.
+pub const NEW_RULES: usize = 5;
 
 /// Состояние одной колоды на экране.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -232,7 +235,11 @@ mod tests {
         let status = status(&[], "rule", NOW, &упражнения);
 
         // Правил под шесть десятков, и все разом читателю не показывают.
-        assert_eq!(status.due, NEW_RULES, "правила вывалились разом: {}", status.due);
+        assert_eq!(
+            status.due, NEW_RULES,
+            "правила вывалились разом: {}",
+            status.due
+        );
         assert!(status.total > NEW_RULES, "новые правила не сосчитаны");
         assert_eq!(status.learned, 0);
     }
@@ -289,7 +296,11 @@ mod tests {
         фраза.hp = 40;
 
         let drill = drill_for(&[фраза], "p1", Lexicon::embedded()).expect("задания нет");
-        assert!(drill.pieces.len() > 1, "фраза не разбилась: {:?}", drill.pieces);
+        assert!(
+            drill.pieces.len() > 1,
+            "фраза не разбилась: {:?}",
+            drill.pieces
+        );
         assert!(
             drill.pieces.iter().any(|block| block.contains(' ')),
             "все блоки по одному слову: {:?}",

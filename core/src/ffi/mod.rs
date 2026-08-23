@@ -346,7 +346,10 @@ where
         }
     };
 
-    match guard.as_mut().and_then(|sessions| sessions.get_mut(&handle)) {
+    match guard
+        .as_mut()
+        .and_then(|sessions| sessions.get_mut(&handle))
+    {
         Some(session) => Some(body(session)),
         None => {
             set_error("сессия уже закрыта или не открывалась");
@@ -364,7 +367,10 @@ unsafe fn read_optional(raw: *const c_char) -> Option<String> {
         return None;
     }
     // SAFETY: проверили на null; за корректность строки отвечает вызывающий.
-    unsafe { CStr::from_ptr(raw) }.to_str().ok().map(str::to_string)
+    unsafe { CStr::from_ptr(raw) }
+        .to_str()
+        .ok()
+        .map(str::to_string)
 }
 
 /// Читает C-строку, полученную с чужой стороны.
@@ -439,7 +445,9 @@ pub unsafe extern "C" fn wolfy_session_open(
 
         let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
         let mut guard = SESSIONS.lock().ok()?;
-        guard.get_or_insert_with(HashMap::new).insert(handle, session);
+        guard
+            .get_or_insert_with(HashMap::new)
+            .insert(handle, session);
         Some(handle)
     }));
 
@@ -466,10 +474,7 @@ pub unsafe extern "C" fn wolfy_session_open(
 /// `handle` — номер, выданный [`wolfy_session_open`] и ещё не закрытый.
 /// `command` — корректная UTF-8 строка с нулём на конце.
 #[no_mangle]
-pub unsafe extern "C" fn wolfy_session_run(
-    handle: i64,
-    command: *const c_char,
-) -> *mut c_char {
+pub unsafe extern "C" fn wolfy_session_run(handle: i64, command: *const c_char) -> *mut c_char {
     guard(|| {
         let text = unsafe { read_string(command) }?;
         let command: Command = match serde_json::from_str(&text) {

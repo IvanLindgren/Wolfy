@@ -115,7 +115,9 @@ const FILLERS: &str = "etaoinshrdlcumwfgypbvk";
 /// перевод приложению нечем, а «дом / стол / бегать» рядом с «библиотека» не
 /// проверяют ничего.
 pub fn for_word(card: &Card, deck: &[Card], seed: i32) -> Drill {
-    let prompt = non_blank(&card.translation).unwrap_or(&card.lemma).to_string();
+    let prompt = non_blank(&card.translation)
+        .unwrap_or(&card.lemma)
+        .to_string();
     let sentence = blanked(card);
 
     let mut others: Vec<String> = Vec::new();
@@ -131,7 +133,8 @@ pub fn for_word(card: &Card, deck: &[Card], seed: i32) -> Drill {
         }
     }
 
-    let choice = card.hp >= ASSEMBLE_BELOW && !card.translation.trim().is_empty() && others.len() >= 3;
+    let choice =
+        card.hp >= ASSEMBLE_BELOW && !card.translation.trim().is_empty() && others.len() >= 3;
 
     if choice {
         let mut options = vec![card.translation.clone()];
@@ -300,9 +303,11 @@ fn marker(sentence: &str, seed: i32) -> Option<Marker> {
             end += 1;
         }
         let word: String = chars[at..end].iter().collect();
-        let group = MARKERS
-            .iter()
-            .find(|group| group.iter().any(|option| option.eq_ignore_ascii_case(&word)));
+        let group = MARKERS.iter().find(|group| {
+            group
+                .iter()
+                .any(|option| option.eq_ignore_ascii_case(&word))
+        });
 
         // Слово в начале фразы не берём: пропуск первым словом съедает
         // заглавную букву и подсказывает ответ формой строки. Группа из трёх —
@@ -584,7 +589,10 @@ mod tests {
             "слово осталось в предложении: {}",
             drill.subject
         );
-        assert!(drill.subject.contains('\u{2026}'), "пропуска в предложении нет");
+        assert!(
+            drill.subject.contains('\u{2026}'),
+            "пропуска в предложении нет"
+        );
     }
 
     #[test]
@@ -649,9 +657,10 @@ mod tests {
         let card = фраза(100);
         let gap = for_phrase(&card, &[], &[], зерно(&card));
         assert!(
-            MARKERS
+            MARKERS.iter().any(|group| gap
+                .pieces
                 .iter()
-                .any(|group| gap.pieces.iter().all(|piece| group.contains(&piece.as_str()))),
+                .all(|piece| group.contains(&piece.as_str()))),
             "варианты из разных групп: {:?}",
             gap.pieces
         );

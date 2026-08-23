@@ -580,7 +580,10 @@ mod tests {
             ..пустая()
         };
 
-        assert_eq!(plan_add(&state, "отпечаток"), AddPlan::Known("1".to_string()));
+        assert_eq!(
+            plan_add(&state, "отпечаток"),
+            AddPlan::Known("1".to_string())
+        );
         assert_eq!(plan_add(&state, "другой"), AddPlan::Fresh);
     }
 
@@ -594,7 +597,10 @@ mod tests {
             ..пустая()
         };
 
-        assert_eq!(plan_add(&state, "отпечаток"), AddPlan::Attach("1".to_string()));
+        assert_eq!(
+            plan_add(&state, "отпечаток"),
+            AddPlan::Attach("1".to_string())
+        );
 
         let after = attach_file(&state, "1", "books/gatsby.epub", "отпечаток");
         assert!(after.books[0].readable());
@@ -638,10 +644,28 @@ mod tests {
     #[test]
     fn одно_слово_не_кладётся_в_колоду_дважды() {
         let (state, первая) = save_word(
-            &пустая(), "1", "libraries", "library", "библиотека", "", "", "", "c1", NOW,
+            &пустая(),
+            "1",
+            "libraries",
+            "library",
+            "библиотека",
+            "",
+            "",
+            "",
+            "c1",
+            NOW,
         );
         let (после, вторая) = save_word(
-            &state, "1", "library", "library", "библиотека", "", "", "", "c2", NOW,
+            &state,
+            "1",
+            "library",
+            "library",
+            "библиотека",
+            "",
+            "",
+            "",
+            "c2",
+            NOW,
         );
 
         assert_eq!(после.cards.len(), 1, "слово легло в колоду дважды");
@@ -652,13 +676,31 @@ mod tests {
     #[test]
     fn удалённая_карточка_воскресает_той_же_записью() {
         let (state, карточка) = save_word(
-            &пустая(), "1", "library", "library", "библиотека", "", "", "", "c1", NOW,
+            &пустая(),
+            "1",
+            "library",
+            "library",
+            "библиотека",
+            "",
+            "",
+            "",
+            "c1",
+            NOW,
         );
         let убрана = remove_word(&state, "1", "library");
         assert!(убрана.cards[0].deleted);
 
         let (снова, вернулась) = save_word(
-            &убрана, "1", "library", "library", "библиотека", "", "", "", "c2", NOW,
+            &убрана,
+            "1",
+            "library",
+            "library",
+            "библиотека",
+            "",
+            "",
+            "",
+            "c2",
+            NOW,
         );
         assert_eq!(снова.cards.len(), 1, "завелась вторая запись");
         // Новая запись приехала бы на второе устройство рядом со старой.
@@ -674,8 +716,8 @@ mod tests {
     #[test]
     fn одна_фраза_не_кладётся_дважды() {
         let текст = "I have been reading this book.";
-        let (state, первая) = save_phrase(&пустая(), "1", текст, "Я читаю", "c1", NOW)
-            .expect("фраза не сохранилась");
+        let (state, первая) =
+            save_phrase(&пустая(), "1", текст, "Я читаю", "c1", NOW).expect("фраза не сохранилась");
         let (после, вторая) = save_phrase(&state, "1", &format!("  {текст}  "), "", "c2", NOW)
             .expect("фраза не сохранилась");
 
@@ -704,7 +746,16 @@ mod tests {
             ..пустая()
         };
         let (state, _) = save_word(
-            &state, "1", "library", "library", "библиотека", "", "", "", "c1", NOW,
+            &state,
+            "1",
+            "library",
+            "library",
+            "библиотека",
+            "",
+            "",
+            "",
+            "c1",
+            NOW,
         );
         let (state, _) = save_word(&state, "2", "whale", "whale", "кит", "", "", "", "c2", NOW);
 
@@ -716,8 +767,16 @@ mod tests {
         // Запись остаётся: стёртую второе устройство не заметит.
         assert_eq!(after.books.len(), 2);
 
-        let своя = after.cards.iter().find(|c| c.id == "c1").expect("карточка пропала");
-        let чужая = after.cards.iter().find(|c| c.id == "c2").expect("карточка пропала");
+        let своя = after
+            .cards
+            .iter()
+            .find(|c| c.id == "c1")
+            .expect("карточка пропала");
+        let чужая = after
+            .cards
+            .iter()
+            .find(|c| c.id == "c2")
+            .expect("карточка пропала");
         assert!(своя.deleted, "колода осталась без книги");
         assert!(!чужая.deleted, "удаление задело чужую колоду");
     }
@@ -767,7 +826,10 @@ mod tests {
         assert_eq!(appended_page("", "Первая"), "Первая");
         assert_eq!(appended_page("Первая", "Вторая"), "Первая\n\nВторая");
         // Хвостовые переводы строк не должны копиться от страницы к странице.
-        assert_eq!(appended_page("Первая\n\n\n", "  Вторая  "), "Первая\n\nВторая");
+        assert_eq!(
+            appended_page("Первая\n\n\n", "  Вторая  "),
+            "Первая\n\nВторая"
+        );
     }
 
     #[test]

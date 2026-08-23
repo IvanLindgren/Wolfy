@@ -76,7 +76,11 @@ fn default_true() -> bool {
 
 impl Card {
     /// Новая карточка со словом: полная прочность, срок не назначен.
-    pub fn new(id: impl Into<String>, surface: impl Into<String>, lemma: impl Into<String>) -> Card {
+    pub fn new(
+        id: impl Into<String>,
+        surface: impl Into<String>,
+        lemma: impl Into<String>,
+    ) -> Card {
         Card {
             id: id.into(),
             book_id: String::new(),

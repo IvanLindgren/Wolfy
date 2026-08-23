@@ -263,7 +263,10 @@ mod tests {
         let приехала = книга(UUID, "The Great Gatsby", NOW);
         let after = apply_server(&state, 9, &[приехала], &[], &Sent::nothing(&state), NOW);
 
-        assert_eq!(after.books[0].title, "The Great Gatsby", "название не приехало");
+        assert_eq!(
+            after.books[0].title, "The Great Gatsby",
+            "название не приехало"
+        );
         assert_eq!(
             after.books[0].path, "books/gatsby.epub",
             "путь к файлу затёрт ответом"
@@ -302,7 +305,10 @@ mod tests {
         };
         let after = apply_server(&state, 9, &[приехала], &[], &sent, NOW);
 
-        assert!(!after.books[0].dirty, "своё же эхо не сняло запись с отправки");
+        assert!(
+            !after.books[0].dirty,
+            "своё же эхо не сняло запись с отправки"
+        );
         assert_eq!(after.books[0].rev, 9);
     }
 
@@ -359,14 +365,30 @@ mod tests {
         };
 
         let state = состояние(vec![]);
-        let after = apply_server(&state, 9, &[первая, вторая], &[], &Sent::nothing(&state), NOW);
-        assert_eq!(after.shelves.len(), 1, "полка завелась дважды: {:?}", after.shelves);
+        let after = apply_server(
+            &state,
+            9,
+            &[первая, вторая],
+            &[],
+            &Sent::nothing(&state),
+            NOW,
+        );
+        assert_eq!(
+            after.shelves.len(),
+            1,
+            "полка завелась дважды: {:?}",
+            after.shelves
+        );
     }
 
     #[test]
     fn книги_сортируются_по_времени_добавления() {
         let state = состояние(vec![]);
-        let поздняя = книга("3f1c2b4a-0000-4000-8000-000000000002", "Поздняя", NOW + 1000);
+        let поздняя = книга(
+            "3f1c2b4a-0000-4000-8000-000000000002",
+            "Поздняя",
+            NOW + 1000,
+        );
         let ранняя = книга(UUID, "Ранняя", NOW);
 
         let after = apply_server(
@@ -424,7 +446,10 @@ mod tests {
         let after = migrate(&state, &mut свежие);
 
         assert_eq!(after.books[0].id, UUID);
-        assert_eq!(after.books[0].rev, 0, "переехавшая книга помнит чужую ревизию");
+        assert_eq!(
+            after.books[0].rev, 0,
+            "переехавшая книга помнит чужую ревизию"
+        );
         assert!(after.books[0].dirty);
         // Колода обязана переехать вместе с книгой, иначе потеряет хозяина.
         assert_eq!(after.cards[0].book_id, UUID);

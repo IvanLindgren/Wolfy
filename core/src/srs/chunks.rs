@@ -204,7 +204,10 @@ mod tests {
         // значит выдать читателю одну плитку вместо задания.
         let sentence = "If I had known I would have called you";
         let blocks = split(&tokenize(sentence), &[цепочка(0, 8)]);
-        assert!(blocks.len() > 1, "предложение стало одним блоком: {blocks:?}");
+        assert!(
+            blocks.len() > 1,
+            "предложение стало одним блоком: {blocks:?}"
+        );
     }
 
     #[test]

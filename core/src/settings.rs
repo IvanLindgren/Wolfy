@@ -275,7 +275,10 @@ mod tests {
         };
 
         let слитые = местные.replaced_by(&приехавшие);
-        assert_eq!(слитые.theme, "Sepia", "тема с другого устройства не приехала");
+        assert_eq!(
+            слитые.theme, "Sepia",
+            "тема с другого устройства не приехала"
+        );
         assert!(слитые.demo_added, "демо-книга приедет второй раз");
     }
 
@@ -316,8 +319,14 @@ mod tests {
 
         // И обратно — теми же именами.
         let json = serde_json::to_string(&settings).expect("настройки не пишутся");
-        assert!(json.contains("\"fontScale\""), "поле переименовалось: {json}");
-        assert!(json.contains("\"demoAdded\""), "поле переименовалось: {json}");
+        assert!(
+            json.contains("\"fontScale\""),
+            "поле переименовалось: {json}"
+        );
+        assert!(
+            json.contains("\"demoAdded\""),
+            "поле переименовалось: {json}"
+        );
     }
 
     #[test]

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Собирает офлайн-словарь Wolfy: толкования и произношение.
+"""Собирает офлайн-словарь Wolfy: перевод, толкования и произношение.
 
 Карточке слова не хватало двух вещей: что слово значит само по себе и как оно
 звучит. Перевод отвечает на первый вопрос лишь отчасти — «library» это и
@@ -11,11 +11,11 @@
 
 * Толкования — WordNet (лицензия Принстона, свободное распространение).
 * Произношение — CMUdict (BSD), переложенный из ARPAbet в МФА.
+* Русские эквиваленты — FreeDict/WikDict eng-rus (CC BY-SA 3.0).
 
 Почему отдельный файл, а не внутрь ядра. Словарь весит на порядок больше
-лексикона, а нужен не всем: читатель, которому хватает перевода, не должен
-платить за него размером установщика. Поэтому он скачивается отдельно и лежит
-рядом с библиотекой.
+лексикона. Его сжатый архив входит в установщик, но распаковывается только
+после согласия читателя и лежит рядом с библиотекой.
 
 Почему отсортирован. Ядро ищет в нём двоичным поиском прямо по файлу, не читая
 его в память: полтораста тысяч статей в памяти телефона — это непозволительно
@@ -25,7 +25,7 @@
 
     pip install nltk
     python -c "import nltk; [nltk.download(p) for p in ('wordnet','cmudict')]"
-    python tools/build_dictionary.py
+    python tools/build_dictionary.py --freedict path/to/freedict-eng-rus.src.tar.xz
 
 Результат — `dist/wolfy_dictionary.tsv` и его сжатая копия для раздачи.
 """
@@ -34,7 +34,11 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import re
 import sys
+import tarfile
+import unicodedata
+import xml.etree.ElementTree as ET
 
 from collections import defaultdict
 from datetime import date
@@ -52,6 +56,9 @@ SENSES_PER_POS = 2
 
 # Коды частей речи — те же однобуквенные, что в лексиконе.
 WORDNET_POS = {"n": "n", "v": "v", "a": "a", "s": "a", "r": "r"}
+
+TEI = "{http://www.tei-c.org/ns/1.0}"
+TRANSLATIONS_PER_WORD = 5
 
 # ARPAbet → МФА, общеамериканское произношение.
 #
@@ -129,7 +136,59 @@ def ipa(phones: list[str]) -> str:
     return "".join(result)
 
 
-def build(target: Path, limit: int | None) -> None:
+def without_stress(text: str) -> str:
+    """Убирает словарное ударение: «библиоте́ка» и «библиотека» — одно."""
+    decomposed = unicodedata.normalize("NFD", text.strip())
+    return unicodedata.normalize(
+        "NFC",
+        "".join(char for char in decomposed if unicodedata.category(char) != "Mn"),
+    )
+
+
+def clean_translation(text: str) -> str:
+    """Убирает разметку Wiktionary, которая человеку в карточке не нужна."""
+    text = re.sub(r"\[\[(?:[^|\]]+\|)?([^\]]+)\]\]", r"\1", text)
+    text = re.sub(r"\{\{[^}]+\}\}", "", text)
+    return without_stress(text).replace("_", " ").strip()
+
+
+def freedict_translations(archive: Path | None) -> dict[str, list[str]]:
+    """Читает eng-rus TEI прямо из tar.xz, не распаковывая его на диск."""
+    if archive is None:
+        return {}
+    if not archive.is_file():
+        sys.exit(f"архив FreeDict не найден: {archive}")
+
+    result: dict[str, list[str]] = defaultdict(list)
+    with tarfile.open(archive, "r:xz") as bundle:
+        member = next((item for item in bundle if item.name.endswith("/eng-rus.tei")), None)
+        if member is None:
+            sys.exit("в архиве FreeDict нет eng-rus.tei")
+        source = bundle.extractfile(member)
+        if source is None:
+            sys.exit("не получилось прочитать eng-rus.tei")
+
+        for _, entry in ET.iterparse(source, events=("end",)):
+            if entry.tag != TEI + "entry":
+                continue
+            orth = entry.find(f"./{TEI}form/{TEI}orth")
+            word = (orth.text or "").strip().lower() if orth is not None else ""
+            if not word.isascii() or not word.isalpha():
+                entry.clear()
+                continue
+
+            bucket = result[word]
+            for quote in entry.findall(f".//{TEI}cit[@type='trans']/{TEI}quote"):
+                translated = clean_translation("".join(quote.itertext()))
+                if translated and translated not in bucket:
+                    bucket.append(translated)
+                    if len(bucket) >= TRANSLATIONS_PER_WORD:
+                        break
+            entry.clear()
+    return result
+
+
+def build(target: Path, limit: int | None, freedict: Path | None) -> None:
     try:
         from nltk.corpus import cmudict
         from nltk.corpus import wordnet as wn
@@ -137,6 +196,7 @@ def build(target: Path, limit: int | None) -> None:
         sys.exit("нужен nltk: pip install nltk")
 
     sounds = cmudict.dict()
+    translations = freedict_translations(freedict)
 
     # Толкования по слову и части речи.
     senses: dict[str, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
@@ -164,17 +224,18 @@ def build(target: Path, limit: int | None) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     written = 0
     with target.open("w", encoding="utf-8", newline="\n") as handle:
-        handle.write("# wolfy english dictionary v1\n")
+        handle.write("# wolfy english dictionary v2\n")
         handle.write(f"# generated\t{date.today().isoformat()}\n")
-        handle.write("# source\tWordNet (Princeton), CMUdict (BSD)\n")
+        handle.write("# source\tWordNet (Princeton), CMUdict (BSD), FreeDict/WikDict eng-rus (CC BY-SA 3.0)\n")
         # Строка формата стоит в файле, а не только в этом скрипте: файл едет
         # к читателю отдельно от кода и обязан объяснять себя сам.
-        handle.write("# format\tword<TAB>ipa<TAB>pos|sense<TAB>pos|sense…\n")
+        handle.write("# format\tword<TAB>ipa<TAB>t|translation<TAB>pos|sense…\n")
 
         for word in words:
             phones = sounds.get(word)
             transcription = ipa(phones[0]) if phones else ""
             columns = [word, transcription]
+            columns.extend(f"t|{value}" for value in translations.get(word, []))
             for pos in ("n", "v", "a", "r"):
                 for definition in senses[word].get(pos, []):
                     columns.append(f"{pos}|{definition}")
@@ -196,8 +257,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, default=TARGET)
     parser.add_argument("--limit", type=int, default=None, help="только первые N статей — для проверки")
+    parser.add_argument(
+        "--freedict",
+        type=Path,
+        default=None,
+        help="архив freedict-eng-rus-*.src.tar.xz с русскими переводами",
+    )
     args = parser.parse_args()
-    build(args.out, args.limit)
+    build(args.out, args.limit, args.freedict)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-//! Офлайн-словарь: толкования и произношение.
+//! Офлайн-словарь: перевод, толкования и произношение.
 //!
 //! Отвечает на два вопроса, которых нет ни у лексикона, ни у перевода: что
 //! слово значит само по себе и как оно звучит. Перевод отвечает на первый
@@ -7,10 +7,10 @@
 //!
 //! ## Почему отдельным файлом
 //!
-//! Словарь весит на порядок больше лексикона, а нужен не всем: читателю,
-//! которому хватает перевода, незачем платить за него размером установщика.
-//! Поэтому он скачивается отдельно и лежит рядом с библиотекой. Пока его нет,
-//! ядро отвечает «не знаю» — и это нормальный ответ, а не ошибка.
+//! Словарь весит на порядок больше лексикона и потому не встраивается в DLL:
+//! архив едет отдельным ресурсом установщика, а после согласия пользователя
+//! распаковывается рядом с библиотекой. Пока файла нет, ядро отвечает «не
+//! знаю» — и это нормальный ответ, а не ошибка.
 //!
 //! ## Почему не читается в память
 //!
@@ -41,6 +41,8 @@ pub struct Entry {
     /// Пусто, если слова не оказалось в словаре произношений: толкование при
     /// этом всё равно есть, и показать его лучше, чем промолчать.
     pub pronunciation: String,
+    /// Короткие русские эквиваленты из FreeDict/WikDict.
+    pub translations: Vec<String>,
     pub senses: Vec<Sense>,
 }
 
@@ -234,10 +236,15 @@ fn parse(line: &str) -> Entry {
     let word = columns.next().unwrap_or_default().to_string();
     let pronunciation = columns.next().unwrap_or_default().to_string();
 
+    let mut translations = Vec::new();
     let senses = columns
         .filter_map(|column| {
             let (code, definition) = column.split_once('|')?;
             if definition.is_empty() {
+                return None;
+            }
+            if code == "t" {
+                translations.push(definition.to_string());
                 return None;
             }
             Some(Sense {
@@ -250,6 +257,7 @@ fn parse(line: &str) -> Entry {
     Entry {
         word,
         pronunciation,
+        translations,
         senses,
     }
 }
@@ -275,7 +283,7 @@ mod tests {
     const ТЕЛО: &str = "\
 about\tәˈbaʊt\tr|in the area or vicinity
 gloom\tɡlum\tn|a feeling of melancholy apprehension
-library\tˈlaɪˌbɹɛɹi\tn|a room where books are kept\tn|a depository built to contain books
+library\tˈlaɪˌbɹɛɹi\tt|библиотека\tt|книгохранилище\tn|a room where books are kept\tn|a depository built to contain books
 water\tˈwɔtɚ\tn|a liquid necessary for life\tv|supply with water
 zebra\tˈzibɹə\tn|a striped horse
 ";
@@ -290,6 +298,7 @@ zebra\tˈzibɹə\tn|a striped horse
 
         assert_eq!(entry.word, "library");
         assert_eq!(entry.pronunciation, "ˈlaɪˌbɹɛɹi");
+        assert_eq!(entry.translations, ["библиотека", "книгохранилище"]);
         assert_eq!(entry.senses.len(), 2);
         assert_eq!(entry.senses[0].pos, "NOUN");
         assert_eq!(entry.senses[0].definition, "a room where books are kept");
@@ -323,14 +332,23 @@ zebra\tˈzibɹə\tn|a striped horse
     fn регистр_не_мешает() {
         // Читатель тапает и по слову в начале предложения.
         let (_file, mut dictionary) = словарь(ТЕЛО);
-        assert!(dictionary.lookup("Library").expect("поиск сломался").is_some());
-        assert!(dictionary.lookup("  GLOOM  ").expect("поиск сломался").is_some());
+        assert!(dictionary
+            .lookup("Library")
+            .expect("поиск сломался")
+            .is_some());
+        assert!(dictionary
+            .lookup("  GLOOM  ")
+            .expect("поиск сломался")
+            .is_some());
     }
 
     #[test]
     fn части_речи_переводятся_в_общий_набор() {
         let (_file, mut dictionary) = словарь(ТЕЛО);
-        let entry = dictionary.lookup("water").expect("поиск сломался").expect("нет");
+        let entry = dictionary
+            .lookup("water")
+            .expect("поиск сломался")
+            .expect("нет");
         let parts: Vec<&str> = entry.senses.iter().map(|s| s.pos.as_str()).collect();
         assert_eq!(parts, vec!["NOUN", "VERB"]);
     }
@@ -340,7 +358,10 @@ zebra\tˈzibɹə\tn|a striped horse
         // Слова может не быть в словаре произношений, а толкование есть —
         // промолчать хуже, чем показать половину.
         let (_file, mut dictionary) = словарь("mizzle\t\tn|a light drizzle\n");
-        let entry = dictionary.lookup("mizzle").expect("поиск сломался").expect("нет");
+        let entry = dictionary
+            .lookup("mizzle")
+            .expect("поиск сломался")
+            .expect("нет");
         assert!(entry.pronunciation.is_empty());
         assert_eq!(entry.senses.len(), 1);
     }
