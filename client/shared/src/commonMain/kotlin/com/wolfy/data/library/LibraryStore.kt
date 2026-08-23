@@ -61,6 +61,9 @@ interface LibraryStore {
      * накапливаются в одной книге.
      */
     fun writeText(fileName: String, text: String): String
+
+    /** Сохраняет загруженный EPUB без промежуточного файла платформы. */
+    fun writeBook(fileName: String, bytes: ByteArray): String
 }
 
 /** Хранилище для текущей платформы. */

@@ -1,22 +1,24 @@
 package com.wolfy.data
 
-import com.wolfy.data.library.LibraryStore
-import com.wolfy.data.library.currentTimeMillis
+import com.wolfy.data.library.CoreSession
+import com.wolfy.data.library.command
+import com.wolfy.data.library.json
 import com.wolfy.srs.Intensity
-import com.wolfy.srs.Scheduler
 import com.wolfy.theme.ReadingTheme
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.json.put
 
 /**
  * Настройки приложения.
  *
- * Тема хранится именем, а не номером в перечислении: номер меняется при
- * добавлении новой темы посередине списка, и у читателя, выбравшего сепию,
- * однажды окажется чёрный экран без всякого его участия.
+ * Тема и интенсивность хранятся именем, а не номером в перечислении: номер
+ * меняется при добавлении новой темы посередине списка, и у читателя,
+ * выбравшего сепию, однажды окажется чёрный экран без всякого его участия.
+ *
+ * Форма записи совпадает с той, что держит ядро: это одни и те же байты на
+ * диске и в синхронизации.
  */
 @Serializable
 data class AppSettings(
@@ -25,10 +27,13 @@ data class AppSettings(
      * Множитель размера шрифта читалки.
      *
      * Размер задан в теме и подобран под газетный набор, но зрение у всех
-     * разное, а менять кегль в теме значило бы ломать пропорции полосы. Поэтому
-     * множитель: он растягивает всё сразу и набор остаётся согласованным.
+     * разное, а менять кегль в теме значило бы ломать пропорции полосы.
+     * Поэтому множитель: он растягивает всё сразу и набор остаётся
+     * согласованным.
      */
     val fontScale: Float = 1f,
+    /** Множитель межстрочного интервала читалки. */
+    val lineScale: Float = 1f,
     /**
      * Клали ли уже демо-книгу.
      *
@@ -37,9 +42,7 @@ data class AppSettings(
      * приложение не удалило ничего.
      */
     val demoAdded: Boolean = false,
-    /**
-     * Интенсивность повторений — именем, по той же причине, что и тема.
-     */
+    /** Интенсивность повторений — именем, по той же причине, что и тема. */
     val intensity: String = Intensity.Normal.name,
     /**
      * Местный день последней тренировки.
@@ -61,9 +64,9 @@ data class AppSettings(
     /**
      * Сколько ответов дано всего и сколько из них верных.
      *
-     * Два числа вместо истории ответов: расписание спрашивает у них только
-     * долю верных ([Scheduler.ease]), а история в тысячу записей ездила бы
-     * между устройствами каждую синхронизацию ради одного дробного числа.
+     * Два числа вместо истории ответов: расписанию нужна от них только доля
+     * верных, а история в тысячу записей ездила бы между устройствами каждую
+     * синхронизацию ради одного дробного числа.
      */
     val answers: Int = 0,
     val right: Int = 0,
@@ -74,102 +77,60 @@ data class AppSettings(
 
     /** Интенсивность по имени. */
     val reviewIntensity: Intensity get() = Intensity.of(intensity)
-
-    /** Поправка сроков под то, как читатель отвечает на самом деле. */
-    val ease: Float get() = Scheduler.ease(answers, right)
 }
 
 /**
  * Настройки, которые переживают перезапуск.
  *
- * Живут в том же каталоге, что библиотека, но отдельной записью: тема меняется
- * каждый вечер, а библиотека — раз в неделю, и переписывать список книг ради
- * выбора темы незачем.
+ * Лежат в том же хранилище, что библиотека, но отдельной записью: тема
+ * меняется каждый вечер, а библиотека — раз в неделю, и переписывать список
+ * книг ради выбора темы незачем.
+ *
+ * Правила — серия дней, счёт ответов, пределы множителей набора, слияние с
+ * настройками другого устройства — живут в ядре на Rust. Здесь только поток
+ * изменений для экранов.
  */
-class Settings(private val store: LibraryStore) {
-    private val json = Json {
-        ignoreUnknownKeys = true
-        encodeDefaults = true
-        prettyPrint = true
-    }
+class Settings(private val session: CoreSession) {
+    val state: StateFlow<AppSettings> get() = session.settings
 
-    private val _state = MutableStateFlow(read())
-    val state: StateFlow<AppSettings> = _state.asStateFlow()
-
-    val current: AppSettings get() = _state.value
+    val current: AppSettings get() = state.value
 
     fun setTheme(theme: ReadingTheme) {
-        update { it.copy(theme = theme.name) }
+        send(command("setTheme") { put("theme", theme.name) })
     }
 
     /**
      * Заменяет настройки целиком — так они приезжают с другого устройства.
      *
      * Признак «клали ли демо-книгу» при этом сохраняется местный: он про то,
-     * что происходило на *этом* устройстве, и приезжать ему неоткуда.
+     * что происходило на *этом* устройстве, и приезжать ему неоткуда. Следит
+     * за этим ядро.
      */
     fun replace(settings: AppSettings) {
-        update { settings.copy(demoAdded = it.demoAdded) }
+        send(
+            command("replaceSettings") {
+                put("settings", json.encodeToJsonElement(settings))
+            },
+        )
     }
 
     fun markDemoAdded() {
-        update { it.copy(demoAdded = true) }
+        send(command("markDemoAdded"))
     }
 
     fun setFontScale(scale: Float) {
-        update { it.copy(fontScale = scale.coerceIn(0.8f, 1.6f)) }
+        send(command("setFontScale") { put("scale", scale) })
+    }
+
+    fun setLineScale(scale: Float) {
+        send(command("setLineScale") { put("scale", scale) })
     }
 
     fun setIntensity(intensity: Intensity) {
-        update { it.copy(intensity = intensity.name) }
+        send(command("setIntensity") { put("intensity", intensity.name) })
     }
 
-    /**
-     * Учитывает ответ тренировки.
-     *
-     * Здесь же продлевается серия дней: она про то, что читатель сегодня
-     * занимался, а «занимался» — это ответил хотя бы раз. Считать серию по
-     * открытию экрана было бы нечестно, а по закрытой колоде — жестоко:
-     * человек, у которого сегодня четыре свободных минуты, серию не теряет.
-     */
-    fun recordAnswer(right: Boolean, now: Long = currentTimeMillis()) {
-        val today = localDay(now)
-        update { settings ->
-            val streak = when (settings.trainedOn) {
-                today -> settings.streakDays
-                today - 1 -> settings.streakDays + 1
-                // Пропуск обрывает серию, и она начинается заново — с
-                // сегодняшнего дня, а не с нуля: сегодня-то он занимался.
-                else -> 1
-            }
-            settings.copy(
-                trainedOn = today,
-                streakDays = streak,
-                bestStreak = maxOf(settings.bestStreak, streak),
-                answers = settings.answers + 1,
-                right = settings.right + if (right) 1 else 0,
-            )
-        }
-    }
-
-    private fun update(change: (AppSettings) -> AppSettings) {
-        val next = change(_state.value)
-        _state.value = next
-        store.save(RECORD, json.encodeToString(next))
-    }
-
-    private fun read(): AppSettings {
-        val saved = store.load(RECORD) ?: return AppSettings()
-        return try {
-            json.decodeFromString(saved)
-        } catch (e: Exception) {
-            // Настройки по умолчанию хуже сохранённых, но лучше падения на
-            // старте: приложение откроется, а тему читатель выберет заново.
-            AppSettings()
-        }
-    }
-
-    private companion object {
-        const val RECORD = "settings"
+    private fun send(command: kotlinx.serialization.json.JsonObject) {
+        session.run(command)
     }
 }

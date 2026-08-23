@@ -44,6 +44,13 @@ internal interface CoreLibrary : Library {
     fun wolfy_book_metadata(handle: Long): Pointer?
     fun wolfy_book_chapter(handle: Long, index: Long): Pointer?
     fun wolfy_book_close(handle: Long)
+
+    fun wolfy_session_open(library: ByteArray?, settings: ByteArray?): Long
+    fun wolfy_session_run(handle: Long, command: ByteArray): Pointer?
+    fun wolfy_session_library(handle: Long): Pointer?
+    fun wolfy_session_settings(handle: Long): Pointer?
+    fun wolfy_session_saved(handle: Long, library: Boolean, settings: Boolean)
+    fun wolfy_session_close(handle: Long)
 }
 
 /**
@@ -115,6 +122,32 @@ internal class JnaWolfyCore(private val library: CoreLibrary) : WolfyCore {
         library.wolfy_book_close(handle)
     }
 
+    override fun openSession(library: String?, settings: String?): Long {
+        // Пустой указатель здесь не ошибка, а «записи ещё нет».
+        val handle = this.library.wolfy_session_open(library?.toUtf8(), settings?.toUtf8())
+        if (handle == 0L) {
+            throw CoreException(lastError() ?: "сессия не открылась")
+        }
+        return handle
+    }
+
+    override fun runCommand(handle: Long, command: String): String =
+        library.wolfy_session_run(handle, command.toUtf8()).takeString("команда ядру")
+
+    override fun sessionLibrary(handle: Long): String =
+        library.wolfy_session_library(handle).takeString("библиотека")
+
+    override fun sessionSettings(handle: Long): String =
+        library.wolfy_session_settings(handle).takeString("настройки")
+
+    override fun sessionSaved(handle: Long, library: Boolean, settings: Boolean) {
+        this.library.wolfy_session_saved(handle, library, settings)
+    }
+
+    override fun closeSession(handle: Long) {
+        library.wolfy_session_close(handle)
+    }
+
     /**
      * Забирает строку у ядра и сразу её освобождает.
      *
@@ -154,7 +187,7 @@ internal fun loadCore(libraryName: String = "wolfy_core"): WolfyCore {
     } catch (e: UnsatisfiedLinkError) {
         throw CoreException(
             "ядро не загрузилось ($libraryName): ${e.message}. " +
-                "Соберите его командой tools/build_core.sh",
+                "Переустановите Wolfy из полного установщика",
         )
     }
     return JnaWolfyCore(library)

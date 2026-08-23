@@ -27,8 +27,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.IntOffset
 import com.wolfy.data.Settings
+import com.wolfy.data.AccountSession
 import com.wolfy.data.SyncService
 import com.wolfy.data.WolfyApi
+import com.wolfy.data.library.CoreSession
 import com.wolfy.data.library.Library
 import com.wolfy.data.library.LibraryBook
 import com.wolfy.data.library.createLibraryStore
@@ -51,6 +53,8 @@ import com.wolfy.theme.WolfyTheme
 import com.wolfy.srs.Deck
 import com.wolfy.srs.TrainingViewModel
 import com.wolfy.ui.decks.DecksScreen
+import com.wolfy.ui.discovery.DiscoveryScreen
+import com.wolfy.ui.discovery.DiscoveryViewModel
 import com.wolfy.ui.library.LibraryScreen
 import com.wolfy.ui.library.LibraryViewModel
 import com.wolfy.ui.library.ShelvesScreen
@@ -98,9 +102,13 @@ fun WolfyApplication(
         try {
             val core = createWolfyCore()
             val store = createLibraryStore()
-            val library = Library(store)
-            val settings = Settings(store)
-            val api = WolfyApi(baseUrl = serverUrl, tokenProvider = { sessionToken })
+            // Одна сессия ядра на приложение: она держит библиотеку и
+            // настройки, а Library и Settings — только вид на них.
+            val coreSession = CoreSession(core, store)
+            val library = Library(coreSession, store)
+            val settings = Settings(coreSession)
+            val session = AccountSession(store, sessionToken)
+            val api = WolfyApi(baseUrl = serverUrl, tokenProvider = { session.token.value })
             Parts(
                 core = core,
                 library = library,
@@ -108,7 +116,9 @@ fun WolfyApplication(
                 sync = SyncService(library, settings, api),
                 reader = ReaderViewModel(core = core, api = api, library = library),
                 catalogue = LibraryViewModel(library, core, api),
-                training = TrainingViewModel(library, settings, core),
+                training = TrainingViewModel(library, settings, coreSession),
+                session = session,
+                discovery = DiscoveryViewModel(api, session, library),
             )
         } catch (e: CoreException) {
             failure = e.message
@@ -127,8 +137,13 @@ fun WolfyApplication(
     }
 
     val settings by parts.settings.state.collectAsState()
+    val activeToken by parts.session.token.collectAsState()
 
-    WolfyTheme(theme = settings.readingTheme, fontScale = settings.fontScale) {
+    WolfyTheme(
+        theme = settings.readingTheme,
+        fontScale = settings.fontScale,
+        lineScale = settings.lineScale,
+    ) {
 
         // Первый запуск: библиотека пуста, и вместо пустого экрана в неё
         // кладётся демо-глава. Она проходит ровно тот же путь, что настоящая
@@ -147,10 +162,12 @@ fun WolfyApplication(
             onPhone = onPhone,
             theme = settings.readingTheme,
             fontScale = settings.fontScale,
+            lineScale = settings.lineScale,
             onThemeChange = parts.settings::setTheme,
             onFontScaleChange = parts.settings::setFontScale,
+            onLineScaleChange = parts.settings::setLineScale,
             serverUrl = serverUrl,
-            signedIn = sessionToken != null,
+            signedIn = activeToken != null,
         )
     }
 }
@@ -164,6 +181,8 @@ private class Parts(
     val reader: ReaderViewModel,
     val catalogue: LibraryViewModel,
     val training: TrainingViewModel,
+    val session: AccountSession,
+    val discovery: DiscoveryViewModel,
 )
 
 @Composable
@@ -172,8 +191,10 @@ private fun Shell(
     onPhone: Boolean,
     theme: ReadingTheme,
     fontScale: Float,
+    lineScale: Float,
     onThemeChange: (ReadingTheme) -> Unit,
     onFontScaleChange: (Float) -> Unit,
+    onLineScaleChange: (Float) -> Unit,
     serverUrl: String,
     signedIn: Boolean,
 ) {
@@ -245,7 +266,7 @@ private fun Shell(
     // Минута, а не секунда: синхронизация нужна, чтобы вечером продолжить на
     // телефоне то, что читал днём за компьютером, и опаздывать на минуту в
     // этой задаче нечем. Опрос чаще жёг бы батарею ради ничего.
-    LaunchedEffect(parts) {
+    LaunchedEffect(parts, signedIn) {
         parts.sync.sync()
         while (true) {
             delay(60_000)
@@ -259,6 +280,7 @@ private fun Shell(
     val route: Route = when (section) {
         Section.Books -> reading?.let(Route::Reader) ?: Route.Library
         Section.Shelves -> Route.Shelves
+        Section.Discover -> Route.Discover
         Section.Cards -> when {
             training.running -> Route.Training
             decksOpen -> Route.WordList
@@ -317,6 +339,12 @@ private fun Shell(
                         reference = rule
                         section = Section.More
                     },
+                    theme = theme,
+                    fontScale = fontScale,
+                    lineScale = lineScale,
+                    onThemeChange = onThemeChange,
+                    onFontScaleChange = onFontScaleChange,
+                    onLineScaleChange = onLineScaleChange,
                 )
 
                 Route.Shelves -> ShelvesScreen(
@@ -326,6 +354,8 @@ private fun Shell(
                     onRemoveShelf = parts.catalogue::removeShelf,
                     onMove = parts.catalogue::moveToShelf,
                 )
+
+                Route.Discover -> DiscoveryScreen(parts.discovery)
 
                 Route.Training -> TrainingScreen(
                     state = training,
@@ -403,6 +433,10 @@ private sealed interface Route {
     }
 
     data object Shelves : Route {
+        override val depth: Int get() = 0
+    }
+
+    data object Discover : Route {
         override val depth: Int get() = 0
     }
 

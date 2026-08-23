@@ -1,57 +1,61 @@
 package com.wolfy.data.library
 
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.serialization.json.Json
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.json.put
 
 /**
  * Библиотека пользователя.
  *
- * Держит состояние в памяти и пишет его на диск после каждого изменения.
- * Писать целиком при каждом касании выглядит расточительно, но библиотека это
- * десятки килобайт, а альтернатива — отложенная запись, которая теряет
- * прогресс при закрытии приложения свайпом. Прочитанная страница обязана
- * пережить закрытие приложения, и это дороже пары миллисекунд.
+ * Правила живут в ядре на Rust: что считать той же книгой, когда воскрешать
+ * удалённую карточку, что тянется следом за удалением и как разрешать
+ * столкновения при синхронизации. Здесь — доступ к файлам, поток изменений
+ * для экранов и перевод вызовов в команды ядра.
  *
- * Изменения раздаются потоком: библиотеку одновременно показывает список книг,
- * обновляет читалка и отправляет синхронизация, и держать их в согласии
+ * Так и должно быть. Два устройства одного читателя обязаны разрешать
+ * столкновения одинаково, а две реализации этих правил расходятся тихо:
+ * прочитанная глава просто исчезает на одном из них. Раньше расписание,
+ * слияние и дедупликация были написаны здесь во второй раз — и одна ошибка в
+ * них уже нашлась при переезде.
+ *
+ * Изменения раздаются потоком: библиотеку одновременно показывает список
+ * книг, обновляет читалка и отправляет синхронизация, и держать их в согласии
  * подписками проще, чем звать друг друга напрямую.
  */
 @OptIn(ExperimentalUuidApi::class)
 class Library(
+    private val session: CoreSession,
     private val store: LibraryStore,
     private val now: () -> Long = { currentTimeMillis() },
     private val newId: () -> String = { Uuid.random().toString() },
 ) {
-    private val json = Json {
-        ignoreUnknownKeys = true
-        encodeDefaults = true
-        prettyPrint = true
+    val state: StateFlow<LibraryState> get() = session.library
+
+    val books: List<LibraryBook> get() = state.value.visible
+
+    init {
+        // До синхронизации номера книг придумывались как попало, а на сервере
+        // под них колонка uuid. Раньше это делалось при чтении с диска; теперь
+        // читает ядро, и позвать миграцию некому, кроме как отсюда.
+        migrate()
     }
-
-    private val _state = MutableStateFlow(read())
-    val state: StateFlow<LibraryState> = _state.asStateFlow()
-
-    val books: List<LibraryBook> get() = _state.value.visible
 
     /**
      * Книга, к которой стоит вернуться.
      *
-     * Последняя открытая и не дочитанная. Дочитанную предлагать бессмысленно —
-     * читатель уже закрыл её, — а не начатую предлагать рано: «книга дня» это
-     * продолжение, а не выбор. Книга без файла тоже не годится: предложить
-     * продолжить и не суметь открыть хуже, чем не предлагать.
+     * Последняя открытая и не дочитанная. Правило целиком в ядре: дочитанную
+     * предлагать бессмысленно, не начатую — рано, а книгу без файла нельзя
+     * открыть.
      */
-    fun continueReading(): LibraryBook? = books
-        .filter { it.started && !it.finished && it.readable }
-        .maxByOrNull { it.progress.openedAt }
+    fun continueReading(): LibraryBook? = ask(command("continueReading")).book
 
-    fun book(id: String): LibraryBook? = _state.value.books.firstOrNull { it.id == id }
+    fun book(id: String): LibraryBook? = state.value.books.firstOrNull { it.id == id }
 
-    fun deck(bookId: String): List<Card> = _state.value.deck(bookId)
+    fun deck(bookId: String): List<Card> = state.value.deck(bookId)
 
     /**
      * Добавляет книгу в библиотеку.
@@ -59,10 +63,10 @@ class Library(
      * Файл копируется в хранилище приложения: исходник может исчезнуть, а
      * книга, которую читают, исчезать не должна.
      *
-     * Если книга с таким же содержимым уже есть — например, приехала
-     * синхронизацией с другого устройства, — она не заводится второй раз, а
-     * получает файл. Иначе библиотека, синхронизированная между телефоном и
-     * компьютером, удваивалась бы при первом же переносе файлов.
+     * Заводить ли книгу заново, решает ядро по отпечатку содержимого — и
+     * решает до копирования: книга, приехавшая синхронизацией с другого
+     * устройства, получает файл, а не заводится второй раз, и копировать
+     * файл дважды при этом не приходится.
      */
     fun add(
         sourcePath: String,
@@ -71,28 +75,52 @@ class Library(
         author: String?,
     ): LibraryBook {
         val fingerprint = store.fingerprint(sourcePath)
-        val known = _state.value.books.firstOrNull {
-            fingerprint.isNotEmpty() && it.sourceKey == fingerprint && !it.deleted
-        }
-        if (known != null && !known.readable) {
-            val path = store.importBook(sourcePath, fileName)
-            edit(known.id) { it.copy(path = path) }
-            return book(known.id) ?: known
-        }
-        if (known != null) return known
+        val plan = ask(command("planAdd") { put("fingerprint", fingerprint) })
 
-        val path = store.importBook(sourcePath, fileName)
-        val book = LibraryBook(
-            id = newId(),
-            path = path,
-            title = title,
-            author = author,
-            format = fileName.substringAfterLast('.', "").lowercase(),
-            sourceKey = fingerprint,
-            addedAt = now(),
+        when (plan.plan) {
+            "known" -> return book(plan.bookId.orEmpty()) ?: error("ядро назвало неизвестную книгу")
+            "attach" -> {
+                val id = plan.bookId.orEmpty()
+                attachFile(id, sourcePath, fileName)
+                return book(id) ?: error("ядро назвало неизвестную книгу")
+            }
+        }
+
+        return addBook(
+            LibraryBook(
+                id = newId(),
+                path = store.importBook(sourcePath, fileName),
+                title = title,
+                author = author,
+                format = fileName.substringAfterLast('.', "").lowercase(),
+                sourceKey = fingerprint,
+                addedAt = now(),
+            ),
         )
-        update { it.copy(books = it.books + book) }
-        return book
+    }
+
+    /** Добавляет EPUB, полученный из доверенного серверного каталога. */
+    fun addDownloaded(
+        bytes: ByteArray,
+        fileName: String,
+        title: String,
+        author: String?,
+        sourceKey: String,
+    ): LibraryBook {
+        val plan = ask(command("planAdd") { put("fingerprint", sourceKey) })
+        plan.bookId?.let { known -> book(known)?.let { return it } }
+
+        return addBook(
+            LibraryBook(
+                id = newId(),
+                path = store.writeBook(fileName, bytes),
+                title = title,
+                author = author,
+                format = "epub",
+                sourceKey = sourceKey,
+                addedAt = now(),
+            ),
+        )
     }
 
     /**
@@ -105,90 +133,78 @@ class Library(
     fun attachFile(id: String, sourcePath: String, fileName: String) {
         val path = store.importBook(sourcePath, fileName)
         val fingerprint = store.fingerprint(sourcePath)
-        edit(id) { book ->
-            book.copy(
-                path = path,
-                sourceKey = book.sourceKey.ifEmpty { fingerprint },
-                format = book.format.ifEmpty { fileName.substringAfterLast('.', "").lowercase() },
-            )
-        }
+        send(
+            command("attachFile") {
+                put("id", id)
+                put("path", path)
+                put("fingerprint", fingerprint)
+            },
+        )
     }
 
-    /**
-     * Добавляет распознанную страницу.
-     *
-     * Все снимки складываются в одну книгу, а не заводят по книге на страницу.
-     * Фотографируют обычно подряд — разворот за разворотом, — и библиотека,
-     * заполненная десятком книг по абзацу каждая, перестаёт быть библиотекой.
-     *
-     * Файл переписывается целиком: страница снимка это килобайты, и городить
-     * дозапись ради них незачем.
-     */
+    /** Дописывает снятую страницу в книгу снимков. */
     fun appendSnapshot(text: String): LibraryBook {
-        val page = text.trim()
-        val existing = _state.value.books.firstOrNull { it.title == SNAPSHOTS && !it.deleted }
+        val existing = state.value.books.firstOrNull { it.title == SNAPSHOTS && !it.deleted }
+        val before = if (existing != null && existing.readable) store.readText(existing.path) else ""
 
-        val whole = when {
-            existing == null || !existing.readable -> page
-            else -> {
-                val before = store.readText(existing.path).trimEnd()
-                // Пустая строка между страницами: для ядра граница абзаца это
-                // и граница предложения, и без неё последняя фраза страницы
-                // слиплась бы с первой фразой следующей.
-                if (before.isEmpty()) page else before + PAGE_BREAK + page
-            }
-        }
+        // Как склеивать страницы, знает ядро: между ними обязана быть пустая
+        // строка, иначе последняя фраза страницы слипнется с первой фразой
+        // следующей — и уедет вместе с ней в контекст перевода.
+        val whole = ask(
+            command("appendedPage") {
+                put("before", before)
+                put("page", text)
+            },
+        ).text.orEmpty()
 
         val path = store.writeText(SNAPSHOTS_FILE, whole)
 
         if (existing != null) {
-            edit(existing.id) { it.copy(path = path, sourceKey = "") }
+            send(
+                command("attachFile") {
+                    put("id", existing.id)
+                    put("path", path)
+                },
+            )
             return book(existing.id) ?: existing
         }
 
-        val book = LibraryBook(
-            id = newId(),
-            path = path,
-            title = SNAPSHOTS,
-            format = "txt",
-            addedAt = now(),
+        return addBook(
+            LibraryBook(
+                id = newId(),
+                path = path,
+                title = SNAPSHOTS,
+                format = "txt",
+                addedAt = now(),
+            ),
         )
-        update { it.copy(books = it.books + book) }
-        return book
     }
 
     /** Запоминает, что ядро нашло в книге при открытии. */
     fun describe(id: String, title: String, author: String?, chapters: Int) {
-        edit(id) { book ->
-            book.copy(
-                // Название из файла точнее того, что видно по имени файла, но
-                // пустое название хуже имени файла — оставляем прежнее.
-                title = title.ifBlank { book.title },
-                author = author ?: book.author,
-                chapters = chapters,
-            )
-        }
+        send(
+            command("describe") {
+                put("id", id)
+                put("title", title)
+                author?.let { put("author", it) }
+                put("chapters", chapters)
+            },
+        )
     }
 
     /** Запоминает, где читатель остановился. */
     fun rememberProgress(id: String, chapter: Int, withinChapter: Float) {
-        edit(id) { book ->
-            book.copy(
-                progress = Progress(
-                    chapter = chapter,
-                    withinChapter = withinChapter.coerceIn(0f, 1f),
-                    openedAt = now(),
-                ),
-            )
-        }
+        send(
+            command("rememberProgress") {
+                put("id", id)
+                put("chapter", chapter)
+                put("withinChapter", withinChapter)
+                put("now", now())
+            },
+        )
     }
 
-    /**
-     * Кладёт слово в колоду книги.
-     *
-     * Повторное сохранение того же слова из той же книги ничего не меняет:
-     * колода не должна забиваться одним словом в разных формах.
-     */
+    /** Кладёт слово в колоду книги. */
     fun saveWord(
         bookId: String,
         surface: String,
@@ -197,130 +213,58 @@ class Library(
         context: String = "",
         pos: String = "",
         cefr: String = "",
-    ): Card {
-        val existing = _state.value.cards.firstOrNull { it.bookId == bookId && it.lemma == lemma }
-        if (existing != null) {
-            // Удалённую карточку возвращаем той же записью: новая запись
-            // приехала бы на второе устройство рядом со старой.
-            if (existing.deleted) {
-                editCard(existing.id) { it.copy(deleted = false) }
-                return existing.copy(deleted = false)
-            }
-            return existing
-        }
+    ): Card = send(
+        command("saveWord") {
+            put("bookId", bookId)
+            put("surface", surface)
+            put("lemma", lemma)
+            put("translation", translation)
+            put("context", context)
+            put("pos", pos)
+            put("cefr", cefr)
+            put("id", newId())
+            put("now", now())
+        },
+    ).card ?: error("ядро не вернуло карточку слова")
 
-        val card = Card(
-            id = newId(),
-            bookId = bookId,
-            surface = surface,
-            lemma = lemma,
-            translation = translation,
-            context = context,
-            pos = pos,
-            cefr = cefr,
-            dueAt = now(),
-            addedAt = now(),
-        )
-        update { it.copy(cards = it.cards + card) }
-        return card
-    }
+    /** Кладёт в колоду фразу целиком. `null` — фраза пустая. */
+    fun savePhrase(bookId: String, sentence: String, translation: String): Card? = send(
+        command("savePhrase") {
+            put("bookId", bookId)
+            put("sentence", sentence)
+            put("translation", translation)
+            put("id", newId())
+            put("now", now())
+        },
+    ).card
 
-    /**
-     * Кладёт в колоду фразу целиком.
-     *
-     * Фраза хранится той же карточкой, что слово: у неё те же прочность, срок
-     * и серия, и заводить ради неё вторую сущность значит писать вторую
-     * синхронизацию, вторую миграцию и второй экран. Отличает её `kind`.
-     *
-     * Ключ — сама фраза: одно и то же предложение из одной книги сохраняется
-     * один раз, сколько бы раз читатель по нему ни нажал.
-     */
-    fun savePhrase(bookId: String, sentence: String, translation: String): Card? {
-        val text = sentence.trim()
-        if (text.isEmpty()) return null
-
-        val existing = _state.value.cards.firstOrNull {
-            it.bookId == bookId && it.kind == PHRASE && it.surface == text
-        }
-        if (existing != null) {
-            if (existing.deleted) {
-                editCard(existing.id) { it.copy(deleted = false) }
-                return existing.copy(deleted = false)
-            }
-            return existing
-        }
-
-        val card = Card(
-            id = newId(),
-            bookId = bookId,
-            kind = PHRASE,
-            surface = text,
-            // Начальная форма у фразы — она сама: искать её не по чему, а
-            // пустое поле сломало бы всех, кто по нему показывает карточку.
-            lemma = text,
-            translation = translation.trim(),
-            context = text,
-            dueAt = now(),
-            addedAt = now(),
-        )
-        update { it.copy(cards = it.cards + card) }
-        return card
-    }
-
-    /**
-     * Карточка правила — заводится в тот момент, когда правило впервые
-     * спросили.
-     *
-     * Заранее их не создают: правил под шесть десятков, и завести все разом
-     * значило бы отправить на сервер колоду, которой читатель не заказывал, и
-     * показать ему шесть десятков «к повторению» в первый же день.
-     */
-    fun ruleCard(rule: String, title: String): Card {
-        val existing = _state.value.cards.firstOrNull { it.kind == RULE && it.lemma == rule }
-        if (existing != null) {
-            if (existing.deleted) {
-                editCard(existing.id) { it.copy(deleted = false) }
-                return existing.copy(deleted = false)
-            }
-            return existing
-        }
-
-        val card = Card(
-            id = newId(),
-            kind = RULE,
-            surface = title,
-            lemma = rule,
-            dueAt = now(),
-            addedAt = now(),
-        )
-        update { it.copy(cards = it.cards + card) }
-        return card
-    }
-
-    /**
-     * Меняет карточку после ответа.
-     *
-     * Само расписание живёт в [com.wolfy.srs.Scheduler] и о библиотеке не
-     * знает — оно чистое и потому проверяемое. Библиотека же не знает о
-     * расписании: её дело — записать то, что посчитали, и разослать
-     * подписчикам.
-     */
-    fun updateCard(id: String, change: (Card) -> Card) {
-        editCard(id, change)
-    }
+    /** Карточка правила — заводится, когда правило впервые спросили. */
+    fun ruleCard(rule: String, title: String): Card = send(
+        command("ruleCard") {
+            put("rule", rule)
+            put("title", title)
+            put("id", newId())
+            put("now", now())
+        },
+    ).card ?: error("ядро не вернуло карточку правила")
 
     fun removeWord(bookId: String, lemma: String) {
-        val card = _state.value.cards
-            .firstOrNull { it.bookId == bookId && it.lemma == lemma && !it.deleted }
-            ?: return
-        editCard(card.id) { it.copy(deleted = true) }
+        send(
+            command("removeWord") {
+                put("bookId", bookId)
+                put("lemma", lemma)
+            },
+        )
     }
 
     fun moveToShelf(id: String, shelf: String?) {
-        edit(id) { it.copy(shelf = shelf) }
-        // Полка, на которую что-то поставили, обязана существовать в списке:
-        // иначе она исчезнет, как только с неё снимут последнюю книгу.
-        if (shelf != null) addShelf(shelf)
+        send(
+            command("moveToShelf") {
+                put("id", id)
+                shelf?.let { put("shelf", it) }
+                put("now", now())
+            },
+        )
     }
 
     /**
@@ -328,53 +272,33 @@ class Library(
      *
      * Файл стирается сразу, а запись остаётся с пометкой: файл больше не
      * нужен никому, а пометка обязана доехать до второго устройства, иначе
-     * книга там воскреснет.
+     * книга там воскреснет. Колода уходит вместе с книгой — это уже забота
+     * ядра.
      */
     fun remove(id: String) {
         val book = book(id) ?: return
         if (book.readable) store.deleteBook(book.path)
-        update { current ->
-            current.copy(
-                books = current.books.map {
-                    if (it.id == id) it.copy(deleted = true, path = "", dirty = true) else it
-                },
-                // Карточки книги уходят вместе с ней: колода без книги
-                // бессмысленна, а на сервере у карточки внешний ключ на книгу.
-                cards = current.cards.map {
-                    if (it.bookId == id && !it.deleted) it.copy(deleted = true, dirty = true) else it
-                },
-            )
-        }
+        send(command("removeBook") { put("id", id) })
     }
 
-    fun addShelf(name: String): Shelf {
-        val trimmed = name.trim()
-        val existing = _state.value.shelves.firstOrNull { it.name == trimmed }
-        if (existing != null) return existing
-
-        val shelf = Shelf(name = trimmed, createdAt = now())
-        update { it.copy(shelves = it.shelves + shelf) }
-        return shelf
-    }
+    fun addShelf(name: String): Shelf = send(
+        command("addShelf") {
+            put("name", name)
+            put("now", now())
+        },
+    ).shelf ?: error("ядро не вернуло полку")
 
     fun removeShelf(name: String) {
-        update { current ->
-            current.copy(
-                shelves = current.shelves.filterNot { it.name == name },
-                // Книги с удалённой полки не пропадают, а возвращаются к
-                // неразобранным: полка это место, а не свойство книги.
-                books = current.books.map { book ->
-                    if (book.shelf == name) book.copy(shelf = null, dirty = true) else book
-                },
-            )
-        }
+        send(command("removeShelf") { put("name", name) })
     }
 
     // --- синхронизация ---
 
     /** Записи, изменённые на этом устройстве и ещё не отправленные. */
-    fun pending(): Pair<List<LibraryBook>, List<Card>> =
-        _state.value.books.filter { it.dirty } to _state.value.cards.filter { it.dirty }
+    fun pending(): Pair<List<LibraryBook>, List<Card>> {
+        val outcome = ask(command("pending"))
+        return outcome.books.orEmpty() to outcome.cards.orEmpty()
+    }
 
     /**
      * Снимок отправки: что ушло на сервер и в каком состоянии была библиотека.
@@ -392,163 +316,72 @@ class Library(
 
     /** Что отправляем и с какого состояния. */
     fun snapshot(): Sent {
-        val state = _state.value
+        val (books, cards) = pending()
         return Sent(
-            revision = state.revision,
-            books = state.books.filter { it.dirty }.map { it.id }.toSet(),
-            cards = state.cards.filter { it.dirty }.map { it.id }.toSet(),
+            revision = state.value.revision,
+            books = books.map { it.id }.toSet(),
+            cards = cards.map { it.id }.toSet(),
         )
     }
 
-    /**
-     * Принимает ответ сервера.
-     *
-     * Всё, что было отправлено, приезжает назад с присвоенной ревизией — по
-     * ней записи и снимаются с отправки. Свежее чужое просто заменяет местное:
-     * побеждает последний записавший, и решение об этом принято на сервере.
-     *
-     * Путь к файлу — единственное, что не приходит извне и не затирается: он у
-     * каждого устройства свой, а у второго его может не быть вовсе.
-     */
+    /** Принимает ответ сервера. Все правила слияния — в ядре. */
     fun applyServer(
         cursor: Long,
         books: List<LibraryBook>,
         cards: List<Card>,
-        sent: Sent = Sent(_state.value.revision, emptySet(), emptySet()),
+        sent: Sent = Sent(state.value.revision, emptySet(), emptySet()),
     ) {
-        update { current ->
-            // Изменилась ли библиотека, пока шёл запрос. Если да, ответ сервера
-            // старше местных правок, и принимать его на них нельзя.
-            val quiet = current.revision == sent.revision
-
-            val byId = current.books.associateBy { it.id }.toMutableMap()
-            for (incoming in books) {
-                val local = byId[incoming.id]
-                if (local != null && local.dirty && !(quiet && local.id in sent.books)) {
-                    // Местная правка новее ответа: оставляем её ждать отправки.
-                    continue
-                }
-                byId[incoming.id] = incoming.copy(
-                    path = local?.path.orEmpty(),
-                    dirty = false,
+        send(
+            command("applyServer") {
+                put("cursor", cursor)
+                put("books", json.encodeToJsonElement(books))
+                put("cards", json.encodeToJsonElement(cards))
+                put("now", now())
+                put(
+                    "sent",
+                    kotlinx.serialization.json.buildJsonObject {
+                        put("revision", sent.revision)
+                        put("books", JsonArray(sent.books.map(::JsonPrimitive)))
+                        put("cards", JsonArray(sent.cards.map(::JsonPrimitive)))
+                    },
                 )
-            }
-
-            val cardsById = current.cards.associateBy { it.id }.toMutableMap()
-            for (incoming in cards) {
-                val local = cardsById[incoming.id]
-                if (local != null && local.dirty && !(quiet && local.id in sent.cards)) {
-                    continue
-                }
-                cardsById[incoming.id] = incoming.copy(dirty = false)
-            }
-
-            // Полки восстанавливаются из книг: своей таблицы у них нет, и
-            // приехавшая с другого устройства «Классика» иначе осталась бы
-            // без строки в списке полок.
-            val known = current.shelves.map { it.name }.toSet()
-            val arrived = byId.values.mapNotNull { it.shelf }.filter { it !in known }.distinct()
-
-            current.copy(
-                books = byId.values.sortedBy { it.addedAt },
-                cards = cardsById.values.sortedBy { it.addedAt },
-                shelves = current.shelves + arrived.map { Shelf(name = it, createdAt = now()) },
-                cursor = cursor,
-            )
-        }
-    }
-
-    // --- внутреннее ---
-
-    private fun edit(id: String, change: (LibraryBook) -> LibraryBook) {
-        update { current ->
-            current.copy(
-                books = current.books.map {
-                    if (it.id == id) change(it).copy(dirty = true) else it
-                },
-            )
-        }
-    }
-
-    private fun editCard(id: String, change: (Card) -> Card) {
-        update { current ->
-            current.copy(
-                cards = current.cards.map {
-                    if (it.id == id) change(it).copy(dirty = true) else it
-                },
-            )
-        }
-    }
-
-    private fun update(change: (LibraryState) -> LibraryState) {
-        val next = change(_state.value)
-        val stamped = next.copy(revision = next.revision + 1)
-        _state.value = stamped
-        store.save(RECORD, json.encodeToString(stamped))
-    }
-
-    private fun read(): LibraryState {
-        val saved = store.load(RECORD) ?: return LibraryState()
-        return try {
-            migrate(json.decodeFromString(saved))
-        } catch (e: Exception) {
-            // Битый файл библиотеки не должен мешать открыть приложение.
-            // Книги при этом остаются на диске, и их можно добавить заново —
-            // а вот падение на старте не оставило бы пользователю ничего.
-            LibraryState()
-        }
+            },
+        )
     }
 
     /**
      * Приводит прочитанное состояние к нынешнему виду.
      *
-     * Пока нужна одна поправка: до синхронизации номера книг придумывались как
-     * попало, а на сервере под них колонка uuid. Книга со старым номером
-     * получает новый — вместе со своими карточками, иначе колода потеряет
-     * хозяина.
+     * Номера для переезда придумывает клиент: своего источника случайности у
+     * ядра нет. С запасом — сколько книг, столько и номеров; лишние ядро
+     * просто не возьмёт.
      */
-    private fun migrate(state: LibraryState): LibraryState {
-        val renamed = mutableMapOf<String, String>()
-        val books = state.books.map { book ->
-            if (looksLikeUuid(book.id)) {
-                book
-            } else {
-                val fresh = newId()
-                renamed[book.id] = fresh
-                book.copy(id = fresh, rev = 0, dirty = true)
-            }
-        }
-        if (renamed.isEmpty()) return state
-
-        val cards = state.cards.map { card ->
-            val owner = renamed[card.bookId] ?: return@map card
-            card.copy(bookId = owner, rev = 0, dirty = true)
-        }
-        return state.copy(books = books, cards = cards)
+    private fun migrate() {
+        val fresh = state.value.books.map { newId() }
+        send(command("migrate") { put("freshIds", JsonArray(fresh.map(::JsonPrimitive))) })
     }
 
-    private fun looksLikeUuid(id: String): Boolean =
-        id.length == 36 && id.count { it == '-' } == 4
+    // --- внутреннее ---
+
+    private fun addBook(book: LibraryBook): LibraryBook =
+        send(command("addBook") { put("book", json.encodeToJsonElement(book)) }).book ?: book
+
+    /**
+     * Команда ядру.
+     *
+     * Обновление экранов и запись на диск делает сама сессия: она одна знает,
+     * что именно изменилось.
+     */
+    private fun send(command: kotlinx.serialization.json.JsonObject): Outcome =
+        session.run(command)
+
+    /** Вопрос, который ничего не меняет. Отдельным именем — ради читателя кода. */
+    private fun ask(command: kotlinx.serialization.json.JsonObject): Outcome = session.run(command)
 
     private companion object {
-        const val PHRASE = "phrase"
-        const val RULE = "rule"
-
-        /** Имя записи в хранилище. */
-        const val RECORD = "library"
-
         /** Книга, в которую складываются распознанные страницы. */
         const val SNAPSHOTS = "Снимки со страниц"
         const val SNAPSHOTS_FILE = "snapshots.txt"
-
-        /**
-         * Разделитель между снятыми страницами.
-         *
-         * Пустая строка: для ядра граница абзаца это и граница предложения,
-         * и без неё последняя фраза страницы слиплась бы с первой фразой
-         * следующей — а вместе с ней уехала бы в контекст перевода.
-         */
-        const val PAGE_BREAK = "\n\n"
     }
 }
 

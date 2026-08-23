@@ -40,7 +40,6 @@ import androidx.compose.ui.unit.dp
 import com.wolfy.srs.Deck
 import com.wolfy.srs.Drill
 import com.wolfy.srs.DrillKind
-import com.wolfy.srs.Scheduler
 import com.wolfy.srs.TrainingState
 import com.wolfy.theme.WolfyTheme
 import com.wolfy.widgets.SectionLabel
@@ -183,11 +182,11 @@ private fun Header(title: String, subtitle: String, onClose: () -> Unit) {
 }
 
 /**
- * Прочность карточки сердцами.
+ * Прочность карточки пятью делениями.
  *
- * Пять сердец на сто очков: у карточки, которую видят впервые, полны все, у
+ * Пять делений на сто очков: у карточки, которую видят впервые, полны все, у
  * выученной — ни одного. Метафора перевёрнута нарочно и объяснена в
- * [Scheduler]: карточка здесь противник, и её прочность сбивают.
+ * ядро на Rust: карточка здесь противник, и её прочность сбивают.
  */
 @Composable
 private fun Hearts(hp: Int) {
@@ -195,10 +194,14 @@ private fun Hearts(hp: Int) {
     val full = ((hp + 19) / 20).coerceIn(0, 5)
     Row(horizontalArrangement = Arrangement.spacedBy(WolfyTheme.spacing.small)) {
         repeat(5) { index ->
-            Text(
-                text = if (index < full) "♥" else "♡",
-                style = WolfyTheme.typography.body,
-                color = if (index < full) colors.accent else colors.rule,
+            Box(
+                Modifier
+                    .width(18.dp)
+                    .height(5.dp)
+                    .background(
+                        if (index < full) colors.accent else colors.rule,
+                        RoundedCornerShape(WolfyTheme.spacing.hair),
+                    ),
             )
         }
     }
