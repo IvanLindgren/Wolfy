@@ -18,6 +18,8 @@
 mod clock;
 pub use clock::{at_local_hour, local_day, local_hour};
 
+pub mod dictionary;
+
 mod error;
 pub mod ffi;
 pub mod grammar;

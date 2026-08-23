@@ -33,4 +33,7 @@ codegen-units = 1
 panic = "unwind"
 
 [dev-dependencies]
+# Словарь читается с диска, и проверять его на выдуманном файле в
+# памяти бессмысленно: весь смысл в том, что чтение идёт по месту.
+tempfile = "3"
 zip = { version = "8", default-features = false, features = ["deflate"] }
