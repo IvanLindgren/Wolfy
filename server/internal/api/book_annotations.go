@@ -17,10 +17,10 @@ import (
 var bookIDPattern = regexp.MustCompile(`^[A-Za-z0-9-]{8,64}$`)
 
 // Устройство и его подтверждение приходят параметрами запроса на обоих
-// маршрутах. Подтверждение — это максимум версии списка, который устройство
+// маршрутах. Подтверждение — поколение серверного снимка, которое устройство
 // долговечно сохранило: без него сервер не сможет собирать пометки удалений,
 // не рискуя их воскрешением на старых копиях.
-func syncParams(r *http.Request) (device string, seen int64, ok bool) {
+func syncParams(r *http.Request) (device string, seenGeneration int64, ok bool) {
 	device = r.URL.Query().Get("device")
 	if !bookIDPattern.MatchString(device) {
 		return "", 0, false
@@ -50,7 +50,7 @@ func (s *Server) getBookAnnotations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	items, err := s.store.BookAnnotations(r.Context(), user.ID, bookID)
+	items, generation, err := s.store.BookAnnotationsSync(r.Context(), user.ID, bookID, device, seen)
 	if err != nil {
 		s.log.Error("заметки книги не прочитаны", "error", err, "user", user.ID)
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Заметки сейчас недоступны"})
@@ -59,16 +59,9 @@ func (s *Server) getBookAnnotations(w http.ResponseWriter, r *http.Request) {
 	if items == nil {
 		items = []annotations.Item{}
 	}
-
-	// Чтение тоже подтверждает: читатель без единой правки держит копию, и
-	// сборщик мусора обязан его учитывать.
-	if err := s.store.ConfirmAnnotationsSeen(r.Context(), user.ID, bookID, device, seen); err != nil {
-		s.log.Warn("подтверждение прочтения не записалось", "error", err, "user", user.ID)
-	}
-
 	writeJSON(w, http.StatusOK, map[string]any{
-		"items": items,
-		"topRev": annotations.TopSeen(items),
+		"items":      items,
+		"generation": generation,
 	})
 }
 
@@ -76,6 +69,8 @@ func (s *Server) getBookAnnotations(w http.ResponseWriter, r *http.Request) {
 //
 // Клиент шлёт весь список, а не разницу: отметок у книги десятки, а не
 // тысячи, и протокол с курсорами стоил бы дороже экономии в три килобайта.
+// Потолок списка один на обе стороны: всё, что сервер выдаёт, клиент обязан
+// мочь отправить обратно.
 func (s *Server) putBookAnnotations(w http.ResponseWriter, r *http.Request) {
 	user, ok := auth.FromContext(r.Context())
 	if !ok {
@@ -101,16 +96,17 @@ func (s *Server) putBookAnnotations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	items, err := annotations.Normalize(request.Items)
-	switch {
-	case errors.Is(err, annotations.ErrTooMany):
-		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": err.Error()})
-		return
-	case err != nil:
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if err != nil {
+		switch {
+		case errors.Is(err, annotations.ErrTooMany):
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": err.Error()})
+		default:
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		}
 		return
 	}
 
-	merged, err := s.store.SaveBookAnnotations(r.Context(), user.ID, bookID, device, seen, items)
+	merged, generation, err := s.store.SaveBookAnnotations(r.Context(), user.ID, bookID, device, seen, items)
 	switch {
 	case errors.Is(err, annotations.ErrTooMany):
 		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": err.Error()})
@@ -124,7 +120,7 @@ func (s *Server) putBookAnnotations(w http.ResponseWriter, r *http.Request) {
 		merged = []annotations.Item{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"items": merged,
-		"topRev": annotations.TopSeen(merged),
+		"items":      merged,
+		"generation": generation,
 	})
 }

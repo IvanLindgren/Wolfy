@@ -1,6 +1,10 @@
 package annotations
 
-import "testing"
+import (
+	"math/rand"
+	"reflect"
+	"testing"
+)
 
 func tone(value int) *int { return &value }
 
@@ -44,6 +48,107 @@ func TestMergeResolvesEqualRevisionByWriter(t *testing.T) {
 	// Победитель — больший писатель: "bbb" > "aaa".
 	if forward[0].Note != "второе" {
 		t.Fatalf("выбран неожиданный победитель: %q", forward[0].Note)
+	}
+}
+
+func TestMergeTotalOrderCoversEveryField(t *testing.T) {
+	// Раньше порядок равных (Rev, Writer) решался слепком, в который не
+	// входили место и время правки — две записи с разным Start и равным
+	// слепком расходились бы по порядку сторон. Теперь сравнение покрывает
+	// все поля, и каждое из них обязано решаться одинаково в обе стороны.
+	cases := []struct {
+		name  string
+		patch func(Item) Item
+	}{
+		{"глава", func(i Item) Item { i.Chapter = 3; return i }},
+		{"начало", func(i Item) Item { i.Start = 20; return i }},
+		{"конец", func(i Item) Item { i.End = 25; return i }},
+		{"краска", func(i Item) Item { i.Tone = tone(7); return i }},
+		{"цитата", func(i Item) Item { i.Quote = "z"; return i }},
+		{"заметка", func(i Item) Item { i.Note = "z"; return i }},
+		{"время создания", func(i Item) Item { i.CreatedAt = 99; return i }},
+		{"время правки", func(i Item) Item { i.UpdatedAt = 99; return i }},
+		{"пометка удаления", func(i Item) Item { i.Deleted = true; return i }},
+		{"поколение", func(i Item) Item { i.Generation = 4; return i }},
+	}
+	base := Item{ID: "a", Chapter: 0, Start: 10, End: 12, Tone: tone(1),
+		Quote: "a", Note: "a", Rev: 5, Writer: "phone", CreatedAt: 1, UpdatedAt: 1}
+
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			left := []Item{base}
+			right := []Item{test.patch(base)}
+
+			forward := Merge(left, right)
+			backward := Merge(right, left)
+			if !reflect.DeepEqual(forward, backward) {
+				t.Fatalf("порядок сторон решает исход: %+v против %+v", forward, backward)
+			}
+			// Победитель — изменённая запись: она больше по каждому из полей.
+			if !reflect.DeepEqual(forward[0], test.patch(base)) {
+				t.Fatalf("выбран неожиданный победитель: %+v", forward[0])
+			}
+		})
+	}
+}
+
+// Слияние — объединение максимумов по полному порядку, поэтому обязано быть
+// коммутативным, ассоциативным и идемпотентным. Проверяется на случайных
+// списках с общими номерами записей — ровно тот случай, где эти свойства
+// разъезжаются первыми.
+func TestMergeIsCommutativeAssociativeIdempotent(t *testing.T) {
+	rng := rand.New(rand.NewSource(42))
+	for round := 0; round < 300; round++ {
+		a := randomItems(rng, 10)
+		b := randomItems(rng, 10)
+		c := randomItems(rng, 10)
+
+		if got, want := Merge(a, b), Merge(b, a); !reflect.DeepEqual(got, want) {
+			t.Fatalf("коммутативность нарушена:\n%+v\n%+v", got, want)
+		}
+		if got, want := Merge(Merge(a, b), c), Merge(a, Merge(b, c)); !reflect.DeepEqual(got, want) {
+			t.Fatalf("ассоциативность нарушена:\n%+v\n%+v", got, want)
+		}
+		if got, want := Merge(a, a), Merge(a, nil); !reflect.DeepEqual(got, want) {
+			t.Fatalf("идемпотентность нарушена:\n%+v\n%+v", got, want)
+		}
+	}
+}
+
+// randomItems собирает список уникальных записей из общего пула номеров,
+// чтобы у разных списков были конфликты за одни и те же записи.
+func randomItems(rng *rand.Rand, size int) []Item {
+	total := 20
+	pick := rng.Perm(total)[:rng.Intn(total)+1]
+	items := make([]Item, 0, len(pick))
+	for _, number := range pick {
+		items = append(items, Item{
+			ID:         string(rune('a' + number)),
+			Chapter:    rng.Intn(4),
+			Start:      rng.Intn(30),
+			End:        rng.Intn(30) + 30,
+			Tone:       randomTone(rng),
+			Quote:      []string{"", "to be", "z"}[rng.Intn(3)],
+			Note:       []string{"", "мысль", "z"}[rng.Intn(3)],
+			Rev:        int64(rng.Intn(10) + 1),
+			Writer:     []string{"aaa", "bbb", "ccc"}[rng.Intn(3)],
+			Generation: int64(rng.Intn(4)),
+			CreatedAt:  int64(rng.Intn(5)),
+			UpdatedAt:  int64(rng.Intn(5)),
+			Deleted:    rng.Intn(2) == 1,
+		})
+	}
+	return items
+}
+
+func randomTone(rng *rand.Rand) *int {
+	switch rng.Intn(3) {
+	case 0:
+		return nil
+	case 1:
+		return tone(rng.Intn(MaxTone) + 1)
+	default:
+		return tone(-1) // битые краски разрешены только в property-тестах
 	}
 }
 
@@ -94,11 +199,12 @@ func TestMergeSortsStableAcrossRuns(t *testing.T) {
 	}
 }
 
-func TestPruneTombstonesDropsOnlyConfirmed(t *testing.T) {
+func TestPruneTombstonesDropsOnlyConfirmedByGeneration(t *testing.T) {
 	items := []Item{
-		{ID: "seen", Chapter: 0, Start: 0, End: 1, Deleted: true, Rev: 2, Writer: "phone"},
-		{ID: "unseen", Chapter: 0, Start: 2, End: 3, Deleted: true, Rev: 4, Writer: "phone"},
-		{ID: "alive", Chapter: 0, Start: 4, End: 5, Rev: 3, Writer: "phone"},
+		{ID: "seen", Chapter: 0, Start: 0, End: 1, Deleted: true, Rev: 2, Writer: "phone", Generation: 2},
+		{ID: "unseen", Chapter: 0, Start: 2, End: 3, Deleted: true, Rev: 4, Writer: "phone", Generation: 4},
+		{ID: "unstamped", Chapter: 0, Start: 6, End: 7, Deleted: true, Rev: 6, Writer: "phone"},
+		{ID: "alive", Chapter: 0, Start: 4, End: 5, Rev: 3, Writer: "phone", Generation: 3},
 	}
 
 	pruned := PruneTombstones(items, 3)
@@ -106,9 +212,10 @@ func TestPruneTombstonesDropsOnlyConfirmed(t *testing.T) {
 	for _, item := range pruned {
 		ids = append(ids, item.ID)
 	}
-	// Пометка версии 2 подтверждена (порог 3) и стёрта; пометка версии 4 —
-	// ещё нет: какое-то устройство её не видело.
-	expected := []string{"unseen", "alive"}
+	// Пометка поколения 2 подтверждена (порог 3) и стёрта; поколение 4 — ещё
+	// нет: какое-то устройство его не видело. Непроштампованная пометка не
+	// собирается — сервер такие не хранит, но и не имеет права угадывать.
+	expected := []string{"unseen", "unstamped", "alive"}
 	if len(ids) != len(expected) {
 		t.Fatalf("после обрезки осталось не то: %v", ids)
 	}
@@ -116,16 +223,6 @@ func TestPruneTombstonesDropsOnlyConfirmed(t *testing.T) {
 		if ids[index] != expected[index] {
 			t.Fatalf("после обрезки осталось не то: %v", ids)
 		}
-	}
-}
-
-func TestTopSeenReportsHighestVersion(t *testing.T) {
-	items := []Item{
-		{ID: "a", Chapter: 0, Start: 0, End: 1, Rev: 3, Writer: "w"},
-		{ID: "b", Chapter: 0, Start: 2, End: 3, Rev: 7, Writer: "w"},
-	}
-	if got := TopSeen(items); got != 7 {
-		t.Fatalf("подтверждение должно быть 7, а не %d", got)
 	}
 }
 

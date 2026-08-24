@@ -179,7 +179,9 @@ func createUser(t *testing.T, s *store.Store) string {
 
 // Сборка мусора пометок удалений обязана дождаться подтверждения каждого
 // устройства: у держателя старой копии не должны воскресать удалённые
-// заметки.
+// заметки. Подтверждение — поколение серверного снимка, а не версия правки:
+// поколения выдаёт один сервер, и «видел снимок G» значит ровно то, что
+// сказано.
 func TestСборкаМусораЗаметокЖдётВсехУстройств(t *testing.T) {
 	s := open(t)
 	ctx := context.Background()
@@ -192,40 +194,104 @@ func TestСборкаМусораЗаметокЖдётВсехУстройст�
 		CreatedAt: 1, UpdatedAt: 2,
 	}}
 
-	// Ноутбук читал книгу раньше и видел только версию 2: у него лежит
-	// живая копия, поэтому регистрируется он ещё до удаления.
-	if err := s.ConfirmAnnotationsSeen(ctx, user, book, "laptop", 2); err != nil {
-		t.Fatalf("подтверждение ноутбука: %v", err)
+	// Ноутбук читает книгу первым и держит копию пустого снимка.
+	items, generation, err := s.BookAnnotationsSync(ctx, user, book, "laptop", 0)
+	if err != nil {
+		t.Fatalf("первое чтение ноутбука: %v", err)
+	}
+	if len(items) != 0 || generation != 0 {
+		t.Fatalf("пустая книга прочиталась не пустой: %+v, %d", items, generation)
 	}
 
-	// Телефон удаляет заметку версией 5 и подтверждает, что сохранил её.
-	merged, err := s.SaveBookAnnotations(ctx, user, book, "phone", 5, tombstone)
+	// Телефон удаляет заметку: снимок получает поколение 1, пометка
+	// штампуется им.
+	merged, generation, err := s.SaveBookAnnotations(ctx, user, book, "phone", 0, tombstone)
 	if err != nil {
 		t.Fatalf("первая запись: %v", err)
 	}
-	if len(merged) != 1 || !merged[0].Deleted {
+	if generation != 1 {
+		t.Fatalf("первое поколение должно быть 1, а не %d", generation)
+	}
+	if len(merged) != 1 || !merged[0].Deleted || merged[0].Generation != 1 {
 		t.Fatalf("пометка не сохранилась: %+v", merged)
 	}
 
-	// Пока ноутбук не догнал, сборщик мусора не имеет права трогать пометку,
-	// сколько бы телефон ни писал снова.
-	merged, err = s.SaveBookAnnotations(ctx, user, book, "phone", 5, nil)
+	// Ноутбук не видел поколение 1 — сколько бы телефон ни писал снова,
+	// сборщик мусора не имеет права трогать пометку.
+	merged, generation, err = s.SaveBookAnnotations(ctx, user, book, "phone", 1, merged)
 	if err != nil {
 		t.Fatalf("вторая запись: %v", err)
+	}
+	if generation != 1 {
+		t.Fatalf("повторный пуш не должен двигать поколение: %d", generation)
 	}
 	if len(merged) != 1 || !merged[0].Deleted {
 		t.Fatalf("пометку стёрли раньше, чем её видели все: %+v", merged)
 	}
 
-	// Ноутбук догнал до версии 5 — теперь пометка никому не нужна.
-	if err := s.ConfirmAnnotationsSeen(ctx, user, book, "laptop", 5); err != nil {
-		t.Fatalf("второе подтверждение ноутбука: %v", err)
+	// Ноутбук догоняет: получает снимок поколения 1 с пометкой и
+	// подтверждает его.
+	seen, generation, err := s.BookAnnotationsSync(ctx, user, book, "laptop", 1)
+	if err != nil {
+		t.Fatalf("чтение ноутбука после удаления: %v", err)
 	}
-	merged, err = s.SaveBookAnnotations(ctx, user, book, "phone", 5, nil)
+	if len(seen) != 1 || !seen[0].Deleted || generation != 1 {
+		t.Fatalf("ноутбук не получил пометку: %+v, %d", seen, generation)
+	}
+
+	// Все видели поколение 1 — следующая запись телефона собирает пометку.
+	merged, generation, err = s.SaveBookAnnotations(ctx, user, book, "phone", 1, nil)
 	if err != nil {
 		t.Fatalf("третья запись: %v", err)
 	}
 	if len(merged) != 0 {
 		t.Fatalf("подтверждённая пометка не собрана: %+v", merged)
+	}
+	// Сборка мусора — не правка: поколение не растёт от уборки.
+	if generation != 1 {
+		t.Fatalf("сборка мусора сдвинула поколение: %d", generation)
+	}
+}
+
+// Первая синхронизация книги — самое уязвимое место: пока строки в базе нет,
+// SELECT FOR UPDATE блокировать нечего, и два устройства могли бы потерять
+// друг друга. Строка материализуется до блокировки; проверка — два
+// устройства пишут в свежую книгу по очереди, и оба списка сходятся.
+func TestПерваяСинхронизацияНеТеряетУстройства(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	user := createUser(t, s)
+	book := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+	first := []annotations.Item{{
+		ID: "a", Chapter: 0, Start: 0, End: 1,
+		Rev: 1, Writer: "phone", CreatedAt: 1, UpdatedAt: 1,
+	}}
+	merged, _, err := s.SaveBookAnnotations(ctx, user, book, "phone", 0, first)
+	if err != nil {
+		t.Fatalf("первое устройство: %v", err)
+	}
+	if len(merged) != 1 {
+		t.Fatalf("первое устройство потерялось сразу: %+v", merged)
+	}
+
+	second := []annotations.Item{{
+		ID: "b", Chapter: 0, Start: 3, End: 4,
+		Rev: 2, Writer: "laptop", CreatedAt: 1, UpdatedAt: 1,
+	}}
+	merged, _, err = s.SaveBookAnnotations(ctx, user, book, "laptop", 0, second)
+	if err != nil {
+		t.Fatalf("второе устройство: %v", err)
+	}
+	if len(merged) != 2 {
+		t.Fatalf("второе устройство затерло первое: %+v", merged)
+	}
+
+	items, _, err := s.BookAnnotationsSync(ctx, user, book, "phone", 1)
+	if err != nil {
+		t.Fatalf("чтение после двух устройств: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("в хранилище не сошлись оба списка: %+v", items)
 	}
 }

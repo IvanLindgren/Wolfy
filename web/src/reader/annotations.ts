@@ -27,10 +27,13 @@
  *
  * **Удаление — пометка, живущая до подтверждения всех.** Стирать пометки по
  * возрасту нельзя: устройство, пролежавшее в ящике месяц, воскресило бы
- * запись своей устаревшей копией. Поэтому пометки держатся в файле и на
- * сервере, пока каждое устройство не отчитается через поле `seen`, что
- * долговечно сохранило состояние с версией не ниже пометки. Сборку мусора
- * делает только сервер — он один видит всех.
+ * запись своей устаревшей копией. Вместо этого сервер выдаёт каждому снимку
+ * поколение и стирает пометку, только когда каждое зарегистрированное
+ * устройство подтвердило через поле `seen`, что долговечно сохранило снимок
+ * поколения не ниже пометки. Собранную пометку сервер просто не возвращает;
+ * клиент, получив снимок поколения G, выкидывает и свои пометки поколения
+ * ≤ G, которых в снимке нет, — иначе он вечно отправлял бы их обратно и
+ * воскрешал сборщику работу.
  */
 
 import { create } from 'zustand'
@@ -76,6 +79,11 @@ export interface Annotation {
   rev: number
   /** Стабильный номер устройства, подписавшего правку. */
   writer: string
+  /**
+   * Поколение серверного снимка, которым запись была проштампована. Ставит
+   * только сервер; у местных, ещё не отправленных записей — ноль.
+   */
+  generation: number
   createdAt: number
   updatedAt: number
   /**
@@ -104,9 +112,9 @@ function writerId(): string {
  * Что лежит в файле.
  *
  * `clock` — счётчик Лампорта книги на этом устройстве: источник номеров
- * правок и память о том, что устройство уже видело. `seen` — наибольшая
- * версия **серверного** состояния, которую устройство долговечно сохранило;
- * это подтверждение для сборщика мусора, и оно сознательно не включает
+ * правок и память о том, что устройство уже видело. `seen` — поколение
+ * серверного снимка, которое устройство долговечно сохранило; это
+ * подтверждение для сборщика мусора, и оно сознательно не включает
  * собственные ещё не подтверждённые сервером правки.
  */
 interface Stored {
@@ -148,6 +156,7 @@ function migrateV1(parsed: { annotations: Annotation[] }): Stored {
     ...item,
     rev: item.updatedAt > 0 ? item.updatedAt : 1,
     writer: writerId(),
+    generation: 0,
   }))
   return {
     version: 2,
@@ -165,18 +174,16 @@ async function persist(bookId: string, stored: Stored): Promise<void> {
  * Слияние двух списков одной книги.
  *
  * Победитель конфликта — большая пара (rev, writer); при полном равенстве —
- * больший слепок содержимого. Формат слепка совпадает с серверным: у обоих
- * сторон равные (rev, writer) обязаны выбрать одного и того же победителя,
- * иначе сервер и устройство разойдутся в выводе.
- *
- * Пометки удалений здесь не трогаются: их сборка — дело сервера, у которого
- * одного есть реестр подтверждений всех устройств.
+ * большее содержимое по полному порядку [compare]. Правило детерминировано и
+ * не зависит от порядка сторон: иначе два устройства после синхронизации
+ * увидят разные списки, и следующая синхронизация начнёт бессмысленно их
+ * переписывать.
  */
 export function mergeAnnotations(
   local: Annotation[],
   remote: AnnotationItem[],
 ): { items: Annotation[]; differsFromLocal: boolean; differsFromRemote: boolean } {
-  const byKey = (list: AnnotationItem[]) => new Map(list.map((item) => [item.id, item]))
+  const byKey = (list: AnnotationItem[]) => new Map<string, AnnotationItem>(list.map((item) => [item.id, item]))
   const fromLocal = byKey(local)
   const fromRemote = byKey(remote)
 
@@ -186,7 +193,7 @@ export function mergeAnnotations(
     const current = merged.get(id)
     if (!current || later(item, current)) {
       // Сервер уже проверил, что краска лежит в 1..10.
-      merged.set(id, { ...item, tone: item.tone as Tone | null })
+      merged.set(id, { ...item, tone: item.tone as Tone | null, generation: item.generation ?? 0 })
     }
   }
 
@@ -198,26 +205,86 @@ export function mergeAnnotations(
   }
 }
 
+/**
+ * Снимок сервера поверх местного списка.
+ *
+ * Слияние по (rev, writer) плюс правило сборки мусора: пометка удаления,
+ * которой в снимке поколения G нет, но чьё поколение не выше G, собрана
+ * сервером — местную копию пора выкинуть, иначе она вечно ездила бы наверх
+ * и воскрешала удаление.
+ */
+export function applyServerSnapshot(
+  local: Annotation[],
+  remote: AnnotationItem[],
+  generation: number,
+): { items: Annotation[]; differsFromLocal: boolean; differsFromRemote: boolean } {
+  const merged = mergeAnnotations(local, remote)
+  const remoteIds = new Set(remote.map((item) => item.id))
+  const items = merged.items.filter(
+    (item) =>
+      !(
+        item.deleted &&
+        item.generation > 0 &&
+        item.generation <= generation &&
+        !remoteIds.has(item.id)
+      ),
+  )
+  const dropped = items.length !== merged.items.length
+  return {
+    items,
+    differsFromLocal: merged.differsFromLocal || dropped,
+    differsFromRemote: merged.differsFromRemote,
+  }
+}
+
 /** Минимум полей, по которым сравниваются версии записи. */
 type Versioned = {
   rev: number
   writer: string
+  chapter: number
+  start: number
+  end: number
   tone: number | null
   quote: string
   note: string
   createdAt: number
+  updatedAt: number
   deleted?: boolean
+  generation?: number
 }
 
 function later(candidate: Versioned, current: Versioned): boolean {
   if (candidate.rev !== current.rev) return candidate.rev > current.rev
   if (candidate.writer !== current.writer) return candidate.writer > current.writer
-  return key(candidate) > key(current)
+  return compare(candidate, current) > 0
 }
 
-/** Слепок содержимого — тот же формат, что и на сервере. */
-function key(item: Versioned): string {
-  return `${item.tone ?? -1}|${item.quote}|${item.note}|${item.createdAt}|${item.deleted === true}`
+/**
+ * Полный порядок по содержимому записи.
+ *
+ * Порядок полей совпадает с серверным: место, краска, тексты, время,
+ * пометка удаления, поколение. Строки сравниваются кодами UTF-16 здесь и
+ * байтами UTF-8 в Go — оба порядка совпадают с порядком кодовых точек.
+ * Поколение — последний тай-брейк: при одинаковом содержимом выигрывает
+ * запись из более свежего снимка.
+ */
+function compare(a: Versioned, b: Versioned): number {
+  const fields: number[] = [
+    a.chapter - b.chapter,
+    a.start - b.start,
+    a.end - b.end,
+    (a.tone ?? -1) - (b.tone ?? -1),
+    a.quote < b.quote ? -1 : a.quote > b.quote ? 1 : 0,
+    a.note < b.note ? -1 : a.note > b.note ? 1 : 0,
+    a.createdAt - b.createdAt,
+    a.updatedAt - b.updatedAt,
+    (a.deleted === true ? 1 : 0) - (b.deleted === true ? 1 : 0),
+    (a.generation ?? 0) - (b.generation ?? 0),
+  ]
+  for (const field of fields) {
+    if (field !== 0) return field > 0 ? 1 : -1
+  }
+  return 0
 }
 
 function differs(merged: Annotation[], side: Map<string, AnnotationItem>): boolean {
@@ -229,7 +296,7 @@ function differs(merged: Annotation[], side: Map<string, AnnotationItem>): boole
   return false
 }
 
-/** Наибольшая версия списка — то, что увидевшее его устройство отчитает. */
+/** Наибольшая версия списка — потолок, до которого поднимется счётчик. */
 function topRev(items: Annotation[]): number {
   return items.reduce((top, item) => Math.max(top, item.rev), 0)
 }
@@ -275,21 +342,21 @@ export const useAnnotations = create<AnnotationState>((set, get) => ({
     const remote = await fetchBookAnnotations(bookId, writerId(), local.seen)
     if (!remote || get().bookId !== bookId) return
 
-    const { items, differsFromLocal, differsFromRemote } = mergeAnnotations(
-      local.annotations,
-      remote.items,
-    )
+    const merged = applyServerSnapshot(local.annotations, remote.items, remote.generation)
     const next: Stored = {
       version: 2,
-      clock: Math.max(local.clock, topRev(items)),
-      seen: Math.max(local.seen, remote.topRev),
-      annotations: items,
+      clock: Math.max(local.clock, topRev(merged.items)),
+      seen: Math.max(local.seen, remote.generation),
+      annotations: merged.items,
     }
-    if (differsFromLocal) {
-      set({ annotations: items, clock: next.clock, seen: next.seen })
+    if (merged.differsFromLocal || remote.generation > local.seen) {
+      // Подтверждение нового поколения поднимается только после того, как
+      // снимок долговечно лёг в файл: акать раньше значило бы разрешить
+      // серверу стереть пометки, которые это устройство ещё не спасло.
       await persist(bookId, next)
+      set({ annotations: next.annotations, clock: next.clock, seen: next.seen })
     }
-    if (differsFromLocal || differsFromRemote) schedulePush(bookId)
+    if (merged.differsFromRemote) schedulePush(bookId)
   },
 
   add: async (input) => {
@@ -301,6 +368,7 @@ export const useAnnotations = create<AnnotationState>((set, get) => ({
       ...input,
       rev,
       writer: writerId(),
+      generation: 0,
       createdAt: moment,
       updatedAt: moment,
     }
@@ -361,9 +429,9 @@ let pushTimer: ReturnType<typeof setTimeout> | null = null
  * Ставит книгу в очередь на отправку.
  *
  * Ждёт одна отложенная задача, а не копятся задачи: пришедшая позже правка
- * просто заменяет собой ещё не отправленную. Ответ сервера — слитый список —
- * возвращается в местный файл: так пометки, собранные серверным сборщиком
- * мусора, не остаются на устройстве навсегда, а правки, сделанные, пока
+ * просто заменяет собой ещё не отправленную. Ответ сервера — слитый список
+ * с поколением — возвращается в местный файл: так собранные сервером
+ * пометки не остаются на устройстве навсегда, а правки, сделанные, пока
  * ответ летел, в слиянии побеждают по (rev, writer).
  */
 function schedulePush(bookId: string): void {
@@ -385,16 +453,16 @@ async function runPush(bookId: string): Promise<void> {
   // местным состоянием, а не с тем, что ушло наверх.
   const current = useAnnotations.getState()
   if (current.bookId !== bookId) return
-  const { items, differsFromLocal } = mergeAnnotations(current.annotations, response.items)
-  const next: Stored = {
-    version: 2,
-    clock: Math.max(current.clock, topRev(items)),
-    seen: Math.max(current.seen, response.topRev),
-    annotations: items,
-  }
-  if (differsFromLocal) {
-    useAnnotations.setState({ annotations: items, clock: next.clock, seen: next.seen })
+  const merged = applyServerSnapshot(current.annotations, response.items, response.generation)
+  if (merged.differsFromLocal || response.generation > current.seen) {
+    const next: Stored = {
+      version: 2,
+      clock: Math.max(current.clock, topRev(merged.items)),
+      seen: Math.max(current.seen, response.generation),
+      annotations: merged.items,
+    }
     await persist(bookId, next)
+    useAnnotations.setState({ annotations: next.annotations, clock: next.clock, seen: next.seen })
   }
 }
 

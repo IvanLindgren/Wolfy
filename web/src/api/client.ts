@@ -500,16 +500,21 @@ export interface AnnotationItem {
   rev: number
   /** Стабильный номер устройства, подписавшего правку. */
   writer: string
+  /**
+   * Поколение серверного снимка, которым запись была проштампована.
+   * Ставит только сервер; у местных, ещё не отправленных записей — ноль.
+   */
+  generation?: number
   createdAt: number
   updatedAt: number
   /** Пометка удаления: доезжает до других устройств, живая запись — нет. */
   deleted?: boolean
 }
 
-/** Ответ сервера: слитый список и его наибольшая версия. */
+/** Ответ сервера: слитый список и поколение снимка. */
 export interface AnnotationSync {
   items: AnnotationItem[]
-  topRev: number
+  generation: number
 }
 
 /**
@@ -521,8 +526,9 @@ export interface AnnotationSync {
  *
  * `device` и `seen` обязательны: первый регистрирует устройство в реестре
  * сборщика мусора (держатель копии обязан блокировать стирание пометок),
- * второй подтверждает, какую версию серверного состояния устройство уже
- * долговечно сохранило.
+ * второй подтверждает поколение снимка, которое устройство уже долговечно
+ * сохранило. Возвращённое поколение клиент подтвердит следующим запросом —
+ * после того, как сохранит снимок у себя.
  */
 export async function fetchBookAnnotations(
   bookId: string,
@@ -530,13 +536,13 @@ export async function fetchBookAnnotations(
   seen: number,
 ): Promise<AnnotationSync | null> {
   try {
-    const payload = await request<{ items?: AnnotationItem[]; topRev?: number }>(
+    const payload = await request<{ items?: AnnotationItem[]; generation?: number }>(
       `/v1/books/${encodeURIComponent(bookId)}/annotations?` +
         new URLSearchParams({ device, seen: String(seen) }),
     )
     return {
       items: Array.isArray(payload.items) ? payload.items : [],
-      topRev: payload.topRev ?? 0,
+      generation: payload.generation ?? 0,
     }
   } catch {
     return null
@@ -545,9 +551,9 @@ export async function fetchBookAnnotations(
 
 /**
  * Отправляет список целиком; сервер сам сливает его с хранимым по (rev,
- * writer) каждой записи и возвращает слитый результат. Поэтому порядок
- * отправки между устройствами не важен: у версии больше — та и верна, где
- * бы её ни правили.
+ * writer) каждой записи и возвращает слитый результат вместе с поколением
+ * снимка. Поэтому порядок отправки между устройствами не важен: у версии
+ * больше — та и верна, где бы её ни правили.
  */
 export async function pushBookAnnotations(
   bookId: string,
@@ -556,14 +562,14 @@ export async function pushBookAnnotations(
   items: AnnotationItem[],
 ): Promise<AnnotationSync | null> {
   try {
-    const payload = await request<{ items?: AnnotationItem[]; topRev?: number }>(
+    const payload = await request<{ items?: AnnotationItem[]; generation?: number }>(
       `/v1/books/${encodeURIComponent(bookId)}/annotations?` +
         new URLSearchParams({ device, seen: String(seen) }),
       { method: 'PUT', body: { items } },
     )
     return {
       items: Array.isArray(payload.items) ? payload.items : [],
-      topRev: payload.topRev ?? 0,
+      generation: payload.generation ?? 0,
     }
   } catch {
     return null
