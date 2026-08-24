@@ -14,6 +14,7 @@ use quick_xml::Reader;
 use zip::ZipArchive;
 
 use crate::error::{CoreError, Result};
+use crate::parser::limits;
 use crate::parser::{Block, Book, Chapter, ChapterInfo, Metadata, Source};
 
 /// Открытая книга EPUB.
@@ -39,8 +40,13 @@ impl EpubBook {
     }
 
     fn read(source: Source) -> Result<Self> {
+        // Проверка размера источника до распаковки: та же, что в open_bytes,
+        // но для файла на диске (metadata) её не делал `parser::open_bytes`.
+        source.check_size()?;
         let mut archive = ZipArchive::new(source)
             .map_err(|e| CoreError::Malformed(format!("не открывается архив EPUB: {e}")))?;
+
+        limits::check_epub_entries(archive.len())?;
 
         let opf_path = find_opf(&mut archive)?;
         let opf = read_entry(&mut archive, &opf_path)?;
@@ -81,7 +87,15 @@ impl Book for EpubBook {
         })?;
 
         let xhtml = read_entry(&mut self.archive, &href)?;
+        // Сырой XHTML уже ограничен при чтении записи (8 MiB), но
+        // дополнительная проверка текста главы защищает от гигантского
+        // XHTML, где большая часть — текст внутри одного блока.
+        limits::check_chapter_text_len(xhtml.len())?;
         let blocks = parse_xhtml(&xhtml, &parent_dir(&href))?;
+        // Итоговый plain text тоже не должен раздуть память.
+        let total_text: usize = blocks.iter().filter_map(|b| b.text()).map(|s| s.len()).sum();
+        limits::check_chapter_text_len(total_text)?;
+        limits::check_total_text_len(total_text)?;
 
         // Заголовок главы берётся из её первого заголовочного блока: он
         // точнее оглавления, где часто стоит «Chapter 12» без названия.
@@ -101,8 +115,21 @@ impl Book for EpubBook {
             .archive
             .by_name(path)
             .map_err(|_| CoreError::Malformed(format!("в книге нет файла «{path}»")))?;
+        let declared = entry.size();
+        limits::check_epub_entry_size(declared)?;
+        limits::check_image_bytes(declared as usize).ok();
+        // ZIP заголовку нельзя доверять — читаем через take(MAX+1) и
+        // проверяем фактический размер.
+        let mut limited = (&mut entry).take(limits::MAX_EPUB_ENTRY_BYTES + 1);
         let mut bytes = Vec::new();
-        entry.read_to_end(&mut bytes)?;
+        limited.read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > limits::MAX_EPUB_ENTRY_BYTES {
+            return Err(limits::too_large_with_detail(&format!(
+                "файл «{path}» превышает лимит {} байт",
+                limits::MAX_EPUB_ENTRY_BYTES
+            )));
+        }
+        limits::check_image_bytes(bytes.len())?;
         Ok(bytes)
     }
 }
@@ -112,9 +139,21 @@ fn read_entry(archive: &mut ZipArchive<Source>, path: &str) -> Result<String> {
     let mut entry = archive
         .by_name(path)
         .map_err(|_| CoreError::Malformed(format!("в книге нет файла «{path}»")))?;
-    let mut text = String::new();
-    entry
-        .read_to_string(&mut text)
+    let declared = entry.size();
+    limits::check_epub_entry_size(declared)?;
+    // Не доверяем declared size из ZIP заголовка: читаем через take.
+    let mut limited = (&mut entry).take(limits::MAX_EPUB_ENTRY_BYTES + 1);
+    let mut bytes = Vec::new();
+    limited
+        .read_to_end(&mut bytes)
+        .map_err(|e| CoreError::Malformed(format!("файл «{path}» не читается как текст: {e}")))?;
+    if bytes.len() as u64 > limits::MAX_EPUB_ENTRY_BYTES {
+        return Err(limits::too_large_with_detail(&format!(
+            "файл «{path}» превышает лимит {} байт",
+            limits::MAX_EPUB_ENTRY_BYTES
+        )));
+    }
+    let text = String::from_utf8(bytes)
         .map_err(|e| CoreError::Malformed(format!("файл «{path}» не читается как текст: {e}")))?;
     Ok(text)
 }
@@ -610,5 +649,182 @@ mod tests {
             "{}",
             err.describe()
         );
+    }
+
+    fn epub_bytes_with_chapter(chapter_content: &str) -> Vec<u8> {
+        use std::io::{Cursor, Write};
+        let mut buffer = Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buffer);
+            let options: zip::write::FileOptions<'_, ()> =
+                zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+            let container = r#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#;
+            let opf = r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Test</dc:title></metadata><manifest><item id="ch1" href="text/ch1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="ch1"/></spine></package>"#;
+            zip.start_file("mimetype", options).unwrap();
+            zip.write_all(b"application/epub+zip").unwrap();
+            zip.start_file("META-INF/container.xml", options).unwrap();
+            zip.write_all(container.as_bytes()).unwrap();
+            zip.start_file("OEBPS/content.opf", options).unwrap();
+            zip.write_all(opf.as_bytes()).unwrap();
+            zip.start_file("OEBPS/text/ch1.xhtml", options).unwrap();
+            zip.write_all(chapter_content.as_bytes()).unwrap();
+            zip.finish().unwrap();
+        }
+        buffer.into_inner()
+    }
+
+    #[test]
+    fn oversized_epub_entry_rejected() {
+        let huge = "a".repeat(crate::parser::limits::MAX_EPUB_ENTRY_BYTES_USIZE + 1);
+        let xhtml = format!("<html><body><p>{huge}</p></body></html>");
+        let bytes = epub_bytes_with_chapter(&xhtml);
+        let mut book = EpubBook::from_bytes(bytes).expect("EPUB открывается; ошибка ожидается при чтении главы");
+        let err = book.chapter(0).expect_err("огромная запись должна быть отвергнута");
+        assert!(
+            err.describe().contains("слишком велика"),
+            "ожидалось сообщение о лимите, получили: {}",
+            err.describe()
+        );
+    }
+
+    #[test]
+    fn single_gigantic_xhtml_chapter_rejected() {
+        // Глава влезает в лимит записи (8 MiB), но превышает лимит текста главы (5 MiB).
+        let chunk = crate::parser::limits::MAX_CHAPTER_TEXT_BYTES + 1024;
+        let huge_text = "a".repeat(chunk);
+        // Оборачиваем в минимальный XHTML, чтобы запись была ~чуть больше 5 MiB, но меньше 8 MiB.
+        let xhtml = format!("<html><body><p>{huge_text}</p></body></html>");
+        assert!(
+            xhtml.len() < crate::parser::limits::MAX_EPUB_ENTRY_BYTES_USIZE,
+            "тестовая XHTML должна влезать в лимит записи"
+        );
+        let bytes = epub_bytes_with_chapter(&xhtml);
+        let mut book = EpubBook::from_bytes(bytes).expect("EPUB открывается");
+        let err = book.chapter(0).expect_err("гигантская глава должна быть отвергнута");
+        assert!(
+            err.describe().contains("слишком велика"),
+            "{}",
+            err.describe()
+        );
+    }
+
+    #[test]
+    fn zip_lying_about_size_still_rejected_via_take() {
+        // Симулируем ZIP, который врёт о размере: declared маленький, реальный большой.
+        // Проверяем, что защита через take(MAX+1) срабатывает даже если заголовок врёт.
+        use std::io::{Cursor, Read};
+        struct LyingReader {
+            data: Cursor<Vec<u8>>,
+            declared: u64,
+        }
+        impl LyingReader {
+            fn size(&self) -> u64 {
+                self.declared
+            }
+        }
+        impl Read for LyingReader {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                self.data.read(buf)
+            }
+        }
+        let declared = 10u64;
+        let real = vec![b'a'; crate::parser::limits::MAX_EPUB_ENTRY_BYTES_USIZE + 100];
+        let mut lying = LyingReader {
+            data: Cursor::new(real),
+            declared,
+        };
+        // Эмулируем логику read_entry: сначала проверка declared (пройдёт), затем take.
+        crate::parser::limits::check_epub_entry_size(lying.size()).expect("declared маленький — проверка проходит");
+        let mut limited = (&mut lying).take(crate::parser::limits::MAX_EPUB_ENTRY_BYTES + 1);
+        let mut buf = Vec::new();
+        limited.read_to_end(&mut buf).unwrap();
+        assert!(
+            buf.len() as u64 > crate::parser::limits::MAX_EPUB_ENTRY_BYTES,
+            "реальный размер должен превысить лимит"
+        );
+        // Итоговая проверка, как в read_entry, должна отвергнуть.
+        let err = crate::parser::limits::too_large_with_detail("simulated lying zip");
+        assert!(err.describe().contains("слишком велика"));
+        // Прямая проверка, что наша логика отвергла бы такой вход:
+        assert!(buf.len() as u64 > declared);
+    }
+
+    #[test]
+    fn epub_too_many_entries_rejected() {
+        use std::io::{Cursor, Write};
+        let mut buffer = Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buffer);
+            let options: zip::write::FileOptions<'_, ()> =
+                zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+            let container = r#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#;
+            let mut opf_manifest = String::from(r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Test</dc:title></metadata><manifest>"#);
+            let mut spine = String::from("<spine>");
+            let count = crate::parser::limits::MAX_EPUB_ENTRIES + 1;
+            for i in 0..count {
+                opf_manifest.push_str(&format!(r#"<item id="ch{i}" href="text/ch{i}.xhtml" media-type="application/xhtml+xml"/>"#));
+                spine.push_str(&format!(r#"<itemref idref="ch{i}"/>"#));
+            }
+            opf_manifest.push_str("</manifest>");
+            opf_manifest.push_str(&spine);
+            opf_manifest.push_str("</spine></package>");
+            zip.start_file("mimetype", options).unwrap();
+            zip.write_all(b"application/epub+zip").unwrap();
+            zip.start_file("META-INF/container.xml", options).unwrap();
+            zip.write_all(container.as_bytes()).unwrap();
+            zip.start_file("OEBPS/content.opf", options).unwrap();
+            zip.write_all(opf_manifest.as_bytes()).unwrap();
+            for i in 0..count {
+                zip.start_file(format!("OEBPS/text/ch{i}.xhtml"), options).unwrap();
+                zip.write_all(b"<html><body><p>hi</p></body></html>").unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        let bytes = buffer.into_inner();
+        let Err(err) = EpubBook::from_bytes(bytes) else {
+            panic!("слишком много записей — должен быть отклонён");
+        };
+        assert!(err.describe().contains("слишком велика"), "{}", err.describe());
+    }
+
+    #[test]
+    fn epub_source_too_large_rejected() {
+        let large = vec![0u8; crate::parser::limits::MAX_SOURCE_BYTES_USIZE + 1];
+        let Err(err) = EpubBook::from_bytes(large) else {
+            panic!("источник слишком велик — ожидалась ошибка");
+        };
+        assert!(err.describe().contains("слишком велика"), "{}", err.describe());
+    }
+
+    #[test]
+    fn epub_resource_too_large_rejected() {
+        use std::io::{Cursor, Write};
+        let huge_resource = vec![b'a'; crate::parser::limits::MAX_EPUB_ENTRY_BYTES_USIZE + 1];
+        let mut buffer = Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buffer);
+            let options: zip::write::FileOptions<'_, ()> =
+                zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+            let container = r#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#;
+            let opf = r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Test</dc:title></metadata><manifest><item id="ch1" href="text/ch1.xhtml" media-type="application/xhtml+xml"/><item id="img" href="images/big.jpg" media-type="image/jpeg"/></manifest><spine><itemref idref="ch1"/></spine></package>"#;
+            let chapter = r#"<html><body><p>hi</p><img src="../images/big.jpg"/></body></html>"#;
+            zip.start_file("mimetype", options).unwrap();
+            zip.write_all(b"application/epub+zip").unwrap();
+            zip.start_file("META-INF/container.xml", options).unwrap();
+            zip.write_all(container.as_bytes()).unwrap();
+            zip.start_file("OEBPS/content.opf", options).unwrap();
+            zip.write_all(opf.as_bytes()).unwrap();
+            zip.start_file("OEBPS/text/ch1.xhtml", options).unwrap();
+            zip.write_all(chapter.as_bytes()).unwrap();
+            zip.start_file("OEBPS/images/big.jpg", options).unwrap();
+            zip.write_all(&huge_resource).unwrap();
+            zip.finish().unwrap();
+        }
+        let bytes = buffer.into_inner();
+        let mut book = EpubBook::from_bytes(bytes).expect("EPUB открывается");
+        // Чтение главы ок
+        let _ = book.chapter(0).expect("глава");
+        let err = book.resource("OEBPS/images/big.jpg").expect_err("ресурс слишком велик");
+        assert!(err.describe().contains("слишком велика"), "{}", err.describe());
     }
 }

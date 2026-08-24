@@ -36,7 +36,7 @@ use std::ffi::{c_char, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, LazyLock, Mutex};
 
 use crate::lexicon::{analyze, Lexicon};
 use crate::parser::{self, Book};
@@ -60,11 +60,18 @@ thread_local! {
 
 /// Открытые книги. Клиент держит не указатель, а число: указатель, пришедший
 /// с чужой стороны, невозможно проверить, а несуществующий номер — можно.
-static BOOKS: Mutex<Option<HashMap<i64, Box<dyn Book>>>> = Mutex::new(None);
+///
+/// Структура `Mutex<HashMap<Handle, Arc<Mutex<Book>>>>` выбрана намеренно,
+/// чтобы тяжёлая работа не держала глобальный lock и паника одной книги не
+/// отравляла реестр всех книг: глобальный мьютекс держится только на время
+/// клонирования `Arc`, а сама операция идёт под пер-объектным мьютексом.
+static BOOKS: LazyLock<Mutex<HashMap<i64, Arc<Mutex<Box<dyn Book>>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Открытые сессии — библиотека и настройки читателя. Номер вместо указателя
 /// по той же причине, что у книг.
-static SESSIONS: Mutex<Option<HashMap<i64, Session>>> = Mutex::new(None);
+static SESSIONS: LazyLock<Mutex<HashMap<i64, Arc<Mutex<Session>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Общий счётчик номеров. Один на книги и сессии: перепутать их нельзя, а
 /// два счётчика выдавали бы одинаковые числа и путали бы при чтении журнала.
@@ -224,8 +231,11 @@ pub unsafe extern "C" fn wolfy_book_open(path: *const c_char) -> i64 {
         };
 
         let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
-        let mut guard = BOOKS.lock().ok()?;
-        guard.get_or_insert_with(HashMap::new).insert(handle, book);
+        let mut guard = match BOOKS.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.insert(handle, Arc::new(Mutex::new(book)));
         Some(handle)
     }));
 
@@ -274,12 +284,18 @@ pub extern "C" fn wolfy_book_chapter(handle: i64, index: usize) -> *mut c_char {
 }
 
 /// Закрывает книгу и отпускает её файл.
+///
+/// Удаляет handle из реестра даже если пер-объектный мьютекс poisoned:
+/// удаление требует только глобального реестра, а не блокировки самой книги.
 #[no_mangle]
 pub extern "C" fn wolfy_book_close(handle: i64) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        if let Ok(mut guard) = BOOKS.lock() {
-            if let Some(books) = guard.as_mut() {
-                books.remove(&handle);
+        match BOOKS.lock() {
+            Ok(mut guard) => {
+                guard.remove(&handle);
+            }
+            Err(poisoned) => {
+                poisoned.into_inner().remove(&handle);
             }
         }
     }));
@@ -321,50 +337,74 @@ where
 }
 
 /// Достаёт книгу из реестра и что-то с ней делает.
+///
+/// Алгоритм: lock registry, clone Arc, unlock registry, lock конкретную книгу.
+/// Так тяжёлая работа не держит глобальный мьютекс и паника одной книги не
+/// отравляет реестр всех книг. `catch_unwind` остаётся на FFI-границе.
 fn with_book<T, F>(handle: i64, body: F) -> Option<T>
 where
     F: FnOnce(&mut Box<dyn Book>) -> T,
 {
-    let mut guard = match BOOKS.lock() {
-        Ok(guard) => guard,
-        Err(_) => {
-            set_error("реестр книг повреждён");
-            return None;
+    let book_arc = {
+        let guard = match BOOKS.lock() {
+            Ok(g) => g,
+            Err(_) => {
+                set_error("реестр книг повреждён");
+                return None;
+            }
+        };
+        match guard.get(&handle) {
+            Some(arc) => Arc::clone(arc),
+            None => {
+                set_error("книга уже закрыта или не открывалась");
+                return None;
+            }
         }
     };
 
-    match guard.as_mut().and_then(|books| books.get_mut(&handle)) {
-        Some(book) => Some(body(book)),
-        None => {
-            set_error("книга уже закрыта или не открывалась");
-            None
+    let mut book_guard = match book_arc.lock() {
+        Ok(g) => g,
+        Err(_) => {
+            set_error("книга повреждена после сбоя");
+            return None;
         }
-    }
+    };
+    Some(body(&mut *book_guard))
 }
 
 /// Достаёт сессию из реестра и что-то с ней делает.
+///
+/// Тот же алгоритм, что у `with_book`: глобальный реестр не держится на время
+/// выполнения команды, паника одной сессии не отравляет остальные.
 fn with_session<T, F>(handle: i64, body: F) -> Option<T>
 where
     F: FnOnce(&mut Session) -> T,
 {
-    let mut guard = match SESSIONS.lock() {
-        Ok(guard) => guard,
-        Err(_) => {
-            set_error("реестр сессий повреждён");
-            return None;
+    let session_arc = {
+        let guard = match SESSIONS.lock() {
+            Ok(g) => g,
+            Err(_) => {
+                set_error("реестр сессий повреждён");
+                return None;
+            }
+        };
+        match guard.get(&handle) {
+            Some(arc) => Arc::clone(arc),
+            None => {
+                set_error("сессия уже закрыта или не открывалась");
+                return None;
+            }
         }
     };
 
-    match guard
-        .as_mut()
-        .and_then(|sessions| sessions.get_mut(&handle))
-    {
-        Some(session) => Some(body(session)),
-        None => {
-            set_error("сессия уже закрыта или не открывалась");
-            None
+    let mut session_guard = match session_arc.lock() {
+        Ok(g) => g,
+        Err(_) => {
+            set_error("сессия повреждена после сбоя");
+            return None;
         }
-    }
+    };
+    Some(body(&mut *session_guard))
 }
 
 /// Читает необязательную C-строку: `null` здесь означает «записи ещё нет».
@@ -456,10 +496,11 @@ pub unsafe extern "C" fn wolfy_session_open(
         let session = Session::open(library.as_deref(), settings.as_deref());
 
         let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
-        let mut guard = SESSIONS.lock().ok()?;
-        guard
-            .get_or_insert_with(HashMap::new)
-            .insert(handle, session);
+        let mut guard = match SESSIONS.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.insert(handle, Arc::new(Mutex::new(session)));
         Some(handle)
     }));
 
@@ -507,10 +548,11 @@ pub unsafe extern "C" fn wolfy_session_open_strict(
         };
 
         let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
-        let mut guard = SESSIONS.lock().ok()?;
-        guard
-            .get_or_insert_with(HashMap::new)
-            .insert(handle, session);
+        let mut guard = match SESSIONS.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.insert(handle, Arc::new(Mutex::new(session)));
         Some(handle)
     }));
 
@@ -615,14 +657,17 @@ pub extern "C" fn wolfy_session_saved(handle: i64, library: bool, settings: bool
 
 /// Закрывает сессию.
 ///
-/// Несохранённое при этом теряется: записать его самостоятельно ядро не может
-/// — оно не знает, где у этой платформы файлы.
+/// Удаляет handle даже если пер-сессионный мьютекс poisoned: нужно только
+/// глобальный реестр, а не блокировка самой сессии.
 #[no_mangle]
 pub extern "C" fn wolfy_session_close(handle: i64) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        if let Ok(mut guard) = SESSIONS.lock() {
-            if let Some(sessions) = guard.as_mut() {
-                sessions.remove(&handle);
+        match SESSIONS.lock() {
+            Ok(mut guard) => {
+                guard.remove(&handle);
+            }
+            Err(poisoned) => {
+                poisoned.into_inner().remove(&handle);
             }
         }
     }));
@@ -806,5 +851,275 @@ mod tests {
     #[test]
     fn освобождение_пустого_указателя_безопасно() {
         unsafe { wolfy_string_free(std::ptr::null_mut()) };
+    }
+
+    // --- §14: FFI registry не должен глобально умирать от паники одного объекта ---
+
+    use crate::parser::{Block, Chapter, ChapterInfo, Metadata};
+
+    struct MockBook {
+        metadata: Metadata,
+        contents: Vec<ChapterInfo>,
+        delay_ms: u64,
+        panic: bool,
+        title: String,
+    }
+
+    impl crate::parser::Book for MockBook {
+        fn metadata(&self) -> &Metadata {
+            &self.metadata
+        }
+        fn contents(&self) -> &[ChapterInfo] {
+            &self.contents
+        }
+        fn chapter(&mut self, _index: usize) -> crate::Result<Chapter> {
+            if self.panic {
+                panic!("mock panic for poison test");
+            }
+            if self.delay_ms > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(self.delay_ms));
+            }
+            Ok(Chapter {
+                title: Some(self.title.clone()),
+                blocks: vec![Block::Paragraph("test".to_string())],
+            })
+        }
+        fn resource(&mut self, _path: &str) -> crate::Result<Vec<u8>> {
+            Ok(vec![])
+        }
+    }
+
+    fn вставить_mock_книгу(delay_ms: u64, should_panic: bool) -> i64 {
+        let book: Box<dyn crate::parser::Book> = Box::new(MockBook {
+            metadata: Metadata {
+                title: Some("Mock".to_string()),
+                author: None,
+                language: None,
+                cover: None,
+            },
+            contents: vec![ChapterInfo { title: Some("Ch1".to_string()) }],
+            delay_ms,
+            panic: should_panic,
+            title: "MockChapter".to_string(),
+        });
+        let handle = super::NEXT_HANDLE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let arc = std::sync::Arc::new(std::sync::Mutex::new(book));
+        match super::BOOKS.lock() {
+            Ok(mut g) => {
+                g.insert(handle, std::sync::Arc::clone(&arc));
+            }
+            Err(p) => {
+                p.into_inner().insert(handle, arc);
+            }
+        }
+        handle
+    }
+
+    fn вставить_mock_книгу_без_задержки() -> i64 {
+        вставить_mock_книгу(0, false)
+    }
+
+    #[test]
+    fn две_разные_книги_не_блокируют_друг_друга() {
+        // Тяжёлая работа не должна держаться под глобальным реестром.
+        // Проверяем детерминированно через try_lock, а не только по времени.
+        let h1 = вставить_mock_книгу(300, false);
+        let h2 = вставить_mock_книгу_без_задержки();
+
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let barrier_c = std::sync::Arc::clone(&barrier);
+        let handle = h1;
+        let thread = std::thread::spawn(move || {
+            barrier_c.wait();
+            // Этот вызов держит пер-книжный мьютекс ~300 мс, но глобальный должен быть свободен.
+            let _ = wolfy_book_chapter(handle, 0);
+        });
+
+        barrier.wait();
+        // Даём потоку войти в chapter и заснуть под пер-книжным мьютексом.
+        std::thread::sleep(std::time::Duration::from_millis(80));
+
+        // Глобальный реестр не должен быть заблокирован.
+        let registry_free = super::BOOKS.try_lock().is_ok();
+        assert!(
+            registry_free,
+            "глобальный реестр заблокирован тяжёлой работой одной книги — должна быть Arc<Mutex> схема"
+        );
+
+        // Операция над другой книгой должна пройти быстро (<100 мс), а не ждать 300 мс.
+        let start = std::time::Instant::now();
+        let meta = wolfy_book_metadata(h2);
+        let elapsed = start.elapsed();
+        assert!(!meta.is_null(), "вторая книга должна отвечать пока первая спит");
+        unsafe { wolfy_string_free(meta) };
+        assert!(
+            elapsed.as_millis() < 120,
+            "вторая книга заблокирована глобальным мьютексом: elapsed {}ms",
+            elapsed.as_millis()
+        );
+
+        thread.join().expect("поток книги не должен падать");
+        wolfy_book_close(h1);
+        wolfy_book_close(h2);
+    }
+
+    #[test]
+    fn две_разные_книги_параллельно_быстрее_последовательно() {
+        let h1 = вставить_mock_книгу(150, false);
+        let h2 = вставить_mock_книгу(150, false);
+
+        let start = std::time::Instant::now();
+        let t1 = std::thread::spawn(move || {
+            let _ = wolfy_book_chapter(h1, 0);
+        });
+        let t2 = std::thread::spawn({
+            let h = h2;
+            move || {
+                let _ = wolfy_book_chapter(h, 0);
+            }
+        });
+        t1.join().unwrap();
+        t2.join().unwrap();
+        let elapsed = start.elapsed();
+        // Последовательно было бы ~300 мс, параллельно ~150 мс. Даём запас до 260 мс.
+        assert!(
+            elapsed.as_millis() < 260,
+            "две разные книги должны работать параллельно, elapsed {}ms",
+            elapsed.as_millis()
+        );
+
+        wolfy_book_close(h1);
+        wolfy_book_close(h2);
+
+        // Одна и та же книга должна сериализоваться пер-книжным мьютексом.
+        let h = вставить_mock_книгу(120, false);
+        let start = std::time::Instant::now();
+        let t1 = std::thread::spawn(move || {
+            let _ = wolfy_book_chapter(h, 0);
+        });
+        // Чуть подождать, чтобы t1 захватил пер-книжный мьютекс.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let t2 = std::thread::spawn(move || {
+            let _ = wolfy_book_chapter(h, 0);
+        });
+        t1.join().unwrap();
+        t2.join().unwrap();
+        let elapsed = start.elapsed();
+        // Две последовательные операции над одной книгой ~240 мс.
+        assert!(
+            elapsed.as_millis() >= 200,
+            "одна книга должна сериализовать доступ пер-мьютексом, elapsed {}ms",
+            elapsed.as_millis()
+        );
+        wolfy_book_close(h);
+    }
+
+    #[test]
+    fn паника_одной_книги_не_ломает_реестр_и_close_удаляет() {
+        let poisoned = вставить_mock_книгу(0, true);
+        let healthy = вставить_mock_книгу_без_задержки();
+
+        // Паника внутри chapter ловится catch_unwind на FFI-границе -> null + "внутренняя ошибка ядра".
+        let result = wolfy_book_chapter(poisoned, 0);
+        assert!(result.is_null(), "паника должна вернуться как null");
+        // Ошибка паники ставится в том же потоке, где был вызов — проверяем, что вызов не убил процесс.
+        // Следующий вызов того же handle должен дать poison-ошибку, а не "реестр повреждён".
+        let second = wolfy_book_metadata(poisoned);
+        assert!(second.is_null());
+        let err = ошибка().expect("ошибка poison должна быть");
+        assert!(
+            err.contains("повреждена") || err.contains("сбоя"),
+            "ожидали 'книга повреждена после сбоя', получили: {err}"
+        );
+
+        // Другая книга должна продолжать работать.
+        let meta = wolfy_book_metadata(healthy);
+        assert!(!meta.is_null(), "здоровая книга должна работать после паники другой");
+        unsafe { wolfy_string_free(meta) };
+
+        // Сессии тоже должны работать.
+        let sess = unsafe { wolfy_session_open(std::ptr::null(), std::ptr::null()) };
+        assert_ne!(sess, 0, "сессии должны работать после паники книги");
+        let lib = wolfy_session_library(sess);
+        assert!(!lib.is_null());
+        unsafe { wolfy_string_free(lib) };
+        wolfy_session_close(sess);
+
+        // Close poisoned handle должен удалить его, а не висеть.
+        wolfy_book_close(poisoned);
+        let after_close = wolfy_book_metadata(poisoned);
+        assert!(after_close.is_null());
+        let err2 = ошибка().expect("после close должна быть 'закрыта'");
+        assert!(
+            err2.contains("закрыта"),
+            "после close ожидаем 'книга уже закрыта', получили: {err2}"
+        );
+
+        wolfy_book_close(healthy);
+    }
+
+    #[test]
+    fn сессия_poison_не_ломает_другие_сессии_и_книги() {
+        let s1 = unsafe { wolfy_session_open(std::ptr::null(), std::ptr::null()) };
+        let s2 = unsafe { wolfy_session_open(std::ptr::null(), std::ptr::null()) };
+        assert_ne!(s1, 0);
+        assert_ne!(s2, 0);
+
+        // Отравляем s1: паника внутри пер-сессионного мьютекса.
+        let arc = {
+            let guard = super::SESSIONS.lock().unwrap();
+            std::sync::Arc::clone(guard.get(&s1).expect("s1 должен быть"))
+        };
+        let cloned = std::sync::Arc::clone(&arc);
+        let t = std::thread::spawn(move || {
+            let _guard = cloned.lock().unwrap();
+            panic!("mock session panic");
+        });
+        let _ = t.join(); // poisoned
+
+        // s1 теперь poisoned
+        let result = wolfy_session_library(s1);
+        assert!(result.is_null());
+        let err = ошибка().expect("сессия poison error");
+        assert!(
+            err.contains("повреждена") || err.contains("сессии"),
+            "ожидали 'сессия повреждена после сбоя', получили: {err}"
+        );
+
+        // s2 должна работать
+        let lib = wolfy_session_library(s2);
+        assert!(!lib.is_null(), "вторая сессия должна работать после poison первой");
+        unsafe { wolfy_string_free(lib) };
+
+        // Книги тоже должны работать
+        let h = вставить_mock_книгу_без_задержки();
+        let meta = wolfy_book_metadata(h);
+        assert!(!meta.is_null(), "книги должны работать после poison сессии");
+        unsafe { wolfy_string_free(meta) };
+        wolfy_book_close(h);
+
+        // close poisoned должен работать и очищать слот
+        wolfy_session_close(s1);
+        let after = wolfy_session_library(s1);
+        assert!(after.is_null());
+        assert!(ошибка().unwrap().contains("закрыта"));
+
+        wolfy_session_close(s2);
+    }
+
+    #[test]
+    fn catch_unwind_остаётся_на_границе() {
+        // Прямая паника внутри with_book body должна ловиться guard(), а не убивать процесс.
+        let h = вставить_mock_книгу(0, false);
+        // Вызываем with_book с паникующим closure через FFI? Имитируем через chapter panic уже проверено.
+        // Здесь проверим, что даже паника внутри сессии (run) не убивает.
+        let s = unsafe { wolfy_session_open(std::ptr::null(), std::ptr::null()) };
+        // Невалидная команда уже тестируется, но паника карточки? Симулируем через прямой вызов guard с паникой.
+        let result = super::guard(|| -> Option<String> { panic!("test panic inside guard") });
+        assert!(result.is_null());
+        assert!(ошибка().unwrap().contains("внутренняя ошибка ядра"));
+
+        wolfy_book_close(h);
+        wolfy_session_close(s);
     }
 }

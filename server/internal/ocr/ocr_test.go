@@ -125,7 +125,7 @@ func TestМолчаниеПровайдераНеПадениеСервиса(t 
 	defer server.Close()
 
 	service := ocr.New("ключ", server.URL, "модель", 5*time.Second)
-	_, err := service.Recognize(context.Background(), []byte{1}, "image/jpeg")
+	_, err := service.Recognize(context.Background(), []byte{0xFF, 0xD8, 0xFF, 0xD8}, "image/jpeg")
 
 	if err == nil {
 		t.Fatal("ошибка провайдера не дошла до вызывающего")

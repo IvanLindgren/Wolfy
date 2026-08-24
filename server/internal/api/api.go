@@ -60,6 +60,8 @@ type Server struct {
 	bookLimit *rateLimiter
 	// Поиск по каталогу дешёвый, но ходит наружу: щедрее загрузки, сдержаннее перевода.
 	catalogueLimit *rateLimiter
+	// OCR — дорогой vision-вызов, ограничен глобально и per-user.
+	ocrLimit *rateLimiter
 }
 
 // WithWebOrigin включает credentialed CORS только для одного известного
@@ -98,11 +100,15 @@ func NewServer(
 		// Двести переводов залпом и один в секунду сверху: страница книги
 		// редко даёт больше двухсот незнакомых слов, а секунда — это дольше,
 		// чем читатель успевает выбрать следующее слово, но много быстрее,
-		// чем перебор словаря скриптом.
+		// чем перебор словаря скриптом. Лимит считается по размеру (cost) —
+		// большой текст стоит несколько токенов.
 		translateLimit: newRateLimiter(200, 1, 30*time.Minute),
 		authLimit:      newRateLimiter(8, 0.1, 30*time.Minute),
 		bookLimit:      newRateLimiter(8, 0.05, 30*time.Minute),
 		catalogueLimit: newRateLimiter(30, 0.5, 15*time.Minute),
+		// OCR: дорогой vision, не более 6 залпом и 1 в 5 секунд на пользователя.
+		// Глобальный конкурентный лимит 4 — в gate.OCR.
+		ocrLimit: newRateLimiter(6, 0.2, 15*time.Minute),
 	}
 }
 
@@ -156,10 +162,9 @@ func (s *Server) Handler() http.Handler {
 	// За каждым запросом стоит платный сервис, поэтому маршрут открыт не
 	// настежь, а под ограничителем частоты. Он пропускает залп — трудная
 	// страница разбирается подряд — и останавливает того, кто гонит через
-	// него книгу целиком.
-	mux.Handle("POST /v1/translate", s.translateLimit.withRateLimit(
-		http.HandlerFunc(s.postTranslate),
-	))
+	// него книгу целиком. Лимит считается по размеру текста (cost), чтобы
+	// крупный запрос стоил больше токенов.
+	mux.HandleFunc("POST /v1/translate", s.postTranslate)
 	// Толкование публично: это fallback для тех, кто не скачал тот же словарь
 	// на устройство. Архив тоже не требует аккаунта — в нём свободные данные,
 	// а вход не должен быть условием офлайн-чтения.
@@ -510,6 +515,13 @@ func (s *Server) postDiscoveryAdd(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, discovery.ErrTooLarge):
 		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": err.Error()})
 		return
+	case errors.Is(err, discovery.ErrBusy):
+		w.Header().Set("Retry-After", "2")
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
+		return
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		writeJSON(w, http.StatusRequestTimeout, map[string]string{"error": "запрос отменён"})
+		return
 	case err != nil:
 		s.log.Warn("книга не загрузилась", "error", err, "item", r.PathValue("itemId"))
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "книга сейчас не загружается"})
@@ -637,6 +649,17 @@ func (s *Server) postTranslate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "запрос не разобран"})
 		return
 	}
+	// Hard limits до провайдера уже в translate.Service, но rate limiter
+	// должен учитывать стоимость по размеру, чтобы десятки килобайт не
+	// прошли за один токен. Кэш-hit не идёт к провайдеру, но limiter всё
+	// равно считает размер — иначе крупный запрос обходил бы лимит через кэш.
+	cost := translateCost(req.Text, req.Context)
+	if !s.translateLimit.allowN(clientIP(r), cost) {
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{
+			"error": "слишком много запросов подряд, подождите минуту",
+		})
+		return
+	}
 
 	result, err := s.translate.Translate(r.Context(), translate.Request{
 		Text:    req.Text,
@@ -645,6 +668,9 @@ func (s *Server) postTranslate(w http.ResponseWriter, r *http.Request) {
 		Target:  req.Target,
 	})
 	switch {
+	case errors.Is(err, translate.ErrTooLarge):
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": err.Error()})
+		return
 	case errors.Is(err, translate.ErrUnavailable):
 		// 503, а не 500: это временная недоступность внешнего сервиса, и
 		// клиенту стоит показать «перевод сейчас недоступен», а не ошибку
@@ -707,10 +733,29 @@ type ocrRequest struct {
 
 // postOCR распознаёт страницу бумажной книги по фотографии.
 func (s *Server) postOCR(w http.ResponseWriter, r *http.Request) {
+	user, ok := auth.FromContext(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "нужен вход"})
+		return
+	}
+	// Per-user rate limit: не даём одному аккаунту держать десятки дорогих
+	// vision-запросов параллельно или в цикле.
+	if !s.ocrLimit.allow(user.ID) {
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{
+			"error": "слишком много запросов на распознавание, подождите минуту",
+		})
+		return
+	}
 	var req ocrRequest
-	// Предел с запасом на base64: он раздувает данные на треть.
-	limit := int64(ocr.MaxImageBytes) * 4 / 3
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit+4096)).Decode(&req); err != nil {
+	// Предел с запасом на base64: он раздувает данные на треть. Отсекаем
+	// заведомо большой JSON до декодирования base64.
+	limit := int64(ocr.MaxImageBytes)*4/3 + 4096
+	// Дополнительный жёсткий лимит на тело для защиты от бага клиента.
+	if r.ContentLength > limit+16<<10 {
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "снимок слишком большой"})
+		return
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit+16<<10)).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "снимок не разобран"})
 		return
 	}
@@ -720,11 +765,23 @@ func (s *Server) postOCR(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "снимок не разобран"})
 		return
 	}
+	// Дополнительная проверка декодированного размера до вызова сервиса,
+	// чтобы не тратить слот глобального семафора на заведомо большой снимок.
+	if len(image) > ocr.MaxImageBytes {
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": ocr.ErrTooLarge.Error()})
+		return
+	}
 
 	result, err := s.ocr.Recognize(r.Context(), image, req.Mime)
 	switch {
 	case errors.Is(err, ocr.ErrTooLarge):
 		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": err.Error()})
+		return
+	case errors.Is(err, ocr.ErrTooManyRequests):
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "сервер занят распознаванием, попробуйте позже"})
+		return
+	case errors.Is(err, ocr.ErrInvalidType):
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	case errors.Is(err, ocr.ErrUnavailable):
 		s.log.Warn("распознавание недоступно", "error", err)
@@ -733,6 +790,10 @@ func (s *Server) postOCR(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	case err != nil:
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			writeJSON(w, http.StatusRequestTimeout, map[string]string{"error": "запрос отменён"})
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}

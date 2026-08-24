@@ -27,8 +27,23 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// ErrTooLarge — запрос превышает лимит размера до провайдера.
+var ErrTooLarge = errors.New("слишком длинный текст для перевода")
+
 // ErrUnavailable — перевод сейчас недоступен: нет ключа или провайдер молчит.
 var ErrUnavailable = errors.New("перевод недоступен")
+
+// Hard limits до внешнего API. DeepL тарифицируется по символам, поэтому
+// десятки килобайт текста нельзя пропускать только потому, что JSON влез в
+// общий body limit. Раздельные константы для текста и контекста позволяют
+// держать слово коротким, а контекст — предложением.
+const (
+	MaxTextRunes    = 2000
+	MaxContextRunes = 2000
+	// Byte limits duplicate rune limits for provider contracts that count bytes.
+	MaxTextBytes    = 8000
+	MaxContextBytes = 8000
+)
 
 // Request — что переводим.
 type Request struct {
@@ -79,12 +94,28 @@ func (s *Service) Translate(ctx context.Context, req Request) (Result, error) {
 	if text == "" {
 		return Result{}, fmt.Errorf("пустой текст")
 	}
+	// Hard limits before external API: не даём клиенту прогнать через
+	// платный сервис книгу целиком, даже если общий JSON-body limit её
+	// пропустил. Проверяем и runes (Unicode code points), и bytes по
+	// контракту провайдера.
+	if len([]rune(text)) > MaxTextRunes {
+		return Result{}, fmt.Errorf("%w: текст %d символов, предел %d", ErrTooLarge, len([]rune(text)), MaxTextRunes)
+	}
+	if len(text) > MaxTextBytes {
+		return Result{}, fmt.Errorf("%w: текст %d байт, предел %d", ErrTooLarge, len(text), MaxTextBytes)
+	}
 	target := strings.ToUpper(strings.TrimSpace(req.Target))
 	if target == "" {
 		target = "RU"
 	}
 	source := strings.ToUpper(strings.TrimSpace(req.Source))
 	contextText := strings.TrimSpace(req.Context)
+	if len([]rune(contextText)) > MaxContextRunes {
+		return Result{}, fmt.Errorf("%w: контекст %d символов, предел %d", ErrTooLarge, len([]rune(contextText)), MaxContextRunes)
+	}
+	if len(contextText) > MaxContextBytes {
+		return Result{}, fmt.Errorf("%w: контекст %d байт, предел %d", ErrTooLarge, len(contextText), MaxContextBytes)
+	}
 
 	// Одно и то же слово в разных предложениях может переводиться по-разному:
 	// `book` — «книга» или «бронировать». Контекст обязан входить в ключ кэша,
@@ -117,6 +148,9 @@ func cacheKey(text, contextText, source, target string) []byte {
 }
 
 func (s *Service) fromCache(ctx context.Context, key []byte) (string, bool) {
+	if s.pool == nil {
+		return "", false
+	}
 	var translated string
 	err := s.pool.QueryRow(ctx,
 		`UPDATE wolfy.translations
@@ -136,6 +170,9 @@ func (s *Service) fromCache(ctx context.Context, key []byte) (string, bool) {
 }
 
 func (s *Service) store(ctx context.Context, key []byte, source, target, text, translated string) {
+	if s.pool == nil {
+		return
+	}
 	_, _ = s.pool.Exec(ctx, `
         INSERT INTO wolfy.translations
                (hash, source_lang, target_lang, source_text, translated)

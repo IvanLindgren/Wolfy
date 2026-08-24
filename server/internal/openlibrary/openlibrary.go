@@ -30,10 +30,10 @@ var ErrUnavailable = fmt.Errorf("Открытая библиотека сейч�
 // Book — находка поиска: что за книга и откуда её качать.
 type Book struct {
 	// Номер работы в каталоге вида «OL267218W».
-	ID string
-	Title string
+	ID     string
+	Title  string
 	Author string
-	Year int
+	Year   int
 	// Ссылки на скачивание по убыванию предпочтительности:
 	// сначала EPUB из архива, затем простой текст.
 	URLs []string

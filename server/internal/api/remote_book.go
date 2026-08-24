@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -40,6 +41,9 @@ func (s *Server) postRemoteBook(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, remotebook.ErrBusy):
 		w.Header().Set("Retry-After", "2")
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": remotebook.ErrBusy.Error()})
+		return
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		writeJSON(w, http.StatusRequestTimeout, map[string]string{"error": "запрос отменён"})
 		return
 	case err != nil:
 		s.log.Warn("книга по ссылке не загрузилась", "error", err)

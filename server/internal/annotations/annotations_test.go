@@ -246,12 +246,12 @@ func TestNormalizeAcceptsAndTrims(t *testing.T) {
 
 func TestNormalizeRejectsBrokenItems(t *testing.T) {
 	cases := map[string][]Item{
-		"без номера":         {{Chapter: 0, Start: 0, End: 0, Rev: 1, Writer: "w", CreatedAt: 1, UpdatedAt: 1}},
+		"без номера":          {{Chapter: 0, Start: 0, End: 0, Rev: 1, Writer: "w", CreatedAt: 1, UpdatedAt: 1}},
 		"отрицательная глава": {{ID: "a", Chapter: -1, Start: 0, End: 0, Rev: 1, Writer: "w", CreatedAt: 1, UpdatedAt: 1}},
 		"конец раньше начала": {{ID: "a", Chapter: 0, Start: 5, End: 2, Rev: 1, Writer: "w", CreatedAt: 1, UpdatedAt: 1}},
-		"чужая краска":       {{ID: "a", Chapter: 0, Start: 0, End: 0, Tone: tone(MaxTone + 1), Rev: 1, Writer: "w", CreatedAt: 1, UpdatedAt: 1}},
-		"без версии":         {{ID: "a", Chapter: 0, Start: 0, End: 0, Writer: "w", CreatedAt: 1, UpdatedAt: 1}},
-		"без писателя":       {{ID: "a", Chapter: 0, Start: 0, End: 0, Rev: 1, CreatedAt: 1, UpdatedAt: 1}},
+		"чужая краска":        {{ID: "a", Chapter: 0, Start: 0, End: 0, Tone: tone(MaxTone + 1), Rev: 1, Writer: "w", CreatedAt: 1, UpdatedAt: 1}},
+		"без версии":          {{ID: "a", Chapter: 0, Start: 0, End: 0, Writer: "w", CreatedAt: 1, UpdatedAt: 1}},
+		"без писателя":        {{ID: "a", Chapter: 0, Start: 0, End: 0, Rev: 1, CreatedAt: 1, UpdatedAt: 1}},
 	}
 	for name, items := range cases {
 		if _, err := Normalize(items); err == nil {
@@ -279,8 +279,8 @@ func TestNormalizeRejectsUnfitIDs(t *testing.T) {
 		long[index] = 'a'
 	}
 	cases := map[string]string{
-		"пустой":         "",
-		"из пробелов":    "     ",
+		"пустой":          "",
+		"из пробелов":     "     ",
 		"слишком длинный": string(long),
 	}
 	for name, id := range cases {

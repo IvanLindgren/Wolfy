@@ -23,6 +23,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/wolfy/server/internal/gate"
 )
 
 var (
@@ -44,6 +46,7 @@ type Download struct {
 type Service struct {
 	http  *http.Client
 	slots chan struct{}
+	gate  *gate.Gate
 }
 
 // New создаёт клиент без системного HTTP-прокси: прокси мог бы разрешить
@@ -64,7 +67,15 @@ func New(timeout time.Duration) *Service {
 			}
 			return validateURL(request.URL)
 		},
-	}, slots: make(chan struct{}, 1)}
+	}, gate: gate.Download}
+}
+
+// NewWithGate — вариант для тестов с кастомным gate.
+func NewWithGate(timeout time.Duration, g *gate.Gate) *Service {
+	s := New(timeout)
+	s.gate = g
+	s.slots = nil
+	return s
 }
 
 // Fetch получает файл, ограничивает его ещё во время чтения и определяет
@@ -78,9 +89,21 @@ func (s *Service) Fetch(ctx context.Context, rawURL string) (Download, error) {
 	}
 	// systemd ограничивает Wolfy 192 МБ памяти. Один ответ может занимать до
 	// 64 МБ, поэтому rate limit сам по себе недостаточен: burst из нескольких
-	// параллельных загрузок выбил бы процесс по OOM. Тестовые Service без slots
-	// остаются без ограничения, production New всегда создаёт один слот.
-	if s.slots != nil {
+	// параллельных загрузок выбил бы процесс по OOM. Используем общий gate для
+	// загрузок книг (remotebook + discovery), чтобы одновременные 64 MiB не
+	// заняли память вдвоём. Тестовые Service без gate/slots остаются без
+	// ограничения, production New всегда использует gate.Download.
+	select {
+	case <-ctx.Done():
+		return Download{}, ctx.Err()
+	default:
+	}
+	if s.gate != nil {
+		if !s.gate.TryAcquire() {
+			return Download{}, ErrBusy
+		}
+		defer s.gate.Release()
+	} else if s.slots != nil {
 		select {
 		case s.slots <- struct{}{}:
 			defer func() { <-s.slots }()

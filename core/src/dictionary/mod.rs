@@ -28,6 +28,7 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::parser::Source;
+use crate::parser::limits;
 use crate::Result;
 
 /// Статья словаря.
@@ -106,6 +107,7 @@ impl Dictionary {
     }
 
     fn read(source: Source, length: u64) -> Result<Dictionary> {
+        limits::check_source_size(length)?;
         let mut dictionary = Dictionary {
             source,
             length,
@@ -182,11 +184,27 @@ impl Dictionary {
                 break;
             }
             if let Some(end) = chunk[..read].iter().position(|byte| *byte == b'\n') {
-                buffer.extend_from_slice(&chunk[..end]);
+                let end_slice = &chunk[..end];
+                if buffer.len() + end_slice.len() > limits::MAX_DICTIONARY_LINE_BYTES {
+                    return Err(limits::too_large_with_detail(&format!(
+                        "строка словаря превышает лимит {} байт",
+                        limits::MAX_DICTIONARY_LINE_BYTES
+                    )));
+                }
+                buffer.extend_from_slice(end_slice);
                 break;
+            }
+            if buffer.len() + read > limits::MAX_DICTIONARY_LINE_BYTES {
+                return Err(limits::too_large_with_detail(&format!(
+                    "строка словаря превышает лимит {} байт",
+                    limits::MAX_DICTIONARY_LINE_BYTES
+                )));
             }
             buffer.extend_from_slice(&chunk[..read]);
         }
+
+        // Дополнительная проверка на случай уже накопленного буфера.
+        limits::check_dictionary_line_len(buffer.len())?;
 
         // Битую строку не роняем ошибкой: словарь скачан по сети, и один
         // сбойный байт не повод отказать читателю в остальных семидесяти
@@ -408,5 +426,46 @@ zebra\tˈzibɹə\tn|a striped horse
     #[test]
     fn отсутствующий_файл_это_ошибка_а_не_паника() {
         assert!(Dictionary::open(Path::new("нет-такого-файла.tsv")).is_err());
+    }
+
+    #[test]
+    fn oversized_dictionary_line_rejected() {
+        let huge = "a".repeat(crate::parser::limits::MAX_DICTIONARY_LINE_BYTES + 1);
+        let line = format!("word\tpron\t{huge}\n");
+        // Словарь открывается, но чтение уже на этапе skip_header или lookup
+        // должно обнаружить слишком длинную строку. В текущей реализации
+        // защита срабатывает уже при open (через skip_header), что тоже
+        // считается контролируемой ошибкой «слишком велика», а не паникой/OOM.
+        let mut file = tempfile::NamedTempFile::new().expect("файл не создался");
+        use std::io::Write;
+        write!(
+            file,
+            "# wolfy english dictionary v1\n# generated\t2026-08-23\n{line}"
+        )
+        .expect("не записалось");
+        file.flush().expect("не сбросилось");
+        let open_result = Dictionary::open(file.path());
+        if let Ok(mut dictionary) = open_result {
+            let err = dictionary.lookup("word").expect_err("строка слишком длинна");
+            assert!(
+                err.describe().contains("слишком велика"),
+                "{}",
+                err.describe()
+            );
+        } else {
+            let err = open_result.expect_err("ожидалась ошибка лимита");
+            assert!(
+                err.describe().contains("слишком велика"),
+                "{}",
+                err.describe()
+            );
+        }
+    }
+
+    #[test]
+    fn dictionary_source_too_large_rejected() {
+        let large = vec![b'a'; crate::parser::limits::MAX_SOURCE_BYTES_USIZE + 1];
+        let err = Dictionary::from_bytes(large).expect_err("источник слишком велик");
+        assert!(err.describe().contains("слишком велика"), "{}", err.describe());
     }
 }

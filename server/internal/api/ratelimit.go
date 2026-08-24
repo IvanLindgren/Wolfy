@@ -49,13 +49,27 @@ func newRateLimiter(burst, refill float64, forget time.Duration) *rateLimiter {
 
 // allow говорит, пропускать ли очередной запрос с этого адреса.
 func (l *rateLimiter) allow(key string) bool {
+	return l.allowN(key, 1)
+}
+
+// allowN списывает cost токенов. Нужно для тарификации по размеру:
+// перевод «привет» и «десяток килобайт» не должны стоить одинаково.
+func (l *rateLimiter) allowN(key string, cost float64) bool {
+	if cost < 1 {
+		cost = 1
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	now := l.now()
 	b, known := l.buckets[key]
 	if !known {
-		l.buckets[key] = &bucket{left: l.burst - 1, seen: now}
+		if cost > l.burst {
+			l.buckets[key] = &bucket{left: 0, seen: now}
+			l.sweep(now)
+			return false
+		}
+		l.buckets[key] = &bucket{left: l.burst - cost, seen: now}
 		l.sweep(now)
 		return true
 	}
@@ -66,11 +80,27 @@ func (l *rateLimiter) allow(key string) bool {
 	}
 	b.seen = now
 
-	if b.left < 1 {
+	if b.left < cost {
 		return false
 	}
-	b.left--
+	b.left -= cost
 	return true
+}
+
+// translateCost грубо отражает платную стоимость запроса: короткий текст
+// стоит 1, большой — в несколько токенов, чтобы объём тарифицировался.
+func translateCost(text, contextText string) float64 {
+	total := len([]rune(text)) + len([]rune(contextText))
+	if total <= 400 {
+		return 1
+	}
+	// Каждые дополнительные ~400 символов — ещё один токен.
+	extra := float64(total-400) / 400.0
+	cost := 1 + extra
+	if cost > 8 {
+		cost = 8
+	}
+	return cost
 }
 
 // sweep выбрасывает адреса, которые давно молчат.

@@ -24,6 +24,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/wolfy/server/internal/gate"
 	"github.com/wolfy/server/internal/store"
 )
 
@@ -32,6 +33,7 @@ var (
 	ErrNotFound    = errors.New("материал не найден")
 	ErrTooLarge    = errors.New("файл книги слишком большой")
 	ErrInvalidBook = errors.New("Standard Ebooks вернул не EPUB")
+	ErrBusy        = errors.New("сервер уже загружает другую книгу; попробуйте ещё раз")
 )
 
 const (
@@ -83,6 +85,7 @@ type Service struct {
 	repository Repository
 	source     Source
 	http       *http.Client
+	gate       *gate.Gate
 }
 
 func New(repository Repository, source Source, timeout time.Duration) *Service {
@@ -90,7 +93,15 @@ func New(repository Repository, source Source, timeout time.Duration) *Service {
 		repository: repository,
 		source:     source,
 		http:       trustedHTTPClient(timeout),
+		gate:       gate.Download,
 	}
+}
+
+// NewWithGate — для тестов с кастомным gate.
+func NewWithGate(repository Repository, source Source, timeout time.Duration, g *gate.Gate) *Service {
+	s := New(repository, source, timeout)
+	s.gate = g
+	return s
 }
 
 func (s *Service) Profile(ctx context.Context, userID string) (store.DiscoveryProfile, error) {
@@ -151,7 +162,9 @@ func (s *Service) Like(ctx context.Context, userID, itemID string) error {
 }
 
 // DownloadAndAdd сначала получает файл, и лишь затем записывает добавление.
-// Неудачная загрузка не должна превращаться в успешный лайк.
+// Неудачная загрузка не должна превращаться в успешный лайк. Использует
+// общий gate.Download, чтобы не держать в памяти несколько 64 MiB книг
+// одновременно вместе с remotebook.
 func (s *Service) DownloadAndAdd(ctx context.Context, userID, itemID string) (Download, error) {
 	item, err := s.find(ctx, itemID)
 	if err != nil {
@@ -159,6 +172,17 @@ func (s *Service) DownloadAndAdd(ctx context.Context, userID, itemID string) (Do
 	}
 	if err := trustedDownload(item.DownloadURL); err != nil {
 		return Download{}, err
+	}
+	select {
+	case <-ctx.Done():
+		return Download{}, ctx.Err()
+	default:
+	}
+	if s.gate != nil {
+		if !s.gate.TryAcquire() {
+			return Download{}, ErrBusy
+		}
+		defer s.gate.Release()
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, item.DownloadURL, nil)
 	if err != nil {

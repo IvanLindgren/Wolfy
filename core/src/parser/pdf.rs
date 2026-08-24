@@ -13,9 +13,11 @@
 use std::path::Path;
 
 use crate::error::{CoreError, Result};
+use crate::parser::limits;
 use crate::parser::{Block, Book, Chapter, ChapterInfo, Metadata};
 
 /// Открытая книга PDF.
+#[derive(Debug)]
 pub struct PdfBook {
     metadata: Metadata,
     contents: Vec<ChapterInfo>,
@@ -38,6 +40,21 @@ impl PdfBook {
             ));
         }
 
+        limits::check_pdf_pages(pages.len())?;
+        let total_bytes: usize = pages.iter().map(|p| p.len()).sum();
+        limits::check_total_text_len(total_bytes)?;
+        // Повторно через PDF-специфичный алиас — та же граница, но
+        // отдельный лимит на случай разной настройки.
+        if total_bytes > limits::MAX_PDF_TOTAL_TEXT_BYTES {
+            return Err(limits::too_large_with_detail(&format!(
+                "PDF текст {total_bytes} байт превышает лимит {} байт",
+                limits::MAX_PDF_TOTAL_TEXT_BYTES
+            )));
+        }
+        for page in &pages {
+            limits::check_chapter_text_len(page.len())?;
+        }
+
         let chapters = split_pages(&pages);
         let contents = chapters
             .iter()
@@ -58,6 +75,10 @@ impl PdfBook {
 
     #[cfg(feature = "native")]
     pub fn open(path: &Path) -> Result<Self> {
+        // Предварительная проверка размера исходника до тяжёлой распаковки.
+        let metadata = std::fs::metadata(path)?;
+        limits::check_source_size(metadata.len())?;
+
         let pages = pdf_extract::extract_text_by_pages(path)
             .map_err(|e| CoreError::Malformed(format!("не удалось извлечь текст из PDF: {e}")))?;
 
@@ -68,6 +89,19 @@ impl PdfBook {
                 "в PDF нет текстового слоя — похоже, это скан: распознайте страницы через OCR"
                     .to_string(),
             ));
+        }
+
+        limits::check_pdf_pages(pages.len())?;
+        let total_bytes: usize = pages.iter().map(|p| p.len()).sum();
+        limits::check_total_text_len(total_bytes)?;
+        if total_bytes > limits::MAX_PDF_TOTAL_TEXT_BYTES {
+            return Err(limits::too_large_with_detail(&format!(
+                "PDF текст {total_bytes} байт превышает лимит {} байт",
+                limits::MAX_PDF_TOTAL_TEXT_BYTES
+            )));
+        }
+        for page in &pages {
+            limits::check_chapter_text_len(page.len())?;
         }
 
         let title = path
@@ -264,5 +298,53 @@ mod tests {
         assert_eq!(chapters.len(), 3);
         assert!(chapters[1].blocks.is_empty());
         assert_eq!(chapters[2].title.as_deref(), Some("Страница 3"));
+    }
+
+    #[test]
+    fn pdf_too_many_pages_rejected() {
+        let pages = vec!["a".to_string(); crate::parser::limits::MAX_PDF_PAGES + 1];
+        let err = PdfBook::from_pages(Some("Test".to_string()), pages)
+            .expect_err("слишком много страниц");
+        assert!(
+            err.describe().contains("слишком велика"),
+            "{}",
+            err.describe()
+        );
+    }
+
+    #[test]
+    fn pdf_total_text_too_large_rejected() {
+        // 2 страницы по 11 MiB каждая => 22 MiB > 20 MiB лимита.
+        let big = "a".repeat(11 * 1024 * 1024);
+        let pages = vec![big.clone(), big];
+        let err = PdfBook::from_pages(Some("Test".to_string()), pages)
+            .expect_err("общий текст слишком велик");
+        assert!(err.describe().contains("слишком велика"), "{}", err.describe());
+    }
+
+    #[test]
+    fn pdf_single_page_too_large_rejected() {
+        let huge = "a".repeat(crate::parser::limits::MAX_CHAPTER_TEXT_BYTES + 1);
+        let err = PdfBook::from_pages(Some("Test".to_string()), vec![huge])
+            .expect_err("страница слишком велика");
+        assert!(err.describe().contains("слишком велика"), "{}", err.describe());
+    }
+
+    #[test]
+    fn pdf_source_too_large_rejected_via_pages() {
+        // from_pages уже проверяет total text; для native пути проверяем source size
+        // через limits::check_source_size напрямую (эмулирует open).
+        let size = crate::parser::limits::MAX_SOURCE_BYTES + 1;
+        let err = crate::parser::limits::check_source_size(size).expect_err("источник слишком велик");
+        assert!(err.describe().contains("слишком велика"), "{}", err.describe());
+    }
+
+    #[test]
+    fn pdf_from_pages_error_message_matches_native() {
+        let pages = vec!["a".to_string(); crate::parser::limits::MAX_PDF_PAGES + 5];
+        let err = PdfBook::from_pages(None, pages).unwrap_err();
+        // Сообщение должно быть одинаковым на native и web: «слишком велика».
+        assert_eq!(err.describe().contains("слишком велика"), true);
+        assert!(err.describe().contains(crate::parser::limits::TOO_LARGE_MSG));
     }
 }

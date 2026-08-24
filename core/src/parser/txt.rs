@@ -9,9 +9,11 @@ use std::fs;
 use std::path::Path;
 
 use crate::error::Result;
+use crate::parser::limits;
 use crate::parser::{Block, Book, Chapter, ChapterInfo, Metadata};
 
 /// Книга из простого текста.
+#[derive(Debug)]
 pub struct TxtBook {
     metadata: Metadata,
     contents: Vec<ChapterInfo>,
@@ -22,22 +24,35 @@ pub struct TxtBook {
 
 impl TxtBook {
     pub fn open(path: &Path) -> Result<Self> {
+        let metadata = fs::metadata(path)?;
+        limits::check_txt_size(metadata.len())?;
         let bytes = fs::read(path)?;
+        // Повторная проверка на случай гонки между metadata и read.
+        limits::check_txt_size(bytes.len() as u64)?;
         let title = path
             .file_stem()
             .and_then(|s| s.to_str())
             .map(str::to_string);
-        Ok(TxtBook::from_bytes(&bytes, title))
+        Ok(TxtBook::from_bytes(&bytes, title)?)
     }
 
     /// Текст, лежащий в памяти: так книга приходит из браузера.
     ///
     /// Название здесь параметром, а не из имени файла: имени у байтов нет, а
     /// у того, кто их принёс, оно было.
-    pub fn from_bytes(bytes: &[u8], title: Option<String>) -> TxtBook {
+    pub fn from_bytes(bytes: &[u8], title: Option<String>) -> Result<Self> {
+        limits::check_txt_size(bytes.len() as u64)?;
         let text = decode(bytes);
+        limits::check_total_text_len(text.len())?;
 
         let chapters = split_chapters(&text);
+        // Проверяем итоговый объём после разбивки на главы — защита от
+        // гигантской книги, которая после нормализации всё равно огромна.
+        let total: usize = chapters.iter().map(|c| c.plain_text().len()).sum();
+        limits::check_total_text_len(total)?;
+        for chapter in &chapters {
+            limits::check_chapter_text_len(chapter.plain_text().len())?;
+        }
         let contents = chapters
             .iter()
             .map(|c| ChapterInfo {
@@ -45,14 +60,14 @@ impl TxtBook {
             })
             .collect();
 
-        TxtBook {
+        Ok(TxtBook {
             metadata: Metadata {
                 title,
                 ..Metadata::default()
             },
             contents,
             chapters,
-        }
+        })
     }
 }
 
@@ -318,5 +333,49 @@ mod tests {
         let path = книга("wolfy_txt_range.txt", b"One paragraph.\n");
         let mut book = TxtBook::open(&path).expect("книга открывается");
         assert!(book.chapter(99).is_err());
+    }
+
+    #[test]
+    fn oversized_txt_из_памяти_отвергается() {
+        let huge = vec![b'a'; crate::parser::limits::MAX_TXT_BYTES_USIZE + 1];
+        let err = TxtBook::from_bytes(&huge, None).expect_err("огромный TXT должен быть отвергнут");
+        assert!(
+            err.describe().contains("слишком велика"),
+            "ожидалось 'слишком велика', получили: {}",
+            err.describe()
+        );
+    }
+
+    #[test]
+    fn oversized_txt_файл_отвергается_без_unbounded_read() {
+        // Создаём разреженный файл нужного размера без записи 10 MiB нулей
+        // напрямую: set_len эффективно, не тратя память.
+        let path = std::env::temp_dir().join("wolfy_txt_oversized.txt");
+        let file = fs::File::create(&path).expect("файл");
+        file.set_len(crate::parser::limits::MAX_TXT_BYTES + 1)
+            .expect("расширить файл");
+        drop(file);
+        let err = TxtBook::open(&path).expect_err("файл слишком велик");
+        assert!(err.describe().contains("слишком велика"), "{}", err.describe());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn txt_ровно_на_границе_лимита_принимается() {
+        // Чуть меньше лимита главы (5 MiB) — должна открыться. TXT лимит шире,
+        // но глава ограничивает одиночный TXT без разбивки.
+        let size = crate::parser::limits::MAX_CHAPTER_TEXT_BYTES - 1024;
+        let data = vec![b'a'; size];
+        let book = TxtBook::from_bytes(&data, None).expect("граничный размер должен приниматься");
+        assert_eq!(book.contents().len(), 1);
+    }
+
+    #[test]
+    fn txt_total_text_limit_rejected() {
+        // Генерируем текст, который после декодирования превысит MAX_TOTAL_TEXT_BYTES.
+        // Чтобы не аллоцировать 20 MiB одним куском, склеим 2 куска.
+        let big = "a".repeat(crate::parser::limits::MAX_TOTAL_TEXT_BYTES + 1);
+        let err = TxtBook::from_bytes(big.as_bytes(), None).expect_err("общий текст слишком велик");
+        assert!(err.describe().contains("слишком велика"), "{}", err.describe());
     }
 }

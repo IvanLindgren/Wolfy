@@ -10,6 +10,7 @@
 //! Читалке всё равно, откуда пришёл абзац; ей важно, абзац это, заголовок или
 //! цитата, потому что рисуются они по-разному.
 
+pub mod limits;
 mod epub;
 mod pdf;
 mod txt;
@@ -40,6 +41,23 @@ impl Source {
 
     pub fn bytes(bytes: Vec<u8>) -> Source {
         Source::Memory(Cursor::new(bytes))
+    }
+
+    /// Размер источника, если его можно узнать без чтения.
+    ///
+    /// Для файла — метаданные, для памяти — длина буфера. Используется
+    /// для предварительной проверки `MAX_SOURCE_BYTES` до любых аллокаций.
+    pub fn size(&self) -> Result<u64> {
+        match self {
+            Source::File(file) => Ok(file.metadata()?.len()),
+            Source::Memory(cursor) => Ok(cursor.get_ref().len() as u64),
+        }
+    }
+
+    /// Проверяет, что источник укладывается в `MAX_SOURCE_BYTES`.
+    pub fn check_size(&self) -> Result<()> {
+        let size = self.size()?;
+        crate::parser::limits::check_source_size(size)
     }
 }
 
@@ -194,9 +212,12 @@ pub fn open(path: &Path) -> Result<Box<dyn Book>> {
 /// нет: браузер отдаёт содержимое, а не путь. По той же причине сюда же
 /// приходит название — из имени файла его достаёт тот, кто это имя видел.
 pub fn open_bytes(extension: &str, title: Option<String>, bytes: Vec<u8>) -> Result<Box<dyn Book>> {
+    // Общая проверка размера источника до разбора конкретного формата:
+    // та же, что для файла на диске, но для буфера в памяти (браузер).
+    crate::parser::limits::check_source_size(bytes.len() as u64)?;
     match extension.to_lowercase().as_str() {
         "epub" => Ok(Box::new(epub::EpubBook::from_bytes(bytes)?)),
-        "txt" => Ok(Box::new(txt::TxtBook::from_bytes(&bytes, title))),
+        "txt" => Ok(Box::new(txt::TxtBook::from_bytes(&bytes, title)?)),
         "pdf" => Err(CoreError::Malformed(
             "текст PDF извлекается на стороне клиента и подаётся страницами".to_string(),
         )),
