@@ -14,6 +14,7 @@ import { toast } from '../app/toasts'
 import { session, useSession } from '../core/session'
 import { dueDay, now } from '../core/clock'
 import type { Card } from '../core/types'
+import { SearchField } from '../widgets/SearchField'
 import { Appear } from '../widgets/Appear'
 import { Button, buttonClassName } from '../widgets/Button'
 import { TrashIcon } from '../widgets/icons'
@@ -141,16 +142,14 @@ export function BookWordsScreen() {
                 {item.title}
               </button>
             ))}
-            <input
-              className={page.input}
-              style={{ maxWidth: '14rem', marginLeft: 'auto' }}
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Поиск"
-              aria-label="Поиск по словарю книги"
-              type="search"
-            />
           </div>
+
+          <SearchField
+            value={query}
+            onChange={setQuery}
+            label="Поиск по словарю книги"
+            placeholder="Слово, перевод или контекст"
+          />
 
           <div className={styles.words}>
             {shown.map((card, index) => (

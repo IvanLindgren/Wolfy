@@ -4,6 +4,7 @@ import { Link } from '@tanstack/react-router'
 import { dueDay, now } from '../core/clock'
 import { useSession } from '../core/session'
 import type { Card } from '../core/types'
+import { SearchField } from '../widgets/SearchField'
 import { Appear } from '../widgets/Appear'
 import { buttonClassName } from '../widgets/Button'
 import page from '../widgets/Page.module.css'
@@ -101,15 +102,14 @@ export function AllWordsScreen() {
                 <option key={book.id} value={book.id}>{book.title}</option>
               ))}
             </select>
-            <input
-              className={page.input}
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Слово, перевод или контекст"
-              aria-label="Поиск по всем словам"
-              type="search"
-            />
           </div>
+
+          <SearchField
+            value={query}
+            onChange={setQuery}
+            label="Поиск по всем словам"
+            placeholder="Слово, перевод или контекст"
+          />
 
           <div className={styles.grid}>
             {shown.map((card, index) => (

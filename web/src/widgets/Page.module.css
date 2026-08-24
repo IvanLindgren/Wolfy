@@ -150,6 +150,73 @@
   border-color: var(--ink-muted);
 }
 
+/*
+ * Поле поиска: строка, а не кнопка.
+ *
+ * Нативные украшения `type="search"` сняты нарочно — браузер рисует поверх
+ * поля свой крестик и свою подсветку, и это чужой системный виджет посреди
+ * набранной страницы. Крестик здесь свой, в `SearchField`.
+ *
+ * Системное кольцо фокуса на самом поле заменено линейкой, которая темнеет и
+ * удваивается: убрать кольцо, не дав взамен ничего, значит оставить без
+ * ориентира того, кто ходит по странице с клавиатуры.
+ */
+.search {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  max-width: 22rem;
+  padding: 0.3rem 0.15rem 0.32rem;
+  border-bottom: 1px solid var(--rule);
+  color: var(--ink-muted);
+  transition: border-color var(--quick, 180ms) ease, box-shadow var(--quick, 180ms) ease;
+}
+
+.search:focus-within {
+  border-bottom-color: var(--ink);
+  box-shadow: 0 1px 0 var(--ink);
+}
+
+.search__input {
+  flex: 1;
+  min-width: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  padding: 0;
+  border: none;
+  outline: none;
+  background: none;
+  color: var(--ink);
+  font-size: 0.9375rem;
+}
+
+.search__input::placeholder {
+  color: var(--ink-muted);
+}
+
+.search__input::-webkit-search-cancel-button,
+.search__input::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
+
+.search__clear {
+  display: grid;
+  place-items: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 999px;
+  color: var(--ink-muted);
+  transition: background var(--quick, 180ms) ease, color var(--quick, 180ms) ease;
+}
+
+.search__clear:hover {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+
 .row {
   display: flex;
   align-items: center;
