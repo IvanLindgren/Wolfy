@@ -282,8 +282,12 @@ class LibraryViewModel(
         return bitmap
     }
 
-    /** Ставит книге обложку из галереи. */
-    fun setCover(bookId: String, picked: PickedCover) {
+    /** Ставит книге обложку из галереи. `null` — картинка не подошла. */
+    fun setCover(bookId: String, picked: PickedCover?) {
+        if (picked == null) {
+            message.value = "Картинка не подошла: нужен файл png, jpg или webp до 24 МБ."
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
             runCatching { store.writeCover(bookId, picked.extension, picked.bytes) }
                 .onSuccess {

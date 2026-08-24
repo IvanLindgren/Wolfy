@@ -61,6 +61,7 @@ jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
 
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidxActivity" }
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "androidxCore" }
+androidx-exifinterface = { module = "androidx.exifinterface:exifinterface", version = "1.4.1" }
 play-app-update = { module = "com.google.android.play:app-update", version.ref = "playAppUpdate" }
 
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
