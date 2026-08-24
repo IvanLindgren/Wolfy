@@ -24,8 +24,10 @@ import (
 	"github.com/wolfy/server/internal/discovery"
 	"github.com/wolfy/server/internal/library"
 	"github.com/wolfy/server/internal/ocr"
+	"github.com/wolfy/server/internal/social"
 	"github.com/wolfy/server/internal/store"
 	"github.com/wolfy/server/internal/translate"
+	"github.com/wolfy/server/internal/updates"
 )
 
 func main() {
@@ -69,7 +71,22 @@ func run() error {
 		cfg.CitavukRegisterURL,
 		cfg.CitavukResendURL,
 		cfg.RequestTimeout,
+	).WithSocial(
+		cfg.CitavukGoogleURL,
+		cfg.CitavukYandexStartURL,
+		cfg.CitavukYandexCompleteURL,
 	)
+	googleAuth := social.NewGoogle(
+		accountService,
+		cfg.GoogleClientID,
+		cfg.GoogleClientSecret,
+		cfg.GoogleCallbackURL,
+		cfg.OAuthStateSecret,
+		cfg.RequestTimeout,
+	).WithWebOrigin(cfg.WebOrigin)
+	if !googleAuth.Configured() {
+		log.Warn("Google OAuth не настроен — кнопка Google будет скрыта")
+	}
 	discoveryService := discovery.New(
 		db,
 		discovery.NewAtomSource(
@@ -97,10 +114,12 @@ func run() error {
 			library.New(db),
 			ocr.New(cfg.OCRKey, cfg.OCRURL, cfg.OCRModel, cfg.RequestTimeout),
 			accountService,
+			googleAuth,
 			discoveryService,
 			dictionaryService,
+			updates.New(cfg.ReleasesPath),
 			log,
-		).Handler(),
+		).WithWebOrigin(cfg.WebOrigin).Handler(),
 		// Таймауты обязательны: без них одно зависшее соединение держит
 		// горутину и файловый дескриптор до перезапуска сервиса.
 		ReadHeaderTimeout: 10 * time.Second,

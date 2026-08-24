@@ -9,6 +9,7 @@ core/target/
 
 # Go
 server/bin/
+server/build/
 server/wolfy-server
 server/wolfy-server.exe
 
@@ -28,6 +29,18 @@ client/.kotlin/
 # устаревают с каждой правкой ядра.
 client/shared/src/androidMain/jniLibs/
 client/desktopApp/*.dll
+
+# Веб
+web/node_modules/
+web/dist/
+web/dev-dist/
+web/playwright-report/
+web/test-results/
+# Ядро под браузер и лексикон рядом с ним: их кладёт tools/build_wasm.sh.
+# Полтора мегабайта бинарника плюс лексикон, устаревающие с каждой правкой
+# ядра, — ровно то, чему в репозитории не место.
+web/src/core/pkg/
+web/public/lexicon/
 
 # IDE
 .idea/

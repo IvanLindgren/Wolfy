@@ -12,6 +12,11 @@ plugins {
 }
 
 val dictionaryAssets = layout.buildDirectory.dir("generated/dictionaryAssets")
+val wolfyServerUrl = providers.gradleProperty("wolfyServerUrl")
+    .orElse(providers.environmentVariable("WOLFY_SERVER_URL"))
+    // Адрес эмулятора до сервера на машине разработчика. Для настоящего APK
+    // production-адрес обязательно задаётся свойством или окружением.
+    .orElse("http://10.0.2.2:8080")
 val prepareBundledDictionary by tasks.registering(Sync::class) {
     description = "Кладёт офлайн-словарь в APK"
     from(rootProject.layout.projectDirectory.file("../dist/wolfy_dictionary.tsv.gz")) {
@@ -28,12 +33,18 @@ android {
     namespace = "com.wolfy.android"
     compileSdk = libs.versions.androidCompileSdk.get().toInt()
 
+    buildFeatures {
+        // Один источник версии для манифеста и фоновой проверки обновлений.
+        buildConfig = true
+    }
+
     defaultConfig {
         applicationId = "com.wolfy.reader"
         minSdk = libs.versions.androidMinSdk.get().toInt()
         targetSdk = libs.versions.androidTargetSdk.get().toInt()
-        versionCode = 3
-        versionName = "0.1.2"
+        versionCode = 6
+        versionName = "0.1.5"
+        buildConfigField("String", "WOLFY_SERVER_URL", "\"${wolfyServerUrl.get()}\"")
     }
 
     buildTypes {

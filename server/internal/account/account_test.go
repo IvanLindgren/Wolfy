@@ -72,3 +72,28 @@ func TestUnconfiguredIsNotTheSameAsUnavailable(t *testing.T) {
 		t.Fatalf("ожидалась ErrNotConfigured, получено %v", err)
 	}
 }
+
+func TestSocialEndpointsStayWithCitavuk(t *testing.T) {
+	var visited string
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		visited = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"token":"ctv_social"}`))
+	}))
+	defer upstream.Close()
+
+	service := New("https://example.invalid/login", "", "", time.Second).
+		WithSocial(upstream.URL+"/google", upstream.URL+"/yandex/start", upstream.URL+"/yandex/complete")
+	service.client = upstream.Client()
+	if !service.CanGoogle() || !service.CanYandex() {
+		t.Fatal("настроенные социальные способы скрыты")
+	}
+	result, err := service.Google(context.Background(), []byte(`{"idToken":"id"}`))
+	if err != nil || visited != "/google" || result.Status != http.StatusOK {
+		t.Fatalf("Google не прошёл через Читавук: %q %d %v", visited, result.Status, err)
+	}
+	_, err = service.YandexStart(context.Background(), []byte(`{"returnTarget":"desktop"}`))
+	if err != nil || visited != "/yandex/start" {
+		t.Fatalf("Yandex start ушёл не туда: %q %v", visited, err)
+	}
+}

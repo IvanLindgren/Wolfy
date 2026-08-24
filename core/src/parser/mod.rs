@@ -14,9 +14,52 @@ mod epub;
 mod pdf;
 mod txt;
 
+use std::fs::File;
+use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::path::Path;
 
 use crate::error::{CoreError, Result};
+
+/// Откуда парсер читает байты книги.
+///
+/// Двух реализаций трейта не заводим, а держим одно перечисление: `ZipArchive`
+/// параметризуется читателем, и обобщение по нему протащило бы параметр типа
+/// через `EpubBook`, `Book` и весь `ffi/`. Вариантов ровно два и больше не
+/// будет — файл на диске у настольного клиента и буфер в памяти у браузера,
+/// где файловой системы нет вовсе.
+#[derive(Debug)]
+pub enum Source {
+    File(File),
+    Memory(Cursor<Vec<u8>>),
+}
+
+impl Source {
+    pub fn open(path: &Path) -> Result<Source> {
+        Ok(Source::File(File::open(path)?))
+    }
+
+    pub fn bytes(bytes: Vec<u8>) -> Source {
+        Source::Memory(Cursor::new(bytes))
+    }
+}
+
+impl Read for Source {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Source::File(file) => file.read(buffer),
+            Source::Memory(cursor) => cursor.read(buffer),
+        }
+    }
+}
+
+impl Seek for Source {
+    fn seek(&mut self, to: SeekFrom) -> std::io::Result<u64> {
+        match self {
+            Source::File(file) => file.seek(to),
+            Source::Memory(cursor) => cursor.seek(to),
+        }
+    }
+}
 
 /// Кусок книги, который читалка рисует как единое целое.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -126,7 +169,16 @@ pub fn open(path: &Path) -> Result<Box<dyn Book>> {
     match extension.as_str() {
         "epub" => Ok(Box::new(epub::EpubBook::open(path)?)),
         "txt" => Ok(Box::new(txt::TxtBook::open(path)?)),
+        #[cfg(feature = "native")]
         "pdf" => Ok(Box::new(pdf::PdfBook::open(path)?)),
+        // Извлечение текста из PDF не собирается под wasm. Браузер достаёт
+        // текст сам (pdf.js) и подаёт его страницами в [`from_pages`]:
+        // страница остаётся единицей навигации, включая пустые, иначе номера
+        // и оглавление уедут после первой же иллюстрации.
+        #[cfg(not(feature = "native"))]
+        "pdf" => Err(CoreError::Malformed(
+            "текст PDF извлекается на стороне клиента".to_string(),
+        )),
         "" => Err(CoreError::Malformed(
             "у файла нет расширения — формат не определить".to_string(),
         )),
@@ -134,6 +186,33 @@ pub fn open(path: &Path) -> Result<Box<dyn Book>> {
             "формат «{other}» пока не поддерживается"
         ))),
     }
+}
+
+/// Открывает книгу, лежащую в памяти.
+///
+/// Расширение приходит отдельным аргументом, потому что имени файла у байтов
+/// нет: браузер отдаёт содержимое, а не путь. По той же причине сюда же
+/// приходит название — из имени файла его достаёт тот, кто это имя видел.
+pub fn open_bytes(extension: &str, title: Option<String>, bytes: Vec<u8>) -> Result<Box<dyn Book>> {
+    match extension.to_lowercase().as_str() {
+        "epub" => Ok(Box::new(epub::EpubBook::from_bytes(bytes)?)),
+        "txt" => Ok(Box::new(txt::TxtBook::from_bytes(&bytes, title))),
+        "pdf" => Err(CoreError::Malformed(
+            "текст PDF извлекается на стороне клиента и подаётся страницами".to_string(),
+        )),
+        other => Err(CoreError::Malformed(format!(
+            "формат «{other}» пока не поддерживается"
+        ))),
+    }
+}
+
+/// Собирает книгу из уже извлечённых страниц.
+///
+/// Так приезжает PDF из браузера и распознанная по фото бумажная страница.
+/// Пустые страницы сохраняются: одна физическая страница — одна единица
+/// навигации, и выброшенная иллюстрация сдвинула бы все номера после себя.
+pub fn from_pages(title: Option<String>, pages: Vec<String>) -> Result<Box<dyn Book>> {
+    Ok(Box::new(pdf::PdfBook::from_pages(title, pages)?))
 }
 
 #[cfg(test)]

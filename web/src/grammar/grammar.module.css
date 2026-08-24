@@ -1,0 +1,19 @@
+.catalog { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: 1rem; }
+.topic { border: 1px solid var(--rule); border-radius: var(--radius-lg); background: var(--surface); padding: 1rem; }
+.topicTitle { font-size: 1.25rem; margin-bottom: .75rem; }
+.articleLink { display: block; padding: .65rem 0; border-top: 1px solid var(--rule); text-decoration: none; }
+.articleLink:first-of-type { border-top: 0; }
+.articleLink span { display: block; color: var(--ink-muted); font-size: .78rem; font-family: var(--mono); margin-top: .15rem; }
+.article { max-width: 48rem; }
+.formula { padding: .8rem 1rem; background: var(--inverse); color: var(--on-inverse); border-radius: var(--radius); font-family: var(--mono); margin: 1rem 0; }
+.prose { font-family: var(--serif), 'Playfair Fallback'; font-size: 1.08rem; line-height: 1.7; }
+.example { margin: 1.2rem 0; padding: 1rem 1.1rem; border-left: 3px solid var(--accent); background: var(--surface); }
+.example strong, .example span { display: block; }
+.example span { color: var(--ink-muted); margin-top: .35rem; }
+.exercise { margin-top: 2rem; padding: 1.1rem; border: 1px solid var(--rule); border-radius: var(--radius-lg); background: var(--surface); }
+.question { font-family: var(--serif), 'Playfair Fallback'; font-size: 1.2rem; margin: .6rem 0 1rem; }
+.options { display: grid; gap: .45rem; }
+.option { padding: .65rem .8rem; border: 1px solid var(--rule); border-radius: var(--radius); text-align: left; background: var(--paper); }
+.option[data-state='right'] { border-color: var(--pos-adj); background: color-mix(in srgb, var(--pos-adj) 12%, transparent); }
+.option[data-state='wrong'] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.filter { min-width: min(20rem, 100%); }

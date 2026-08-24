@@ -11,7 +11,7 @@
 
 use serde::Serialize;
 
-use crate::grammar::{Article, Exercise, Finding};
+use crate::grammar::{Article, Chunk, Exercise, Finding, Marker, MarkerKind, Role};
 use crate::lexicon::{Fact, PosSet, WordAnalysis};
 use crate::parser::{Block, Chapter, ChapterInfo, Metadata};
 use crate::tokenizer::{Sentence, Token, TokenKind};
@@ -171,6 +171,68 @@ impl From<&Finding> for FindingDto {
 #[serde(rename_all = "camelCase")]
 pub struct GrammarDto {
     pub findings: Vec<FindingDto>,
+    pub chunks: Vec<ChunkDto>,
+    pub markers: Vec<MarkerDto>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChunkDto {
+    pub role: &'static str,
+    pub title: &'static str,
+    pub tint: &'static str,
+    pub start: usize,
+    pub end: usize,
+    pub head: usize,
+}
+
+impl From<&Chunk> for ChunkDto {
+    fn from(chunk: &Chunk) -> Self {
+        ChunkDto {
+            role: match chunk.role {
+                Role::Subject => "subject",
+                Role::Predicate => "predicate",
+                Role::Object => "object",
+                Role::Complement => "complement",
+                Role::Adverbial => "adverbial",
+                Role::Connector => "connector",
+            },
+            title: chunk.role.title(),
+            tint: chunk.role.tint().tag(),
+            start: chunk.tokens.start,
+            end: chunk.tokens.end,
+            head: chunk.head,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarkerDto {
+    pub token: usize,
+    pub from: usize,
+    pub to: usize,
+    pub kind: &'static str,
+    pub rule: &'static str,
+    pub note: &'static str,
+}
+
+impl From<&Marker> for MarkerDto {
+    fn from(marker: &Marker) -> Self {
+        MarkerDto {
+            token: marker.token,
+            from: marker.inside.start,
+            to: marker.inside.end,
+            kind: match marker.kind {
+                MarkerKind::Auxiliary => "auxiliary",
+                MarkerKind::Ending => "ending",
+                MarkerKind::Particle => "particle",
+                MarkerKind::Preposition => "preposition",
+            },
+            rule: marker.rule,
+            note: marker.note,
+        }
+    }
 }
 
 /// Статья справочника.

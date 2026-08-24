@@ -53,6 +53,22 @@ impl Pos {
         }
     }
 
+    /// Имя universal tagset для внешнего контракта и цветовой схемы клиента.
+    pub fn tag(self) -> &'static str {
+        match self {
+            Pos::Noun => "NOUN",
+            Pos::Verb => "VERB",
+            Pos::Adjective => "ADJ",
+            Pos::Adverb => "ADV",
+            Pos::Pronoun => "PRON",
+            Pos::Determiner => "DET",
+            Pos::Preposition => "ADP",
+            Pos::Conjunction => "CONJ",
+            Pos::Particle => "PRT",
+            Pos::Numeral => "NUM",
+        }
+    }
+
     /// Название для интерфейса. Русское, потому что интерфейс русский, а
     /// разбор читают глазами, а не парсером.
     pub fn label(self) -> &'static str {

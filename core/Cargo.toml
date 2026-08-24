@@ -12,14 +12,34 @@ publish = false
 # Windows — .dll. Обе формы собираются из одного кода.
 crate-type = ["rlib", "cdylib"]
 
+[features]
+# Что умеет сборка под настоящую операционную систему: своё извлечение текста
+# из PDF и лексикон внутри библиотеки. Обе вещи в браузере не работают —
+# `pdf-extract` не собирается под `wasm32-unknown-unknown`, а лишний мегабайт
+# внутри `.wasm` задержал бы первую букву текста, — поэтому они не часть
+# ядра, а часть платформы.
+default = ["native"]
+native = ["dep:pdf-extract", "embedded-lexicon"]
+# Лексикон едет внутри библиотеки через `include_str!`. Веб забирает тот же
+# файл отдельным запросом и кладёт его в `Lexicon::install`.
+embedded-lexicon = []
+# Вторая дверь в то же ядро: `wasm-bindgen` вместо C-FFI.
+wasm = ["dep:wasm-bindgen", "dep:console_error_panic_hook"]
+
 [dependencies]
 encoding_rs = "0.8"
-pdf-extract = "0.12"
+pdf-extract = { version = "0.12", optional = true }
 quick-xml = "0.41"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 zip = { version = "8", default-features = false, features = ["deflate"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { version = "0.2.127", optional = true }
+# В wasm стек не разматывается, и `catch_unwind` ловить нечего. Паника ядра
+# обязана хотя бы называться в консоли, а не оставлять `unreachable`.
+console_error_panic_hook = { version = "0.1", optional = true }
 
 [profile.release]
 # Разбор слова обязан укладываться в 15 мс на среднем телефоне, поэтому

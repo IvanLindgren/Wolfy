@@ -23,6 +23,7 @@ jna = "5.19.1"
 androidxActivity = "1.12.0"
 # Ядро AndroidX: нужно ради FileProvider — камере снимок передаётся ссылкой.
 androidxCore = "1.17.0"
+playAppUpdate = "2.1.0"
 # Минимальная версия Android. 26 (Oreo) выбрана потому, что ниже нет
 # поддержки шрифтовых фич, на которых держится газетный набор, а доля
 # устройств старше — доли процента.
@@ -60,6 +61,7 @@ jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
 
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidxActivity" }
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "androidxCore" }
+play-app-update = { module = "com.google.android.play:app-update", version.ref = "playAppUpdate" }
 
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
 kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }

@@ -1,0 +1,162 @@
+/*
+ * Основание набора: сброс, типографика, фокус.
+ *
+ * Продукт — это набор текста, поэтому здесь описан не «reset», а осознанный
+ * газетный набор: антиква для книги и заголовков, гротеск для интерфейса,
+ * колонка ограниченной ширины, тонкие акцентные линейки.
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400..900;1,400..700&family=Inter:wght@400;500;600;700&display=optional');
+
+/*
+ * Запасные шрифты с подогнанной метрикой.
+ *
+ * `font-display: swap` не годится: подмена антиквы на системный гротеск в
+ * середине абзаца — это скачок всей колонки на две строки вниз. `size-adjust`
+ * подгоняет метрику запасного шрифта под основной, и подмена не двигает
+ * строки; вместе с `font-display: optional` это значит, что либо шрифт успел,
+ * либо страница верстается запасным и уже не дёргается.
+ */
+@font-face {
+  font-family: 'Playfair Fallback';
+  src: local('Georgia'), local('Times New Roman'), local('serif');
+  size-adjust: 111%;
+  ascent-override: 92%;
+  descent-override: 22%;
+  line-gap-override: 0%;
+}
+
+@font-face {
+  font-family: 'Inter Fallback';
+  src: local('Segoe UI'), local('Helvetica Neue'), local('Arial'), local('sans-serif');
+  size-adjust: 107%;
+  ascent-override: 90%;
+  descent-override: 22%;
+  line-gap-override: 0%;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  /* Прокрутка к якорю не должна прыгать; читалка своё поведение задаёт сама. */
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans), 'Inter Fallback';
+  font-size: 1rem;
+  line-height: 1.5;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior-y: none;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--serif), 'Playfair Fallback';
+  font-weight: 700;
+  /* Плотный оптический кернинг: слова должны выглядеть монолитными. */
+  font-kerning: normal;
+  font-variant-ligatures: common-ligatures;
+  letter-spacing: -0.01em;
+  margin: 0;
+  text-wrap: balance;
+}
+
+p {
+  margin: 0;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+a {
+  color: inherit;
+}
+
+ul,
+ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+img,
+svg {
+  display: block;
+  max-width: 100%;
+}
+
+/*
+ * Видимый фокус — обязательное требование доступности. Не `outline: none` под
+ * предлогом красоты: читатель без мыши обязан видеть, где он находится.
+ */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+::selection {
+  background: var(--highlight);
+  color: var(--ink);
+}
+
+/* Только для программ чтения с экрана. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/*
+ * «Меньше движения» и системная настройка сводят весь объект движения к нулям
+ * — и здесь тоже, потому что часть анимаций живёт в CSS. Ни один экран не
+ * знает об этой настройке отдельно: иначе про неё забудут в двадцатом по
+ * счёту виджете.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+:root[data-motion='none'] *,
+:root[data-motion='none'] *::before,
+:root[data-motion='none'] *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+}

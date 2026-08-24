@@ -1,0 +1,85 @@
+/*
+ * Кнопки. Свои, а не из набора компонентов.
+ *
+ * Продукт — это набор текста, и чужие кнопки приводят за собой чужую
+ * типографику: свою высоту строки, свои отступы под чужой гротеск, свои
+ * скругления. Здесь их четыре вида, и все они описываются двумя десятками
+ * строк — дешевле, чем переопределять чужие.
+ */
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  padding: 0.55rem 1.05rem;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  line-height: 1.3;
+  white-space: nowrap;
+  /* Деликатное масштабирование до 0,97 — отклик на нажатие, а не эффект. */
+  transition:
+    transform var(--instant, 90ms) ease,
+    background var(--quick, 180ms) ease,
+    border-color var(--quick, 180ms) ease,
+    color var(--quick, 180ms) ease;
+}
+
+.button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.primary {
+  background: var(--inverse);
+  color: var(--on-inverse);
+}
+
+.primary:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.secondary {
+  background: var(--surface);
+  color: var(--ink);
+  border-color: var(--rule);
+}
+
+.secondary:hover:not(:disabled) {
+  border-color: var(--ink-muted);
+}
+
+.quiet {
+  color: var(--ink-muted);
+  padding-inline: 0.6rem;
+}
+
+.quiet:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--surface-sunken);
+}
+
+.danger {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.wide {
+  width: 100%;
+}
+
+.small {
+  padding: 0.32rem 0.7rem;
+  font-size: 0.8125rem;
+}

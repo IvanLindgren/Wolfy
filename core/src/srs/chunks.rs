@@ -2,6 +2,7 @@
 
 use crate::grammar::Finding;
 use crate::tokenizer::Token;
+use std::ops::Range;
 
 /// Сколько блоков — предел для конструктора.
 ///
@@ -52,12 +53,8 @@ const GLUE: [&str; 37] = [
 ///   можно тапнуть, то есть слова.
 /// * `findings` — грамматические разборы этого же предложения: их границы и
 ///   есть границы сказуемых.
-pub fn split(tokens: &[Token], findings: &[Finding]) -> Vec<String> {
-    let words: Vec<(usize, &Token)> = tokens
-        .iter()
-        .enumerate()
-        .filter(|(_, token)| token.is_tappable())
-        .collect();
+pub fn blocks(tokens: &[Token], findings: &[Finding]) -> Vec<Range<usize>> {
+    let words: Vec<&Token> = tokens.iter().filter(|token| token.is_tappable()).collect();
     if words.is_empty() {
         return Vec::new();
     }
@@ -70,43 +67,61 @@ pub fn split(tokens: &[Token], findings: &[Finding]) -> Vec<String> {
             let span = finding.words.end.saturating_sub(finding.words.start);
             (1..=MAX_CHAIN).contains(&span)
         })
-        .map(|finding| &finding.tokens)
+        .map(|finding| &finding.words)
         .collect();
 
-    let mut blocks: Vec<Vec<&str>> = Vec::new();
+    let mut result: Vec<Range<usize>> = Vec::new();
     let mut glue_next = false;
 
-    for (index, token) in words {
+    for (index, token) in words.iter().enumerate() {
         let chain = glued.iter().find(|range| range.contains(&index));
         let text = token.text.as_str();
 
         match chain {
             // Середина цепочки — приклеивается к её началу.
-            Some(range) if index > range.start && !blocks.is_empty() => {
-                if let Some(block) = blocks.last_mut() {
-                    block.push(text);
+            Some(range) if index > range.start && !result.is_empty() => {
+                if let Some(block) = result.last_mut() {
+                    block.end = index + 1;
                 }
             }
             // Начало цепочки: открывает блок и обрывает склейку служебным.
             Some(_) => {
-                blocks.push(vec![text]);
+                result.push(index..index + 1);
                 glue_next = false;
             }
             // Предыдущее слово было служебным и ждёт продолжения.
-            None if glue_next && !blocks.is_empty() => {
-                if let Some(block) = blocks.last_mut() {
-                    block.push(text);
+            None if glue_next && !result.is_empty() => {
+                if let Some(block) = result.last_mut() {
+                    block.end = index + 1;
                 }
                 glue_next = is_glue(text);
             }
             None => {
-                blocks.push(vec![text]);
+                result.push(index..index + 1);
                 glue_next = is_glue(text);
             }
         }
     }
 
-    blocks.iter().map(|block| block.join(" ")).collect()
+    result
+}
+
+/// Режет предложение на текстовые блоки для тренировки.
+///
+/// Границы живут в [`blocks`], чтобы интерфейс разбора фразы и конструктор
+/// карточек никогда не расходились в том, что считают одним куском.
+pub fn split(tokens: &[Token], findings: &[Finding]) -> Vec<String> {
+    let words: Vec<&Token> = tokens.iter().filter(|token| token.is_tappable()).collect();
+    blocks(tokens, findings)
+        .iter()
+        .map(|range| {
+            words[range.clone()]
+                .iter()
+                .map(|token| token.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect()
 }
 
 fn is_glue(text: &str) -> bool {

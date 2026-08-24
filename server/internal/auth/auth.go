@@ -26,6 +26,8 @@ import (
 // ErrUnauthorized — токена нет, он просрочен или не наш.
 var ErrUnauthorized = errors.New("нужен вход")
 
+const SessionCookie = "wolfy_session"
+
 // User — то, что сервису нужно знать о пользователе.
 type User struct {
 	ID          string
@@ -52,6 +54,20 @@ func BearerToken(header string) string {
 		return ""
 	}
 	return strings.TrimSpace(value)
+}
+
+// RequestToken сохраняет Bearer для установленных клиентов и добавляет
+// httpOnly-куку для браузера. Заголовок имеет приоритет, чтобы существующие
+// Android/Windows-сессии не меняли поведение.
+func RequestToken(r *http.Request) string {
+	if token := BearerToken(r.Header.Get("Authorization")); token != "" {
+		return token
+	}
+	cookie, err := r.Cookie(SessionCookie)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(cookie.Value)
 }
 
 // Verify опознаёт пользователя по токену.
@@ -114,7 +130,7 @@ func FromContext(ctx context.Context) (User, bool) {
 // подставив чужой user_id.
 func (v *Verifier) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token := BearerToken(r.Header.Get("Authorization"))
+		token := RequestToken(r)
 		user, err := v.Verify(r.Context(), token)
 		if err != nil {
 			if !errors.Is(err, ErrUnauthorized) {

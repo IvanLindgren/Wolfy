@@ -22,12 +22,12 @@
 //! становится обращением к памяти — но памяти чужой, которую система вправе
 //! забрать под что-то нужнее.
 
-use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 use serde::Serialize;
 
+use crate::parser::Source;
 use crate::Result;
 
 /// Статья словаря.
@@ -66,7 +66,7 @@ pub struct Sense {
 /// Держит только открытый файл и его длину: всё остальное читается по месту.
 #[derive(Debug)]
 pub struct Dictionary {
-    file: File,
+    source: Source,
     length: u64,
     /// С какого байта идут статьи — заголовок пропускается один раз при
     /// открытии, а не при каждом поиске.
@@ -90,11 +90,24 @@ impl Dictionary {
         // Ошибки ввода-вывода уходят наверх как есть: «нет файла» и «нет
         // прав» ядро различить не может, а клиенту в обоих случаях отвечать
         // одинаково — словаря нет, покажем перевод.
-        let file = File::open(path)?;
+        let file = std::fs::File::open(path)?;
         let length = file.metadata()?.len();
+        Dictionary::read(Source::File(file), length)
+    }
 
+    /// Словарь, целиком лежащий в памяти.
+    ///
+    /// Так он приходит в браузере: файловой системы там нет, а Cache Storage
+    /// отдаёт содержимое буфером. Двоичный поиск при этом остаётся тем же —
+    /// он ищет по смещениям, и откуда эти байты, ему всё равно.
+    pub fn from_bytes(bytes: Vec<u8>) -> Result<Dictionary> {
+        let length = bytes.len() as u64;
+        Dictionary::read(Source::bytes(bytes), length)
+    }
+
+    fn read(source: Source, length: u64) -> Result<Dictionary> {
         let mut dictionary = Dictionary {
-            file,
+            source,
             length,
             start: 0,
         };
@@ -164,7 +177,7 @@ impl Dictionary {
 
         self.seek(start)?;
         loop {
-            let read = self.read(&mut chunk)?;
+            let read = self.take(&mut chunk)?;
             if read == 0 {
                 break;
             }
@@ -210,16 +223,16 @@ impl Dictionary {
     }
 
     fn seek(&mut self, at: u64) -> Result<()> {
-        self.file.seek(SeekFrom::Start(at))?;
+        self.source.seek(SeekFrom::Start(at))?;
         Ok(())
     }
 
-    fn read(&mut self, into: &mut [u8]) -> Result<usize> {
-        Ok(self.file.read(into)?)
+    fn take(&mut self, into: &mut [u8]) -> Result<usize> {
+        Ok(self.source.read(into)?)
     }
 
     fn read_exact(&mut self, into: &mut [u8]) -> Result<()> {
-        self.file.read_exact(into)?;
+        self.source.read_exact(into)?;
         Ok(())
     }
 }
@@ -287,6 +300,26 @@ library\tˈlaɪˌbɹɛɹi\tt|библиотека\tt|книгохранилищ�
 water\tˈwɔtɚ\tn|a liquid necessary for life\tv|supply with water
 zebra\tˈzibɹə\tn|a striped horse
 ";
+
+    /// В браузере файла нет, а словарь всё равно обязан искаться.
+    #[test]
+    fn словарь_из_памяти_ищет_так_же_как_с_диска() {
+        let текст = format!("# wolfy english dictionary v1
+# generated	2026-08-23
+{ТЕЛО}");
+        let mut dictionary =
+            Dictionary::from_bytes(текст.into_bytes()).expect("словарь из памяти не открылся");
+
+        let entry = dictionary
+            .lookup("Library")
+            .expect("поиск сломался")
+            .expect("статьи нет");
+        assert_eq!(entry.word, "library");
+        assert_eq!(entry.translations, vec!["библиотека", "книгохранилище"]);
+
+        // И отсутствие статьи — обычный ответ, а не ошибка.
+        assert!(dictionary.lookup("zzzqx").expect("поиск сломался").is_none());
+    }
 
     #[test]
     fn слово_находится_вместе_с_произношением_и_значениями() {

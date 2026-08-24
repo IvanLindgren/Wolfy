@@ -51,6 +51,7 @@ import com.wolfy.widgets.SectionLabel
 import com.wolfy.widgets.Sticker
 import com.wolfy.widgets.WolfySticker
 import com.wolfy.widgets.pressable
+import com.wolfy.widgets.PrimaryButton
 
 /**
  * Тренировка.
@@ -680,28 +681,6 @@ private fun Finished(state: TrainingState, onClose: () -> Unit) {
             textAlign = TextAlign.Center,
         )
         PrimaryButton(text = "К колодам", onClick = onClose)
-    }
-}
-
-/** Чёрная кнопка во всю ширину — та же, что «В колоду книги» на карточке. */
-@Composable
-private fun PrimaryButton(text: String, onClick: () -> Unit) {
-    val colors = WolfyTheme.colors
-    val spacing = WolfyTheme.spacing
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .background(colors.inverse, RoundedCornerShape(spacing.huge))
-            .pressable(onClick = onClick)
-            .padding(vertical = spacing.medium),
-    ) {
-        Text(
-            text = text,
-            style = WolfyTheme.typography.button,
-            color = colors.onInverse,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth(),
-        )
     }
 }
 

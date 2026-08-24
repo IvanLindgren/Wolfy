@@ -18,6 +18,9 @@ import io.ktor.http.contentType
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.Serializable
 import com.wolfy.platform.PickedPhoto
+import com.wolfy.platform.BrowserAuthLauncher
+import com.wolfy.platform.deviceName
+import com.wolfy.platform.devicePlatform
 import com.wolfy.ffi.DictionaryEntry
 import kotlinx.serialization.json.Json
 
@@ -35,28 +38,183 @@ import kotlinx.serialization.json.Json
 class WolfyApi(
     private val baseUrl: String,
     private val tokenProvider: () -> String?,
+    private val deviceProvider: () -> DeviceInfo = {
+        DeviceInfo(id = "", name = deviceName(), platform = devicePlatform())
+    },
     private val client: HttpClient = defaultClient(),
 ) {
-    suspend fun login(email: String, password: String): LoginResult = try {
+    suspend fun signIn(email: String, password: String): AuthOutcome = try {
         val response = client.post("$baseUrl/v1/auth/login") {
             contentType(ContentType.Application.Json)
             setBody(
-                LoginRequest(
+                AuthRequest(
                     email = email.trim(),
                     password = password,
-                    device = LoginDevice(name = "Wolfy", platform = "compose"),
+                    device = deviceProvider(),
                 ),
             )
         }
         when (response.status) {
-            HttpStatusCode.OK -> LoginResult.Ready(response.body<LoginResponse>().token)
-            HttpStatusCode.Unauthorized -> LoginResult.Failed("Неверная почта или пароль.")
-            HttpStatusCode.Forbidden -> LoginResult.Failed("Сначала подтвердите почту в Читавуке.")
-            else -> LoginResult.Failed("Вход сейчас недоступен.")
+            HttpStatusCode.OK -> response.body<AuthResponse>().let {
+                AuthOutcome.SignedIn(
+                    token = it.token,
+                    email = it.email.ifBlank { it.user?.email.orEmpty().ifBlank { email.trim() } },
+                    name = it.name.ifBlank { it.displayName.ifBlank { it.user?.displayName.orEmpty() } },
+                )
+            }
+            HttpStatusCode.Forbidden -> {
+                val reason = response.authMessage()
+                if (reason.contains("unverified", ignoreCase = true) ||
+                    reason.contains("подтверд", ignoreCase = true)
+                ) {
+                    AuthOutcome.EmailNotConfirmed(email.trim())
+                } else {
+                    AuthOutcome.Refused(reason.ifBlank { "Вход запрещён." })
+                }
+            }
+            HttpStatusCode.BadRequest, HttpStatusCode.Unauthorized, HttpStatusCode.Conflict ->
+                AuthOutcome.Refused(response.authMessage().ifBlank { "Неверная почта или пароль." })
+            else -> AuthOutcome.Refused("Вход сейчас недоступен.")
         }
-    } catch (e: Exception) {
-        LoginResult.Failed("Нет связи с сервером.")
+    } catch (_: Exception) {
+        AuthOutcome.Offline
     }
+
+    suspend fun signUp(email: String, password: String, name: String): AuthOutcome = try {
+        val response = client.post("$baseUrl/v1/auth/register") {
+            contentType(ContentType.Application.Json)
+            setBody(
+                AuthRequest(
+                    email = email.trim(),
+                    password = password,
+                    name = name.trim(),
+                    device = deviceProvider(),
+                ),
+            )
+        }
+        when (response.status) {
+            HttpStatusCode.Accepted -> AuthOutcome.AwaitingEmail(email.trim())
+            HttpStatusCode.OK -> response.body<AuthResponse>().let {
+                if (it.token.isNotBlank()) AuthOutcome.SignedIn(
+                    it.token,
+                    it.email.ifBlank { it.user?.email.orEmpty().ifBlank { email.trim() } },
+                    it.name.ifBlank { it.displayName.ifBlank { it.user?.displayName.orEmpty().ifBlank { name.trim() } } },
+                )
+                else AuthOutcome.AwaitingEmail(email.trim())
+            }
+            HttpStatusCode.BadRequest, HttpStatusCode.Conflict ->
+                AuthOutcome.Refused(response.authMessage().ifBlank { "Не получилось создать аккаунт." })
+            HttpStatusCode.NotImplemented ->
+                AuthOutcome.Refused("На этом сервере регистрация не настроена.")
+            else -> AuthOutcome.Refused("Регистрация сейчас недоступна.")
+        }
+    } catch (_: Exception) {
+        AuthOutcome.Offline
+    }
+
+    suspend fun resendVerification(email: String): Boolean = try {
+        val response = client.post("$baseUrl/v1/auth/resend-verification") {
+            contentType(ContentType.Application.Json)
+            setBody(ResendRequest(email.trim()))
+        }
+        response.status.value in 200..299
+    } catch (_: Exception) {
+        false
+    }
+
+    suspend fun capabilities(): Capabilities = try {
+        val response = client.get("$baseUrl/healthz")
+        if (response.status == HttpStatusCode.OK) response.body() else Capabilities()
+    } catch (_: Exception) {
+        Capabilities()
+    }
+
+    /**
+     * Google открывается только в системном браузере. Сервер обменивает код
+     * на ID token, Читавук связывает или создаёт общий аккаунт, а сессия
+     * возвращается POST-запросом на одноразовый loopback-адрес приложения.
+     */
+    suspend fun signInWithGoogle(launcher: BrowserAuthLauncher): AuthOutcome = try {
+        val callback = launcher.launch { returnUrl ->
+            socialStart("/v1/auth/google/start", SocialStartRequest(returnUrl = returnUrl))
+        }
+        callback.error?.let { return AuthOutcome.Refused(it) }
+        val status = callback.parameters["status"]?.toIntOrNull() ?: 0
+        val payload = callback.parameters["payload"].orEmpty()
+        if (status in 200..299) authOutcome(payload)
+        else AuthOutcome.Refused(
+            callback.parameters["error"].orEmpty().ifBlank {
+                authError(payload).ifBlank { "Не удалось войти через Google." }
+            },
+        )
+    } catch (error: Exception) {
+        AuthOutcome.Refused(error.message ?: "Не удалось войти через Google.")
+    }
+
+    /** Первый вход через Яндекс одновременно регистрирует общий аккаунт. */
+    suspend fun signInWithYandex(launcher: BrowserAuthLauncher): AuthOutcome = try {
+        val callback = launcher.launch { returnUrl ->
+            socialStart(
+                "/v1/auth/yandex/start",
+                SocialStartRequest(returnUrl = returnUrl, returnTarget = "desktop"),
+            )
+        }
+        callback.error?.let { return AuthOutcome.Refused("Вход через Яндекс отменён.") }
+        val code = callback.parameters["code"].orEmpty()
+        if (code.isBlank()) return AuthOutcome.Refused("Яндекс не вернул код входа.")
+        val response = client.post("$baseUrl/v1/auth/yandex/complete") {
+            contentType(ContentType.Application.Json)
+            setBody(YandexCompleteRequest(code, deviceProvider()))
+        }
+        val payload = response.body<String>()
+        if (response.status.value in 200..299) authOutcome(payload)
+        else AuthOutcome.Refused(authError(payload).ifBlank { "Не удалось войти через Яндекс." })
+    } catch (error: Exception) {
+        AuthOutcome.Refused(error.message ?: "Не удалось войти через Яндекс.")
+    }
+
+    private suspend fun socialStart(path: String, request: SocialStartRequest): String {
+        val response = client.post(baseUrl + path) {
+            contentType(ContentType.Application.Json)
+            setBody(request.copy(device = deviceProvider()))
+        }
+        if (response.status != HttpStatusCode.OK) {
+            val message = runCatching { response.body<AuthError>().message() }.getOrDefault("")
+            error(message.ifBlank { "Этот способ входа сейчас недоступен." })
+        }
+        return response.body<SocialStartResponse>().authorizationUrl.ifBlank {
+            error("Сервер не вернул адрес входа.")
+        }
+    }
+
+    private fun authOutcome(payload: String): AuthOutcome = runCatching {
+        val response = authJson.decodeFromString<AuthResponse>(payload)
+        if (response.token.isBlank()) return@runCatching AuthOutcome.Refused("Сессия не получена.")
+        AuthOutcome.SignedIn(
+            token = response.token,
+            email = response.email.ifBlank { response.user?.email.orEmpty() },
+            name = response.name.ifBlank {
+                response.displayName.ifBlank { response.user?.displayName.orEmpty() }
+            },
+        )
+    }.getOrElse { AuthOutcome.Refused("Ответ сервера входа не разобран.") }
+
+    private fun authError(payload: String): String = runCatching {
+        authJson.decodeFromString<AuthError>(payload).message()
+    }.getOrDefault("")
+
+    /** Совместимость со старым экраном ленты. */
+    suspend fun login(email: String, password: String): LoginResult = when (val result = signIn(email, password)) {
+        is AuthOutcome.SignedIn -> LoginResult.Ready(result.token)
+        is AuthOutcome.AwaitingEmail -> LoginResult.Failed("Проверьте почту.")
+        is AuthOutcome.EmailNotConfirmed -> LoginResult.Failed("Сначала подтвердите почту в Читавуке.")
+        is AuthOutcome.Refused -> LoginResult.Failed(result.message)
+        AuthOutcome.Offline -> LoginResult.Failed("Нет связи с сервером.")
+    }
+
+    private suspend fun io.ktor.client.statement.HttpResponse.authMessage(): String = runCatching {
+        body<AuthError>().message()
+    }.getOrDefault("")
 
     suspend fun discoveryProfile(): DiscoveryProfileResult = authorizedGet("/v1/discovery/profile") {
         DiscoveryProfileResult.Ready(it.body())
@@ -319,21 +477,74 @@ sealed interface LoginResult {
 }
 
 @Serializable
-private data class LoginRequest(
+data class DeviceInfo(val id: String, val name: String, val platform: String)
+
+sealed interface AuthOutcome {
+    data class SignedIn(val token: String, val email: String, val name: String) : AuthOutcome
+    data class AwaitingEmail(val email: String) : AuthOutcome
+    data class EmailNotConfirmed(val email: String) : AuthOutcome
+    data class Refused(val message: String) : AuthOutcome
+    data object Offline : AuthOutcome
+}
+
+@Serializable
+data class Capabilities(
+    val signIn: Boolean = false,
+    val register: Boolean = false,
+    val resend: Boolean = false,
+    val google: Boolean = false,
+    val yandex: Boolean = false,
+)
+
+@Serializable
+private data class AuthRequest(
     val email: String,
     val password: String,
-    val device: LoginDevice,
+    val name: String = "",
+    val device: DeviceInfo,
 )
 
 @Serializable
-private data class LoginDevice(
-    val id: String = "",
-    val name: String,
-    val platform: String,
+private data class ResendRequest(val email: String)
+
+@Serializable
+private data class AuthResponse(
+    val token: String = "",
+    val email: String = "",
+    val name: String = "",
+    val displayName: String = "",
+    val user: AuthUser? = null,
 )
 
 @Serializable
-private data class LoginResponse(val token: String)
+private data class AuthUser(
+    val email: String = "",
+    val displayName: String = "",
+)
+
+@Serializable
+private data class SocialStartRequest(
+    val returnUrl: String,
+    val returnTarget: String = "",
+    val device: DeviceInfo = DeviceInfo("", "", ""),
+)
+
+@Serializable
+private data class SocialStartResponse(val authorizationUrl: String = "")
+
+@Serializable
+private data class YandexCompleteRequest(val code: String, val device: DeviceInfo)
+
+@Serializable
+private data class AuthError(
+    val error: String = "",
+    val message: String = "",
+    val code: String = "",
+) {
+    fun message(): String = message.ifBlank { error.ifBlank { code } }
+}
+
+private val authJson = Json { ignoreUnknownKeys = true }
 
 @Serializable
 data class DiscoveryProfile(

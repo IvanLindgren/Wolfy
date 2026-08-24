@@ -1,0 +1,214 @@
+/*
+ * Переменные тем.
+ *
+ * Тема — не набор цветов, а объект: четыре темы, у каждой своя палитра
+ * грамматических семейств, потому что контраст на кремовой бумаге и на
+ * OLED-чёрном — разные величины.
+ *
+ * Всё описано переменными на `:root[data-theme]`, а не классами компонентов:
+ * половина работы здесь — кернинг, буквица и ритм колонки, и это удобнее
+ * описывать каскадом, чем цепочкой утилитарных классов. Смена темы — это
+ * смена шести десятков значений на корне и ни одной перерисовки дерева.
+ *
+ * Имена тем совпадают с тем, что хранит ядро в `settings.theme`:
+ * `Paper`, `Sepia`, `Dark`, `Oled`. Незнакомое имя разбирает клиент — ядро
+ * про краски не знает и знать не должно.
+ */
+
+:root {
+  /* --- Газета: белизна бумаги и густые чернила. Тема по умолчанию. --- */
+  --paper: #fbf9f5;
+  --ink: #111111;
+  --ink-muted: #6b6b66;
+  --rule: #d9d8d2;
+  --surface: #ffffff;
+  --surface-sunken: #f2f0ea;
+  --accent: #b83a2a;
+  --gold: #b08a3c;
+  --highlight: #f7e27a;
+  --on-accent: #ffffff;
+  --inverse: #111111;
+  --on-inverse: #f7f7f4;
+  --shadow: 0 1.5rem 3rem rgb(17 17 17 / 14%);
+  --scrim: rgb(17 17 17 / 32%);
+
+  /* Части речи. Пять цветов, а не десять: раскрасить все части речи можно,
+     но страница превратится в светофор. Цвет получают знаменательные части
+     речи и местоимения; предлоги, артикли и союзы остаются цветом чернил. */
+  --pos-noun: #2c5aa0;
+  --pos-verb: #b83a2a;
+  --pos-adj: #3f7a3f;
+  --pos-adv: #8a6a24;
+  --pos-pron: #6b4f97;
+
+  /* Семейства правил. Шесть — столько оттенков глаз ещё различает на
+     странице текста; правил больше двадцати, и цвет на каждое превратил бы
+     главу в шум. */
+  --family-tense: #ffd9d2;
+  --family-voice: #dce8fa;
+  --family-mood: #e8ddf6;
+  --family-condition: #ffe4b8;
+  --family-comparison: #d9ebd8;
+  --family-reference: #e5e2d9;
+  --family-ink: #241f1c;
+
+  /* Набор. Кегль и интерлиньяж домножаются на множители из настроек — они
+     синхронизируются между устройствами тем же объектом, что и тема. */
+  --font-scale: 1;
+  --line-scale: 1;
+  --measure: 66ch;
+
+  --serif: 'Playfair Display', 'PT Serif', Georgia, 'Times New Roman', serif;
+  --sans: 'Inter', 'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  --reader-size: calc(1.125rem * var(--font-scale));
+  --reader-line: calc(1.62 * var(--line-scale));
+
+  --radius: 0.5rem;
+  --radius-lg: 1rem;
+  --gutter: clamp(1rem, 4vw, 2.5rem);
+
+  color-scheme: light;
+}
+
+/* --- Тёплая сепия: мягкий вечерний свет, тёплая бумага. --- */
+:root[data-theme='Sepia'] {
+  --paper: #f4efe6;
+  --ink: #2c2419;
+  --ink-muted: #75695a;
+  --rule: #ded4c2;
+  --surface: #fbf7ef;
+  --surface-sunken: #ebe3d5;
+  --accent: #a8442c;
+  --gold: #9c7a2e;
+  --highlight: #efd9a0;
+  --on-accent: #fbf7ef;
+  --inverse: #2c2419;
+  --on-inverse: #f4efe6;
+  --shadow: 0 1.5rem 3rem rgb(44 36 25 / 16%);
+  --scrim: rgb(44 36 25 / 34%);
+  --pos-noun: #275390;
+  --pos-verb: #a8442c;
+  --pos-adj: #3a6f38;
+  --pos-adv: #806020;
+  --pos-pron: #614790;
+  --family-tense: #f6d8cb;
+  --family-voice: #d7e2f0;
+  --family-mood: #e2d7ef;
+  --family-condition: #f5dfb4;
+  --family-comparison: #d5e5d2;
+  --family-reference: #e4ddcd;
+  --family-ink: #2c2419;
+  color-scheme: light;
+}
+
+/* --- Угольная: глубокие чернила без тепла. --- */
+:root[data-theme='Dark'] {
+  --paper: #231f20;
+  --ink: #ddd7cc;
+  --ink-muted: #918a7d;
+  --rule: #3a3532;
+  --surface: #2c2725;
+  --surface-sunken: #1b1817;
+  --accent: #d9694f;
+  --gold: #d4a855;
+  --highlight: #5a4a1e;
+  --on-accent: #231f20;
+  --inverse: #0d0b0b;
+  --on-inverse: #e6e1d5;
+  --shadow: 0 1.5rem 3rem rgb(0 0 0 / 52%);
+  --scrim: rgb(0 0 0 / 56%);
+  /* На тёмной бумаге те же цвета выглядят грязными: тон сохранён, светлота
+     поднята. */
+  --pos-noun: #7fa6dc;
+  --pos-verb: #e07a64;
+  --pos-adj: #87be87;
+  --pos-adv: #d9b871;
+  --pos-pron: #b79bdb;
+  --family-tense: #63382f;
+  --family-voice: #304a6c;
+  --family-mood: #4b3b63;
+  --family-condition: #65502c;
+  --family-comparison: #36563a;
+  --family-reference: #46443e;
+  --family-ink: #f0ebe0;
+  color-scheme: dark;
+}
+
+/*
+ * OLED: чёрный без остатка.
+ *
+ * Смысл темы в том, что на OLED-экране чёрный пиксель не светится вовсе, и
+ * ночью это заметно глазам, а днём — батарее. Поэтому фон именно `#000000`,
+ * а не «почти чёрный»: любое отличие от нуля включает подсветку.
+ */
+:root[data-theme='Oled'] {
+  --paper: #000000;
+  --ink: #ffffff;
+  --ink-muted: #8a8a8a;
+  --rule: #2a2a2a;
+  --surface: #0e0e0e;
+  --surface-sunken: #050505;
+  --accent: #e0674c;
+  --gold: #d4a855;
+  --highlight: #5c4a12;
+  --on-accent: #000000;
+  /* Не чистый чёрный: на OLED фон и есть чистый чёрный, и плашка на нём
+     просто исчезла бы. Кромка светлее фона — единственное, чем она здесь
+     может себя обозначить. */
+  --inverse: #1a1a1a;
+  --on-inverse: #ffffff;
+  --shadow: 0 1.5rem 3rem rgb(0 0 0 / 80%);
+  --scrim: rgb(0 0 0 / 70%);
+  --pos-noun: #8fb4e8;
+  --pos-verb: #f08a72;
+  --pos-adj: #96cc96;
+  --pos-adv: #e5c47d;
+  --pos-pron: #c5a9e8;
+  --family-tense: #63382f;
+  --family-voice: #304a6c;
+  --family-mood: #4b3b63;
+  --family-condition: #65502c;
+  --family-comparison: #36563a;
+  --family-reference: #46443e;
+  --family-ink: #ffffff;
+  color-scheme: dark;
+}
+
+/*
+ * Пока читатель не выбрал тему, следуем системе. Его выбор перекрывает это
+ * атрибутом `data-theme` и синхронизируется между устройствами тем же
+ * объектом настроек.
+ */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --paper: #231f20;
+    --ink: #ddd7cc;
+    --ink-muted: #918a7d;
+    --rule: #3a3532;
+    --surface: #2c2725;
+    --surface-sunken: #1b1817;
+    --accent: #d9694f;
+    --gold: #d4a855;
+    --highlight: #5a4a1e;
+    --on-accent: #231f20;
+    --inverse: #0d0b0b;
+    --on-inverse: #e6e1d5;
+    --shadow: 0 1.5rem 3rem rgb(0 0 0 / 52%);
+    --scrim: rgb(0 0 0 / 56%);
+    --pos-noun: #7fa6dc;
+    --pos-verb: #e07a64;
+    --pos-adj: #87be87;
+    --pos-adv: #d9b871;
+    --pos-pron: #b79bdb;
+    --family-tense: #63382f;
+    --family-voice: #304a6c;
+    --family-mood: #4b3b63;
+    --family-condition: #65502c;
+    --family-comparison: #36563a;
+    --family-reference: #46443e;
+    --family-ink: #f0ebe0;
+    color-scheme: dark;
+  }
+}

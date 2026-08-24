@@ -43,10 +43,24 @@ type LoginResult = Result
 // Service ходит в Читавук за тремя вещами. Адреса разные, поведение одно,
 // поэтому и код один.
 type Service struct {
-	login    string
-	register string
-	resend   string
-	client   *http.Client
+	login          string
+	register       string
+	resend         string
+	google         string
+	yandexStart    string
+	yandexComplete string
+	client         *http.Client
+}
+
+// WithSocial подключает социальные способы к тому же аккаунту Читавука.
+// Они не создают отдельного пользователя Wolfy: Читавук сам связывает адрес
+// провайдера с существующим аккаунтом либо заводит общий аккаунт при первом
+// входе.
+func (s *Service) WithSocial(google, yandexStart, yandexComplete string) *Service {
+	s.google = strings.TrimSpace(google)
+	s.yandexStart = strings.TrimSpace(yandexStart)
+	s.yandexComplete = strings.TrimSpace(yandexComplete)
+	return s
 }
 
 // New принимает три адреса. Пустой адрес — это выключенная возможность, а не
@@ -74,6 +88,12 @@ func (s *Service) CanRegister() bool { return usable(s.register) }
 // CanResend сообщает, можно ли переслать письмо с подтверждением.
 func (s *Service) CanResend() bool { return usable(s.resend) }
 
+func (s *Service) CanGoogle() bool { return usable(s.google) }
+
+func (s *Service) CanYandex() bool {
+	return usable(s.yandexStart) && usable(s.yandexComplete)
+}
+
 func (s *Service) Login(ctx context.Context, body []byte) (Result, error) {
 	return s.forward(ctx, s.login, body)
 }
@@ -89,6 +109,21 @@ func (s *Service) Register(ctx context.Context, body []byte) (Result, error) {
 // подтверждённый, чтобы по нему нельзя было проверять чужие почты.
 func (s *Service) ResendVerification(ctx context.Context, body []byte) (Result, error) {
 	return s.forward(ctx, s.resend, body)
+}
+
+// Google меняет проверенный Google ID token на обычную общую сессию
+// Читавука. Регистрация и вход намеренно являются одной операцией: решение,
+// существует ли уже пользователь, принадлежит владельцу аккаунта.
+func (s *Service) Google(ctx context.Context, body []byte) (Result, error) {
+	return s.forward(ctx, s.google, body)
+}
+
+func (s *Service) YandexStart(ctx context.Context, body []byte) (Result, error) {
+	return s.forward(ctx, s.yandexStart, body)
+}
+
+func (s *Service) YandexComplete(ctx context.Context, body []byte) (Result, error) {
+	return s.forward(ctx, s.yandexComplete, body)
 }
 
 func (s *Service) forward(ctx context.Context, address string, body []byte) (Result, error) {

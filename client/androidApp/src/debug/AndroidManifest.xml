@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Прямая debug-сборка обновляется с сервера Wolfy. В release-манифест это
+     разрешение намеренно не попадает: версия из Google Play будет использовать
+     штатный механизм магазина и не должна запрашивать установку APK. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <application android:usesCleartextTraffic="true" />
+</manifest>

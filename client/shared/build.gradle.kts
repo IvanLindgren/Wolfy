@@ -71,6 +71,10 @@ kotlin {
             // FileProvider: снимок страницы передаётся системной камере
             // ссылкой, а file-ссылку с Android 7 передавать нельзя.
             implementation(libs.androidx.core.ktx)
+            // Для установленной из Google Play release-сборки используется
+            // штатное гибкое обновление магазина. Прямая debug-сборка берёт
+            // подписанный тем же ключом APK с сервера Wolfy.
+            implementation(libs.play.app.update)
         }
 
         named("desktopMain").dependencies {

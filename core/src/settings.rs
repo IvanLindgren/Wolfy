@@ -47,6 +47,15 @@ pub struct AppSettings {
     /// Множитель межстрочного интервала читалки.
     #[serde(default = "one")]
     pub line_scale: f32,
+    /// Прошёл ли читатель вступление хотя бы на одном из своих устройств.
+    #[serde(default)]
+    pub onboarding_seen: bool,
+    /// Последняя версия, для которой уже показаны обязательные изменения.
+    #[serde(default)]
+    pub last_seen_version: String,
+    /// Свести согласованные анимации к мгновенным переходам.
+    #[serde(default)]
+    pub reduce_motion: bool,
     /// Клали ли уже демо-книгу.
     ///
     /// Проверять «библиотека пуста» вместо этого нельзя: читатель, удаливший
@@ -102,6 +111,9 @@ impl Default for AppSettings {
             theme: default_theme(),
             font_scale: 1.0,
             line_scale: 1.0,
+            onboarding_seen: false,
+            last_seen_version: String::new(),
+            reduce_motion: false,
             demo_added: false,
             intensity: default_intensity(),
             trained_on: 0,

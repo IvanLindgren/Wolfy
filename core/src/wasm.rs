@@ -1,0 +1,263 @@
+//! Вторая дверь в то же ядро: `wasm-bindgen` для браузера.
+//!
+//! Дверь вторая, ядро одно. Всё, что здесь происходит, — это перевод строки
+//! из JavaScript в ту же [`session::Command`], которую получает C-FFI, и
+//! обратно. Ни одного правила грамматики, ни одной формулы расписания здесь
+//! нет и быть не может: вторая реализация разошлась бы с первой через
+//! полгода, и продукт превратился бы в два продукта под одним именем.
+//!
+//! ## Чем это отличается от `ffi/`
+//!
+//! 1. **Панику не поймать.** В wasm стек не разматывается, и `catch_unwind`
+//!    ловить нечего. Поэтому ставится `console_error_panic_hook`, а каждая
+//!    точка входа возвращает `Result`: битая книга обязана вернуться ошибкой,
+//!    а не уронить вкладку.
+//! 2. **Файлов нет.** Книга приходит буфером, лексикон и словарь — тоже.
+//! 3. **Строки не освобождаются вручную.** `wasm-bindgen` копирует их в
+//!    JavaScript сам, и `wolfy_string_free` здесь не нужен.
+//!
+//! Часов и генератора случайностей у ядра по-прежнему нет: `now` в
+//! UTC-миллисекундах, `offsetMinutes` и свежие идентификаторы приходят
+//! параметрами команды — ровно как на Android и Windows.
+
+use wasm_bindgen::prelude::*;
+
+use crate::dictionary::Dictionary;
+use crate::ffi::dto::{
+    BookDto, ChapterDto, ExercisesDto, GrammarDto, ReferenceDto, TextDto, WordDto,
+};
+use crate::ffi::session::{Command, Session};
+use crate::lexicon::{analyze, Lexicon};
+use crate::parser::{self, Book};
+use crate::tokenizer::{split, tokenize};
+
+/// Ставит обработчик паники. Зовётся один раз при загрузке модуля.
+#[wasm_bindgen(start)]
+pub fn start() {
+    console_error_panic_hook::set_once();
+}
+
+/// Версия ядра — веб показывает её в диагностике рядом с версией оболочки.
+#[wasm_bindgen]
+pub fn version() -> String {
+    crate::VERSION.to_string()
+}
+
+/// Кладёт лексикон, скачанный отдельным запросом.
+///
+/// Отдельным, потому что внутри `.wasm` он весил бы полтора мегабайта до
+/// первой буквы текста, а нужен не раньше первого тапа по слову. Отвечает
+/// `false`, если лексикон уже стоит: заменять его на ходу нельзя — разбор
+/// раздаёт ссылки внутрь его текста.
+#[wasm_bindgen(js_name = installLexicon)]
+pub fn install_lexicon(text: String) -> bool {
+    Lexicon::install(text)
+}
+
+/// Стоит ли лексикон. По нему интерфейс решает, ждать ли его загрузки.
+#[wasm_bindgen(js_name = lexiconReady)]
+pub fn lexicon_ready() -> bool {
+    Lexicon::installed()
+}
+
+/// Разбирает одно слово: начальная форма, части речи, разбор, частотность.
+#[wasm_bindgen(js_name = analyzeWord)]
+pub fn analyze_word(word: &str) -> Result<String, JsError> {
+    let analysis = analyze(Lexicon::embedded(), word);
+    json(&WordDto::from(&analysis))
+}
+
+/// Разбивает текст на токены и предложения.
+///
+/// Позиции токенов — в единицах UTF-16, то есть ровно в тех индексах, которыми
+/// оперируют строки JavaScript.
+#[wasm_bindgen(js_name = tokenizeText)]
+pub fn tokenize_text(text: &str) -> Result<String, JsError> {
+    let tokens = tokenize(text);
+    let sentences = split(&tokens);
+    json(&TextDto {
+        tokens: tokens.iter().map(Into::into).collect(),
+        sentences: sentences.iter().map(Into::into).collect(),
+    })
+}
+
+/// Разбирает грамматику предложения: находки, роли и маркеры.
+///
+/// На вход идёт предложение целиком, а не слово: разбор смотрит на соседей, и
+/// обрывок фразы разберётся хуже, чем фраза целиком.
+#[wasm_bindgen]
+pub fn explain(text: &str) -> Result<String, JsError> {
+    let tokens = tokenize(text);
+    let lexicon = Lexicon::embedded();
+    let findings = crate::grammar::analyze(lexicon, &tokens);
+    let chunks = crate::grammar::chunks(lexicon, &tokens, &findings);
+    let markers = crate::grammar::markers(lexicon, &tokens, &findings);
+
+    json(&GrammarDto {
+        findings: findings.iter().map(Into::into).collect(),
+        chunks: chunks.iter().map(Into::into).collect(),
+        markers: markers.iter().map(Into::into).collect(),
+    })
+}
+
+/// Справочник грамматики целиком.
+#[wasm_bindgen(js_name = grammarReference)]
+pub fn grammar_reference() -> Result<String, JsError> {
+    let articles = crate::grammar::articles(Lexicon::embedded());
+    json(&ReferenceDto {
+        articles: articles.iter().map(Into::into).collect(),
+    })
+}
+
+/// Микро-упражнения по грамматике целиком.
+#[wasm_bindgen(js_name = grammarExercises)]
+pub fn grammar_exercises() -> Result<String, JsError> {
+    let exercises = crate::grammar::exercises(Lexicon::embedded());
+    json(&ExercisesDto {
+        exercises: exercises.iter().map(Into::into).collect(),
+    })
+}
+
+/// Открытая книга.
+///
+/// Владение отдаётся JavaScript целиком: объект живёт, пока на него есть
+/// ссылка, и освобождается вызовом `free()`. Реестра номеров, как в C-FFI,
+/// здесь не нужно — там он был нужен затем, что проверить чужой указатель
+/// невозможно, а здесь указателей не видно вовсе.
+#[wasm_bindgen]
+pub struct WolfyBook {
+    inner: Box<dyn Book>,
+}
+
+#[wasm_bindgen]
+impl WolfyBook {
+    /// Открывает книгу из буфера.
+    ///
+    /// `extension` отдельным аргументом, потому что имени файла у байтов нет.
+    #[wasm_bindgen(js_name = open)]
+    pub fn open(
+        extension: &str,
+        title: Option<String>,
+        bytes: Vec<u8>,
+    ) -> Result<WolfyBook, JsError> {
+        parser::open_bytes(extension, title, bytes)
+            .map(|inner| WolfyBook { inner })
+            .map_err(described)
+    }
+
+    /// Собирает книгу из страниц, извлечённых в браузере: PDF через `pdf.js`
+    /// и распознанные по фото страницы приходят сюда.
+    #[wasm_bindgen(js_name = fromPages)]
+    pub fn from_pages(title: Option<String>, pages: Vec<String>) -> Result<WolfyBook, JsError> {
+        parser::from_pages(title, pages)
+            .map(|inner| WolfyBook { inner })
+            .map_err(described)
+    }
+
+    /// Метаданные и оглавление. Маленькие и нужны сразу.
+    pub fn metadata(&self) -> Result<String, JsError> {
+        json(&BookDto::new(self.inner.metadata(), self.inner.contents()))
+    }
+
+    /// Читает одну главу. Единственная тяжёлая операция — потому ядро и
+    /// живёт в воркере.
+    pub fn chapter(&mut self, index: usize) -> Result<String, JsError> {
+        let chapter = self.inner.chapter(index).map_err(described)?;
+        json(&ChapterDto::from(&chapter))
+    }
+
+    /// Байты иллюстрации по пути из блока `image`.
+    pub fn resource(&mut self, path: &str) -> Result<Vec<u8>, JsError> {
+        self.inner.resource(path).map_err(described)
+    }
+}
+
+/// Библиотека, колоды и настройки одного читателя.
+///
+/// Та же сессия, что на Android и Windows, и те же команды: `run` принимает
+/// ровно тот JSON, который уходит в `wolfy_session_run`.
+#[wasm_bindgen]
+pub struct WolfySession {
+    inner: Session,
+}
+
+#[wasm_bindgen]
+impl WolfySession {
+    /// Открывает сессию на сохранённом состоянии.
+    ///
+    /// Битую запись ядро молча заменяет пустой: падение на старте не оставило
+    /// бы читателю ничего, а так приложение откроется, и книги, лежащие в
+    /// хранилище браузера, добавятся заново.
+    #[wasm_bindgen(constructor)]
+    pub fn new(library: Option<String>, settings: Option<String>) -> WolfySession {
+        WolfySession {
+            inner: Session::open(library.as_deref(), settings.as_deref()),
+        }
+    }
+
+    /// Выполняет команду. Та же команда, что уходит в `wolfy_session_run`.
+    pub fn run(&mut self, command: &str) -> Result<String, JsError> {
+        let command: Command = serde_json::from_str(command)
+            // Имя незнакомой команды попадает в текст ошибки: без него
+            // расхождение клиента и ядра ищется вслепую.
+            .map_err(|e| JsError::new(&format!("ядро не поняло команду: {e}")))?;
+        json(&self.inner.run(command))
+    }
+
+    /// Библиотека целиком — то, что клиент пишет в хранилище.
+    pub fn library(&self) -> Result<String, JsError> {
+        json(&self.inner.library)
+    }
+
+    /// Настройки целиком.
+    pub fn settings(&self) -> Result<String, JsError> {
+        json(&self.inner.settings)
+    }
+
+    /// Что изменилось с последней записи. Считает ядро: только оно знает,
+    /// изменила ли команда хоть что-нибудь.
+    pub fn dirty(&self) -> Result<String, JsError> {
+        json(&serde_json::json!({
+            "library": self.inner.library_dirty,
+            "settings": self.inner.settings_dirty,
+        }))
+    }
+
+    /// Подтверждает запись.
+    pub fn saved(&mut self, library: bool, settings: bool) {
+        if library {
+            self.inner.library_dirty = false;
+        }
+        if settings {
+            self.inner.settings_dirty = false;
+        }
+    }
+
+    /// Кладёт офлайн-словарь, скачанный по согласию читателя.
+    ///
+    /// Целиком в память, а не по кускам: в браузере нет файла, по которому
+    /// можно бегать двоичным поиском, зато распакованный словарь и так лежит
+    /// в Cache Storage одним ресурсом.
+    #[wasm_bindgen(js_name = installDictionary)]
+    pub fn install_dictionary(&mut self, bytes: Vec<u8>) -> bool {
+        self.inner.use_dictionary(bytes)
+    }
+}
+
+/// Ищет статью в словаре, лежащем в памяти, без сессии.
+///
+/// Нужно диагностике настроек: проверить, что скачанный файл действительно
+/// открывается, не трогая состояние читателя.
+#[wasm_bindgen(js_name = probeDictionary)]
+pub fn probe_dictionary(bytes: Vec<u8>, word: &str) -> Result<bool, JsError> {
+    let mut dictionary = Dictionary::from_bytes(bytes).map_err(described)?;
+    Ok(dictionary.lookup(word).map_err(described)?.is_some())
+}
+
+fn json<T: serde::Serialize>(value: &T) -> Result<String, JsError> {
+    serde_json::to_string(value).map_err(|e| JsError::new(&format!("ответ не сериализуется: {e}")))
+}
+
+fn described(error: crate::CoreError) -> JsError {
+    JsError::new(&error.describe())
+}

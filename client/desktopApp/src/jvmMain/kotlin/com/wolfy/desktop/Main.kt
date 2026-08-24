@@ -25,8 +25,12 @@ fun main() = application {
         // у каждого, а зашивать их в код значит однажды выложить чужой токен
         // в репозиторий.
         WolfyApplication(
-            serverUrl = System.getenv("WOLFY_SERVER_URL") ?: "http://localhost:8080",
+            serverUrl = System.getenv("WOLFY_SERVER_URL")
+                ?: System.getProperty("wolfy.server.url")
+                ?: "http://localhost:8080",
             sessionToken = System.getenv("WOLFY_SESSION_TOKEN"),
+            currentVersion = "1.0.7",
+            onExitForUpdate = ::exitApplication,
         )
     }
 }

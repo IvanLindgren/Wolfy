@@ -36,7 +36,7 @@ interface WolfyCore {
      *
      * Быстрая операция — доли миллисекунды, вызывать можно прямо по тапу.
      */
-    fun explain(sentence: String): List<Finding>
+    fun explain(sentence: String): GrammarResult
 
     /**
      * Справочник грамматики целиком.
@@ -218,7 +218,31 @@ data class Finding(
 )
 
 @Serializable
-internal data class GrammarResult(val findings: List<Finding> = emptyList())
+data class GrammarChunk(
+    val role: String,
+    val title: String,
+    val tint: String,
+    val start: Int,
+    val end: Int,
+    val head: Int,
+)
+
+@Serializable
+data class GrammarMarker(
+    val token: Int,
+    val from: Int,
+    val to: Int,
+    val kind: String,
+    val rule: String,
+    val note: String,
+)
+
+@Serializable
+data class GrammarResult(
+    val findings: List<Finding> = emptyList(),
+    val chunks: List<GrammarChunk> = emptyList(),
+    val markers: List<GrammarMarker> = emptyList(),
+)
 
 /**
  * Статья справочника.

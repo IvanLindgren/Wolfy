@@ -43,9 +43,23 @@ type Config struct {
 	// уметь вход и не уметь регистрацию. Пустой адрес прячет кнопку в
 	// приложении — кнопка, которая всегда отвечает ошибкой, хуже её
 	// отсутствия.
-	CitavukLoginURL    string
-	CitavukRegisterURL string
-	CitavukResendURL   string
+	CitavukLoginURL          string
+	CitavukRegisterURL       string
+	CitavukResendURL         string
+	CitavukGoogleURL         string
+	CitavukYandexStartURL    string
+	CitavukYandexCompleteURL string
+
+	// Google OAuth проходит в системном браузере. Секрет остаётся на сервере,
+	// а приложение получает только обычную сессию Читавука через одноразовый
+	// возврат на loopback-адрес.
+	GoogleClientID     string
+	GoogleClientSecret string
+	GoogleCallbackURL  string
+	OAuthStateSecret   string
+	// WebOrigin — единственный origin SPA, которому разрешены credentialed
+	// CORS и OAuth-возврат. Пустое значение оставляет только same-origin.
+	WebOrigin string
 
 	// StandardEbooks* — официальный Atom-каталог. Открытая лента новых
 	// релизов работает без учётных данных; полный /all требует разрешения
@@ -57,6 +71,11 @@ type Config struct {
 	// DictionaryPath — распакованный TSV. Рядом обязан лежать файл .tsv.gz,
 	// который сервер отдаёт устройствам для офлайн-установки.
 	DictionaryPath string
+
+	// ReleasesPath — каталог опубликованных MSI и APK. Сервер строит манифест
+	// непосредственно по его содержимому, поэтому выпуск новой версии не
+	// требует править конфиг или перезапускать процесс.
+	ReleasesPath string
 
 	// RequestTimeout — сколько сервис готов ждать ответа от внешнего API.
 	// Клиент не должен ждать дольше, чем ему обещано.
@@ -77,9 +96,17 @@ func Load() (Config, error) {
 		OCRModel: envOr("WOLFY_OCR_MODEL", "google/gemini-3.7-flash"),
 		OCRURL:   envOr("WOLFY_OCR_URL", "https://api.polza.ai/api/v1/chat/completions"),
 
-		CitavukLoginURL:    envOr("WOLFY_CITAVUK_LOGIN_URL", "https://api.citavuk.ru/v1/auth/login"),
-		CitavukRegisterURL: envOr("WOLFY_CITAVUK_REGISTER_URL", "https://api.citavuk.ru/v1/auth/register"),
-		CitavukResendURL:   envOr("WOLFY_CITAVUK_RESEND_URL", "https://api.citavuk.ru/v1/auth/resend-verification"),
+		CitavukLoginURL:          envOr("WOLFY_CITAVUK_LOGIN_URL", "https://api.citavuk.ru/v1/auth/login"),
+		CitavukRegisterURL:       envOr("WOLFY_CITAVUK_REGISTER_URL", "https://api.citavuk.ru/v1/auth/register"),
+		CitavukResendURL:         envOr("WOLFY_CITAVUK_RESEND_URL", "https://api.citavuk.ru/v1/auth/resend-verification"),
+		CitavukGoogleURL:         envOr("WOLFY_CITAVUK_GOOGLE_URL", "https://api.citavuk.ru/v1/auth/google"),
+		CitavukYandexStartURL:    envOr("WOLFY_CITAVUK_YANDEX_START_URL", "https://api.citavuk.ru/v1/auth/yandex/start"),
+		CitavukYandexCompleteURL: envOr("WOLFY_CITAVUK_YANDEX_COMPLETE_URL", "https://api.citavuk.ru/v1/auth/yandex/complete"),
+		GoogleClientID:           strings.TrimSpace(os.Getenv("WOLFY_GOOGLE_CLIENT_ID")),
+		GoogleClientSecret:       strings.TrimSpace(os.Getenv("WOLFY_GOOGLE_CLIENT_SECRET")),
+		GoogleCallbackURL:        strings.TrimSpace(os.Getenv("WOLFY_GOOGLE_CALLBACK_URL")),
+		OAuthStateSecret:         strings.TrimSpace(os.Getenv("WOLFY_OAUTH_STATE_SECRET")),
+		WebOrigin:                strings.TrimRight(strings.TrimSpace(os.Getenv("WOLFY_WEB_ORIGIN")), "/"),
 		StandardEbooksFeedURL: envOr(
 			"WOLFY_STANDARD_EBOOKS_FEED_URL",
 			"https://standardebooks.org/feeds/atom/new-releases",
@@ -90,6 +117,7 @@ func Load() (Config, error) {
 			"WOLFY_DICTIONARY_PATH",
 			defaultDictionaryPath(),
 		),
+		ReleasesPath: envOr("WOLFY_RELEASES_PATH", defaultReleasesPath()),
 
 		RequestTimeout: 20 * time.Second,
 	}
@@ -100,6 +128,20 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("не задан WOLFY_DB_URL: без базы сервис работать не может")
 	}
 	return cfg, nil
+}
+
+func defaultReleasesPath() string {
+	candidates := []string{"dist", filepath.Join("..", "dist")}
+	if executable, err := os.Executable(); err == nil {
+		folder := filepath.Dir(executable)
+		candidates = append(candidates, filepath.Join(folder, "dist"), folder)
+	}
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return filepath.Clean(candidate)
+		}
+	}
+	return filepath.Clean(candidates[0])
 }
 
 // defaultDictionaryPath не зависит от того, запустили `go run` из корня

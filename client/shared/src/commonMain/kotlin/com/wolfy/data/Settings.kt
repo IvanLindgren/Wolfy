@@ -34,6 +34,9 @@ data class AppSettings(
     val fontScale: Float = 1f,
     /** Множитель межстрочного интервала читалки. */
     val lineScale: Float = 1f,
+    val onboardingSeen: Boolean = false,
+    val lastSeenVersion: String = "",
+    val reduceMotion: Boolean = false,
     /**
      * Клали ли уже демо-книгу.
      *
@@ -124,6 +127,18 @@ class Settings(private val session: CoreSession) {
 
     fun setLineScale(scale: Float) {
         send(command("setLineScale") { put("scale", scale) })
+    }
+
+    fun seenOnboarding() {
+        send(command("seenOnboarding"))
+    }
+
+    fun seenVersion(version: String) {
+        send(command("seenVersion") { put("version", version) })
+    }
+
+    fun setReduceMotion(on: Boolean) {
+        send(command("setReduceMotion") { put("on", on) })
     }
 
     fun setIntensity(intensity: Intensity) {

@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"html"
 	"io"
 	"log/slog"
 	"net/http"
@@ -24,8 +25,10 @@ import (
 	"github.com/wolfy/server/internal/discovery"
 	"github.com/wolfy/server/internal/library"
 	"github.com/wolfy/server/internal/ocr"
+	"github.com/wolfy/server/internal/social"
 	"github.com/wolfy/server/internal/store"
 	"github.com/wolfy/server/internal/translate"
+	"github.com/wolfy/server/internal/updates"
 )
 
 // Server связывает слои и раздаёт маршруты.
@@ -36,14 +39,24 @@ type Server struct {
 	library    *library.Service
 	ocr        *ocr.Service
 	account    *account.Service
+	google     *social.Google
 	discovery  *discovery.Service
 	dictionary *dictionary.Service
+	updates    *updates.Service
 	log        *slog.Logger
+	webOrigin  string
 
 	// Ограничитель для открытого перевода — см. Handler.
 	translateLimit *rateLimiter
 	// И отдельный, куда более строгий, для входа и регистрации.
 	authLimit *rateLimiter
+}
+
+// WithWebOrigin включает credentialed CORS только для одного известного
+// origin. Основной деплой остаётся same-origin и обходится без CORS вовсе.
+func (s *Server) WithWebOrigin(origin string) *Server {
+	s.webOrigin = strings.TrimRight(strings.TrimSpace(origin), "/")
+	return s
 }
 
 func NewServer(
@@ -53,13 +66,15 @@ func NewServer(
 	l *library.Service,
 	o *ocr.Service,
 	a *account.Service,
+	g *social.Google,
 	d *discovery.Service,
 	dict *dictionary.Service,
+	updater *updates.Service,
 	log *slog.Logger,
 ) *Server {
 	return &Server{
 		store: s, verifier: v, translate: t, library: l, ocr: o,
-		account: a, discovery: d, dictionary: dict, log: log,
+		account: a, google: g, discovery: d, dictionary: dict, updates: updater, log: log,
 		// Двести переводов залпом и один в секунду сверху: страница книги
 		// редко даёт больше двухсот незнакомых слов, а секунда — это дольше,
 		// чем читатель успевает выбрать следующее слово, но много быстрее,
@@ -94,6 +109,19 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/auth/resend-verification", s.authLimit.withRateLimit(
 		http.HandlerFunc(s.postResendVerification),
 	))
+	mux.Handle("POST /v1/auth/google/start", s.authLimit.withRateLimit(
+		http.HandlerFunc(s.postGoogleStart),
+	))
+	// Google возвращает браузер сюда. Ограничитель входа не нужен: state
+	// зашифрован, живёт пять минут и проверяется до обращения к провайдеру.
+	mux.HandleFunc("GET /v1/auth/google/callback", s.getGoogleCallback)
+	mux.Handle("POST /v1/auth/yandex/start", s.authLimit.withRateLimit(
+		http.HandlerFunc(s.postYandexStart),
+	))
+	mux.Handle("POST /v1/auth/yandex/complete", s.authLimit.withRateLimit(
+		http.HandlerFunc(s.postYandexComplete),
+	))
+	mux.HandleFunc("POST /v1/auth/logout", s.postLogout)
 
 	// Перевод — без аккаунта. Читатель, поставивший приложение, должен
 	// получить перевод в первую же минуту: без него книга на чужом языке
@@ -112,6 +140,12 @@ func (s *Server) Handler() http.Handler {
 	// а вход не должен быть условием офлайн-чтения.
 	mux.HandleFunc("GET /v1/define", s.getDefinition)
 	mux.HandleFunc("GET /v1/dictionary", s.getDictionary)
+	// Манифест и сами пакеты публичны: проверка обновлений начинается до
+	// входа в аккаунт. Целостность пакета клиент отдельно сверяет по SHA-256.
+	if s.updates != nil {
+		mux.HandleFunc("GET /v1/update/latest", s.updates.Latest)
+		mux.HandleFunc("GET /v1/update/files/{name}", s.updates.File)
+	}
 
 	// Всё остальное — только для вошедших.
 	private := http.NewServeMux()
@@ -126,7 +160,7 @@ func (s *Server) Handler() http.Handler {
 
 	mux.Handle("/v1/", s.verifier.Middleware(private))
 
-	return s.withLogging(mux)
+	return s.withLogging(s.withCORS(mux))
 }
 
 func (s *Server) postLogin(w http.ResponseWriter, r *http.Request) {
@@ -139,6 +173,146 @@ func (s *Server) postRegister(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) postResendVerification(w http.ResponseWriter, r *http.Request) {
 	s.proxyAccount(w, r, "письмо с подтверждением", s.account.ResendVerification)
+}
+
+func (s *Server) postGoogleStart(w http.ResponseWriter, r *http.Request) {
+	if s.google == nil || !s.google.Configured() {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "вход через Google не настроен"})
+		return
+	}
+	var request social.StartRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&request); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "запрос не разобран"})
+		return
+	}
+	authorizationURL, err := s.google.Start(request)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"authorizationUrl": authorizationURL})
+}
+
+func (s *Server) getGoogleCallback(w http.ResponseWriter, r *http.Request) {
+	state := r.URL.Query().Get("state")
+	if s.google == nil || state == "" {
+		http.Error(w, "Запрос входа не найден.", http.StatusBadRequest)
+		return
+	}
+	if providerError := strings.TrimSpace(r.URL.Query().Get("error")); providerError != "" {
+		returnURL, err := s.google.ReturnURL(state)
+		if err != nil {
+			http.Error(w, "Запрос входа устарел.", http.StatusBadRequest)
+			return
+		}
+		if s.google.IsWebReturn(returnURL) {
+			redirectSocialError(w, r, returnURL, "Вход через Google отменён.")
+		} else {
+			writeSocialReturn(w, returnURL, http.StatusBadRequest, nil, "Вход через Google отменён.")
+		}
+		return
+	}
+	returnURL, result, err := s.google.Complete(r.Context(), r.URL.Query().Get("code"), state)
+	if err != nil {
+		if returnURL == "" {
+			http.Error(w, "Запрос входа устарел.", http.StatusBadRequest)
+			return
+		}
+		s.log.Warn("вход через Google не завершён", "error", err)
+		if s.google.IsWebReturn(returnURL) {
+			redirectSocialError(w, r, returnURL, "Не удалось завершить вход через Google.")
+		} else {
+			writeSocialReturn(w, returnURL, http.StatusBadGateway, nil, "Не удалось завершить вход через Google.")
+		}
+		return
+	}
+	if s.google.IsWebReturn(returnURL) {
+		token, _ := cookieSessionBody(result.Body)
+		if result.Status < 200 || result.Status >= 300 || token == "" {
+			redirectSocialError(w, r, returnURL, "Не удалось получить сессию Wolfy.")
+			return
+		}
+		http.SetCookie(w, sessionCookie(r, token))
+		http.Redirect(w, r, returnURL, http.StatusSeeOther)
+		return
+	}
+	writeSocialReturn(w, returnURL, result.Status, result.Body, "")
+}
+
+func (s *Server) postYandexStart(w http.ResponseWriter, r *http.Request) {
+	s.proxyAccount(w, r, "вход через Яндекс", s.account.YandexStart)
+}
+
+func (s *Server) postYandexComplete(w http.ResponseWriter, r *http.Request) {
+	s.proxyAccount(w, r, "вход через Яндекс", s.account.YandexComplete)
+}
+
+func (s *Server) postLogout(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, expiredSessionCookie(r))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// writeSocialReturn не кладёт сессионный токен в URL и историю браузера.
+// Браузер отправляет его POST-запросом только локальному слушателю приложения.
+func writeSocialReturn(w http.ResponseWriter, returnURL string, status int, payload []byte, message string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Вход в Wolfy</title></head><body style="font-family:system-ui,sans-serif;max-width:34rem;margin:12vh auto;padding:2rem;color:#26221d;background:#f7f2e8"><form id="result" method="post" action="`+
+		html.EscapeString(returnURL)+`"><input type="hidden" name="status" value="`+strconv.Itoa(status)+`"><input type="hidden" name="payload" value="`+
+		html.EscapeString(string(payload))+`"><input type="hidden" name="error" value="`+html.EscapeString(message)+`"><button type="submit" style="font:inherit;padding:.8rem 1.2rem">Вернуться в Wolfy</button></form><p>Вход завершён. Сейчас вы вернётесь в приложение.</p><script>document.getElementById('result').submit()</script></body></html>`)
+}
+
+func redirectSocialError(w http.ResponseWriter, r *http.Request, returnURL, message string) {
+	target, err := url.Parse(returnURL)
+	if err != nil {
+		http.Error(w, message, http.StatusBadRequest)
+		return
+	}
+	query := target.Query()
+	query.Set("error", message)
+	target.RawQuery = query.Encode()
+	http.Redirect(w, r, target.String(), http.StatusSeeOther)
+}
+
+func wantsCookie(r *http.Request) bool {
+	return strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Wolfy-Session")), "cookie")
+}
+
+// cookieSessionBody вынимает токен из ответа общего аккаунта и возвращает
+// тот же JSON без секрета. Браузеру достаточно httpOnly-куки; отдавать токен
+// в JavaScript после этого означало бы лишить куку смысла.
+func cookieSessionBody(body []byte) (string, []byte) {
+	var payload map[string]any
+	if json.Unmarshal(body, &payload) != nil {
+		return "", body
+	}
+	token, _ := payload["token"].(string)
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return "", body
+	}
+	delete(payload, "token")
+	sanitized, err := json.Marshal(payload)
+	if err != nil {
+		return "", body
+	}
+	return token, sanitized
+}
+
+func sessionCookie(r *http.Request, token string) *http.Cookie {
+	return &http.Cookie{
+		Name: auth.SessionCookie, Value: token, Path: "/", HttpOnly: true,
+		Secure: r.TLS != nil, SameSite: http.SameSiteLaxMode,
+	}
+}
+
+func expiredSessionCookie(r *http.Request) *http.Cookie {
+	cookie := sessionCookie(r, "")
+	cookie.MaxAge = -1
+	cookie.Expires = time.Unix(1, 0)
+	return cookie
 }
 
 // proxyAccount передаёт запрос Читавуку и возвращает его ответ как есть.
@@ -179,9 +353,16 @@ func (s *Server) proxyAccount(
 	if status >= 500 {
 		status = http.StatusBadGateway
 	}
+	responseBody := result.Body
+	if wantsCookie(r) && status >= 200 && status < 300 {
+		if token, sanitized := cookieSessionBody(result.Body); token != "" {
+			http.SetCookie(w, sessionCookie(r, token))
+			responseBody = sanitized
+		}
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
-	_, _ = w.Write(result.Body)
+	_, _ = w.Write(responseBody)
 }
 
 func (s *Server) getDiscoveryProfile(w http.ResponseWriter, r *http.Request) {
@@ -305,6 +486,9 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		// «Выслать письмо ещё раз».
 		"signIn":   s.account.Configured(),
 		"register": s.account.CanRegister(),
+		"resend":   s.account.CanResend(),
+		"google":   s.google != nil && s.google.Configured(),
+		"yandex":   s.account.CanYandex(),
 	})
 }
 
@@ -340,8 +524,26 @@ func (s *Server) getDictionary(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/gzip")
 	w.Header().Set("Content-Disposition", `attachment; filename="wolfy_dictionary.tsv.gz"`)
-	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	http.ServeContent(w, r, "wolfy_dictionary.tsv.gz", info.ModTime(), file)
+}
+
+func (s *Server) withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := strings.TrimRight(strings.TrimSpace(r.Header.Get("Origin")), "/")
+		if s.webOrigin != "" && origin == s.webOrigin {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Wolfy-Session")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
+			w.Header().Add("Vary", "Origin")
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // me возвращает пользователя, опознанного по токену Читавука. Клиент зовёт

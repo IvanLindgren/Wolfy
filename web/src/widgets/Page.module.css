@@ -1,0 +1,129 @@
+/*
+ * Общая рамка раздела: шапка-колонтитул и полоса содержимого.
+ *
+ * Один файл на все разделы, потому что рамка у них одна: заголовок антиквой,
+ * подзаголовок гротеском, тонкая линейка под ними. Повторить это в шести
+ * местах значит получить шесть слегка разных отступов.
+ */
+
+.page {
+  max-width: 64rem;
+  margin: 0 auto;
+  padding: clamp(1.25rem, 4vw, 2.25rem) var(--gutter) 4rem;
+}
+
+.page--wide {
+  max-width: 78rem;
+}
+
+.head {
+  display: flex;
+  align-items: flex-end;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding-bottom: 0.7rem;
+  margin-bottom: 1.35rem;
+  border-bottom: 2px solid var(--ink);
+}
+
+.title {
+  font-size: clamp(1.75rem, 4vw, 2.4rem);
+  line-height: 1.05;
+}
+
+.kicker {
+  font-size: 0.6875rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin-bottom: 0.35rem;
+}
+
+.subtitle {
+  color: var(--ink-muted);
+  font-size: 0.9375rem;
+  max-width: 44ch;
+}
+
+.headActions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.section {
+  margin-bottom: 2.25rem;
+}
+
+.sectionHead {
+  display: flex;
+  align-items: baseline;
+  gap: 0.7rem;
+  margin-bottom: 0.85rem;
+}
+
+.sectionTitle {
+  font-size: 1.15rem;
+}
+
+.sectionRule {
+  flex: 1;
+  height: 1px;
+  background: var(--rule);
+}
+
+.muted {
+  color: var(--ink-muted);
+  font-size: 0.9375rem;
+  line-height: 1.5;
+}
+
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+  padding: 0.75rem 0.9rem;
+  margin-bottom: 1.25rem;
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: 0.9375rem;
+  line-height: 1.45;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-bottom: 0.85rem;
+}
+
+.label {
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+.input {
+  width: 100%;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: 0.9375rem;
+  transition: border-color var(--quick, 180ms) ease;
+}
+
+.input:focus {
+  border-color: var(--ink-muted);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}

@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Wolfy — читалка английских книг</title>
+    <meta
+      name="description"
+      content="Читалка английских книг: тап по слову даёт контекстный перевод, разбор формы и грамматику предложения, а отмеченные слова уходят в колоду повторений."
+    />
+    <meta name="theme-color" content="#fbf9f5" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#231f20" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" href="/favicon.png" type="image/png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+
+    <!--
+      Шрифты подключаются рано, но не блокируют: `display=optional` значит
+      «успел — хорошо, не успел — верстаем запасным и больше не дёргаемся».
+      Подмена в середине абзаца двигает всю колонку, и это хуже, чем чужой
+      шрифт с самого начала.
+    -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+
+    <!--
+      Первый экран приходит разметкой, а не после загрузки JS.
+      Урок десктопной версии: до окна проходило две секунды, всё это время
+      экран был пуст, и пользователь щёлкал по значку второй раз. Заставка
+      решила проблему полностью — 0,2 секунды вместо 2,9 при той же скорости
+      запуска. Здесь то же самое: шапка и скелет полосы видны сразу, а
+      `.wasm`, лексикон и шрифты подтягиваются следом.
+
+      Стили этого экрана — инлайном: отдельный файл это ещё один запрос перед
+      первой краской, то есть ровно та задержка, которую мы убираем.
+    -->
+    <style>
+      :root {
+        --boot-paper: #fbf9f5;
+        --boot-ink: #111111;
+        --boot-rule: #d9d8d2;
+        --boot-muted: #6b6b66;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --boot-paper: #231f20;
+          --boot-ink: #ddd7cc;
+          --boot-rule: #3a3532;
+          --boot-muted: #918a7d;
+        }
+      }
+      html,
+      body {
+        margin: 0;
+        background: var(--boot-paper);
+        color: var(--boot-ink);
+      }
+      body {
+        font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+      }
+      .boot {
+        min-height: 100dvh;
+        display: flex;
+        flex-direction: column;
+      }
+      .boot__masthead {
+        display: flex;
+        align-items: baseline;
+        gap: 0.75rem;
+        padding: 1.15rem clamp(1rem, 4vw, 2.5rem) 0.85rem;
+        border-bottom: 1px solid var(--boot-rule);
+      }
+      .boot__title {
+        font-family: 'Playfair Display', Georgia, serif;
+        font-size: 1.5rem;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        margin: 0;
+      }
+      .boot__kicker {
+        font-size: 0.75rem;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--boot-muted);
+      }
+      .boot__page {
+        width: min(66ch, 100% - clamp(2rem, 8vw, 5rem));
+        margin: clamp(1.75rem, 6vh, 3.5rem) auto 0;
+      }
+      .boot__line {
+        height: 0.72rem;
+        margin-bottom: 0.92rem;
+        border-radius: 2px;
+        background: var(--boot-rule);
+        opacity: 0.55;
+      }
+      .boot__line--head {
+        height: 1.8rem;
+        width: 62%;
+        margin-bottom: 1.6rem;
+        opacity: 0.75;
+      }
+      .boot__line--short {
+        width: 46%;
+      }
+      .boot__note {
+        margin-top: 2rem;
+        font-size: 0.8125rem;
+        color: var(--boot-muted);
+      }
+      /* Скелет не мигает и не крутится: движение здесь ничего не объясняет. */
+      @media (prefers-reduced-motion: no-preference) {
+        .boot__line {
+          animation: boot-breathe 2.4s ease-in-out infinite;
+        }
+        @keyframes boot-breathe {
+          0%,
+          100% {
+            opacity: 0.4;
+          }
+          50% {
+            opacity: 0.65;
+          }
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <div class="boot" aria-hidden="true">
+        <header class="boot__masthead">
+          <h1 class="boot__title">Wolfy</h1>
+          <span class="boot__kicker">Тихий урок в каждой книге</span>
+        </header>
+        <div class="boot__page">
+          <div class="boot__line boot__line--head"></div>
+          <div class="boot__line"></div>
+          <div class="boot__line"></div>
+          <div class="boot__line"></div>
+          <div class="boot__line boot__line--short"></div>
+          <div class="boot__line"></div>
+          <div class="boot__line"></div>
+          <div class="boot__line boot__line--short"></div>
+          <p class="boot__note">Открываем библиотеку…</p>
+        </div>
+      </div>
+    </div>
+    <noscript>
+      <p style="padding: 2rem; font-family: system-ui, sans-serif">
+        Wolfy разбирает книгу прямо в браузере, и для этого нужен JavaScript.
+        Включите его — и книга откроется тут же, без единого запроса в сеть.
+      </p>
+    </noscript>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -10,9 +10,10 @@
 core/     Rust — потоковые парсеры книг, токенизация, лемматизация, грамматика
 server/   Go   — общая с Читавуком авторизация, синхронизация, прокси внешних API
 client/   Kotlin Compose Multiplatform — Android и Windows
-proto/    общие DTO клиента, сервера и ядра
+docs/     архитектура: границы слоёв и контракты между ними
 rules/    правила разработки по слоям — читать перед правкой слоя
 tools/    генераторы словарей и вспомогательные скрипты
+deploy/   systemd, Nginx и атомарная production-выкладка через GitHub Actions
 ```
 
 Ядро на Rust линкуется в клиент напрямую (JNI на Android, C-FFI на Windows): разбор
@@ -63,9 +64,26 @@ cd client && ./gradlew :shared:desktopTest  # тесты общего кода
 ./gradlew :androidApp:assembleDebug         # apk
 ```
 
+## Выпуск и автообновление
+
+Сервис раздаёт последние `Wolfy-X.Y.Z.msi` и `Wolfy-X.Y.Z-debug.apk` из каталога
+`WOLFY_RELEASES_PATH`. После сборки достаточно атомарно скопировать туда новый пакет:
+перезапускать сервер и редактировать манифест не нужно. Клиент сам скачает новую
+версию, проверит SHA-256 и покажет сверху кнопку перезапуска.
+
+Установщик Windows уже содержит отдельный `wolfy-updater.exe`. Для production-сборки
+адрес API задаётся окружением `WOLFY_SERVER_URL` или Gradle-свойством
+`-PwolfyServerUrl=https://…`; без него desktop использует `localhost`, а Android —
+адрес хоста эмулятора `10.0.2.2`. APK вне Google Play должен быть подписан тем же ключом, что
+и установленная версия. Сборка из Google Play использует штатное гибкое обновление
+магазина.
+
 ## Документация
 
 - `rules/` — правила по слоям: [ядро](rules/rust_core.md), [сервер](rules/go_server.md),
   [клиент](rules/kotlin_client.md), [грамматика](rules/grammar_engine.md),
   [общий протокол](rules/shared_protocol.md)
-- `docs/architecture.md` — как слои связаны и почему именно так
+- `docs/architecture.md` — карта кода, границы слоёв и контракты между ними
+- `WOLFY_PROMPT.md` — продуктовый промпт: функции, дизайн-система, грамматика
+- `WOLFY_WEB_PROMPT.md` — промпт на веб-версию с тем же функционалом
+- `deploy/README.md` — CI/CD и одноразовая подготовка `wolfy.citavuk.ru`

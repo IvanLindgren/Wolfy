@@ -2,6 +2,8 @@ package com.wolfy.ui.card
 
 import androidx.compose.runtime.Immutable
 import com.wolfy.ffi.Finding
+import com.wolfy.ffi.GrammarChunk
+import com.wolfy.ffi.GrammarMarker
 import com.wolfy.ffi.DictionaryEntry
 import com.wolfy.ffi.Token
 import com.wolfy.ffi.WordAnalysis
@@ -31,6 +33,10 @@ data class WordCardState(
      * каждом предложении есть чему учиться.
      */
     val grammar: List<Finding> = emptyList(),
+    /** Токены предложения и точные блоки/маркеры из Rust-ядра. */
+    val sentenceTokens: List<Token> = emptyList(),
+    val chunks: List<GrammarChunk> = emptyList(),
+    val markers: List<GrammarMarker> = emptyList(),
     /** Слова и связи фразы, уже подготовленные вне композиции. */
     val graphWords: List<GraphWord> = emptyList(),
     val graphLinks: List<GraphLink> = emptyList(),

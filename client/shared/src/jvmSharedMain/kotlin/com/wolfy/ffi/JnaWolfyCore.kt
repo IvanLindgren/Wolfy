@@ -80,9 +80,9 @@ internal class JnaWolfyCore(private val library: CoreLibrary) : WolfyCore {
         return json.decodeFromString(raw)
     }
 
-    override fun explain(sentence: String): List<Finding> {
+    override fun explain(sentence: String): GrammarResult {
         val raw = library.wolfy_explain(sentence.toUtf8()).takeString("разбор грамматики")
-        return json.decodeFromString<GrammarResult>(raw).findings
+        return json.decodeFromString(raw)
     }
 
     override fun reference(): List<Article> {

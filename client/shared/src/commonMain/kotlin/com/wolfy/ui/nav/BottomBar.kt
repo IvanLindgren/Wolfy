@@ -4,13 +4,24 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.shape.CircleShape
 import com.wolfy.theme.WolfyTheme
+import com.wolfy.theme.Curves
+import com.wolfy.widgets.LocalFlight
+import com.wolfy.widgets.flightTarget
 import com.wolfy.widgets.NavGlyph
 import com.wolfy.widgets.NavIcon
 import com.wolfy.widgets.Rule
@@ -44,6 +55,8 @@ enum class Section(val title: String, val icon: NavIcon) {
     More("Ещё", NavIcon.More),
 }
 
+const val FLIGHT_CARDS = "cards"
+
 /**
  * Нижняя панель разделов.
  *
@@ -74,15 +87,42 @@ fun BottomBar(
             Section.entries.forEach { section ->
                 val active = section == selected
                 val tint = if (active) colors.accent else colors.inkMuted
+                val flight = LocalFlight.current
+                val arrived = if (section == Section.Cards) flight.arrivals[FLIGHT_CARDS] ?: 0 else 0
+                val pop = remember(section) { Animatable(1f) }
+                val motion = WolfyTheme.motion
+                LaunchedEffect(arrived) {
+                    if (arrived == 0 || motion.instant == 0) return@LaunchedEffect
+                    pop.animateTo(1.12f, tween(motion.instant, easing = Curves.Paper))
+                    pop.animateTo(1f, tween(motion.quick, easing = Curves.Paper))
+                }
 
                 Column(
                     Modifier
-                        .pressable { onSelect(section) }
+                        .then(if (section == Section.Cards) Modifier.flightTarget(FLIGHT_CARDS) else Modifier)
+                        .graphicsLayer { scaleX = pop.value; scaleY = pop.value }
+                        .pressable {
+                            if (section == Section.Cards) flight.clearArrivals(FLIGHT_CARDS)
+                            onSelect(section)
+                        }
                         .padding(horizontal = spacing.small, vertical = spacing.tight),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(spacing.tight),
                 ) {
-                    NavGlyph(section.icon, tint = tint)
+                    Box {
+                        NavGlyph(section.icon, tint = tint)
+                        if (arrived > 0) {
+                            Text(
+                                text = arrived.coerceAtMost(99).toString(),
+                                style = WolfyTheme.typography.caption,
+                                color = colors.onAccent,
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .background(colors.accent, CircleShape)
+                                    .padding(horizontal = 4.dp),
+                            )
+                        }
+                    }
                     Text(
                         text = section.title,
                         style = WolfyTheme.typography.caption,

@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -42,6 +43,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -52,12 +54,17 @@ import androidx.compose.ui.unit.dp
 import com.wolfy.ffi.Finding
 import com.wolfy.theme.WolfyTheme
 import com.wolfy.widgets.CefrBadge
+import com.wolfy.widgets.Appear
 import com.wolfy.widgets.SectionLabel
 import com.wolfy.widgets.SentenceGraph
+import com.wolfy.widgets.SentenceTree
+import com.wolfy.widgets.PhraseBlocks
+import com.wolfy.widgets.LocalFlight
+import com.wolfy.widgets.rememberLaunchPad
+import com.wolfy.ui.nav.FLIGHT_CARDS
 import com.wolfy.widgets.WolfyCompanion
 import com.wolfy.widgets.pressable
 import kotlin.math.pow
-import kotlinx.coroutines.delay
 
 /**
  * Карточка слова, всплывающая снизу.
@@ -144,6 +151,8 @@ private fun CardBody(
     val spacing = WolfyTheme.spacing
     val typography = WolfyTheme.typography
     var mode by remember(state.token.start, state.context) { mutableStateOf(CardMode.Word) }
+    val flight = LocalFlight.current
+    val (launchModifier, launchBounds) = rememberLaunchPad()
 
     Column(
         Modifier
@@ -189,7 +198,7 @@ private fun CardBody(
             Modifier.verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(spacing.medium),
         ) {
-            Header(state, onPronounce)
+            Header(state, onPronounce, launchModifier)
             Translation(state)
             Definition(state)
             CardModeTabs(mode = mode, onMode = { mode = it })
@@ -197,7 +206,15 @@ private fun CardBody(
                 when (selected) {
                     CardMode.Word -> WordDetails(
                         state = state,
-                        onSave = onSave,
+                        onSave = {
+                            val adding = !state.saved
+                            onSave()
+                            if (adding) {
+                                launchBounds()?.let { bounds ->
+                                    flight.send(bounds, FLIGHT_CARDS, state.analysis.surface)
+                                }
+                            }
+                        },
                         onOpenRule = onOpenRule,
                     )
                     CardMode.Phrase -> PhraseDetails(
@@ -417,42 +434,6 @@ private fun PosPill(tag: String) {
     Chip(text = posTitle(tag), tint = tint)
 }
 
-/**
- * Появление с задержкой.
- *
- * Карточка выезжала собранной целиком, и взгляду некуда было сесть первым:
- * слово, перевод и шесть строк разбора приезжали одновременно и весили
- * одинаково. Здесь они приходят по очереди — сначала главное, — и порядок
- * чтения задаётся движением, а не размером шрифта.
- *
- * Шаг маленький: сорок миллисекунд между блоками читаются как «оживает», а
- * не как «подтормаживает». Всё вместе укладывается в треть секунды.
- */
-@Composable
-private fun Appear(order: Int, content: @Composable () -> Unit) {
-    val shown = remember { Animatable(0f) }
-    LaunchedEffect(Unit) {
-        delay(order * STEP)
-        shown.animateTo(1f, tween(durationMillis = 260))
-    }
-    Box(
-        Modifier.graphicsLayer {
-            alpha = shown.value
-            // Подъём снизу, а не падение сверху: содержимое приходит из-под
-            // края карточки, как продолжение её собственного выезда.
-            translationY = (1f - shown.value) * RISE.toPx()
-        },
-    ) {
-        content()
-    }
-}
-
-/** Шаг между блоками при появлении. */
-private const val STEP = 40L
-
-/** Насколько блок приподнят перед тем, как встать на место. */
-private val RISE = 10.dp
-
 /** Насколько разбавлен цвет части речи под плиткой. */
 private const val TINT = 0.14f
 
@@ -478,11 +459,15 @@ private fun PhraseDetails(
     val spacing = WolfyTheme.spacing
     Column(verticalArrangement = Arrangement.spacedBy(spacing.medium)) {
         SectionLabel("Разбор фразы")
-        Text(
-            state.context,
-            style = WolfyTheme.typography.translation,
-            color = WolfyTheme.colors.ink,
-        )
+        if (state.chunks.isNotEmpty()) {
+            PhraseBlocks(state.sentenceTokens, state.chunks, state.markers)
+        } else {
+            Text(
+                state.context,
+                style = WolfyTheme.typography.translation,
+                color = WolfyTheme.colors.ink,
+            )
+        }
         val translated = (state.translation as? TranslationState.Ready)?.sentence.orEmpty()
         if (translated.isNotBlank()) {
             Text(
@@ -491,8 +476,17 @@ private fun PhraseDetails(
                 color = WolfyTheme.colors.inkMuted,
             )
         }
-        SectionLabel("Связи слов в предложении")
-        if (state.graphLinks.isEmpty()) {
+        if (state.grammar.isNotEmpty()) {
+            SectionLabel("Грамматика фразы")
+            state.grammar.forEach { finding ->
+                GrammarNote(finding, onOpen = { onOpenRule(finding.rule) })
+            }
+        }
+
+        SectionLabel("Граф синтаксических связей")
+        if (state.chunks.isNotEmpty()) {
+            SentenceTree(tokens = state.sentenceTokens, chunks = state.chunks)
+        } else if (state.graphLinks.isEmpty()) {
             Text(
                 "В этой фразе нет однозначных связей, которые можно показать без догадки.",
                 style = WolfyTheme.typography.caption,
@@ -500,13 +494,6 @@ private fun PhraseDetails(
             )
         } else {
             SentenceGraph(words = state.graphWords, links = state.graphLinks)
-        }
-
-        if (state.grammar.isNotEmpty()) {
-            SectionLabel("Грамматика фразы")
-            state.grammar.forEach { finding ->
-                GrammarNote(finding, onOpen = { onOpenRule(finding.rule) })
-            }
         }
         WolfyPhraseTip(state)
         PhraseButton(state = state, onSave = onSave)
@@ -571,7 +558,7 @@ private fun WolfyTip(text: String) {
 }
 
 @Composable
-private fun Header(state: WordCardState, onPronounce: () -> Unit) {
+private fun Header(state: WordCardState, onPronounce: () -> Unit, wordModifier: Modifier) {
     val colors = WolfyTheme.colors
     val typography = WolfyTheme.typography
     val spacing = WolfyTheme.spacing
@@ -582,7 +569,7 @@ private fun Header(state: WordCardState, onPronounce: () -> Unit) {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            HighlightedWord(state)
+            HighlightedWord(state, wordModifier)
             CefrBadge(state.analysis.cefr)
         }
         val tag = state.analysis.primaryPos
@@ -613,12 +600,12 @@ private fun Header(state: WordCardState, onPronounce: () -> Unit) {
 
 /** Окончание выделено цветом: именно оно объясняет форму слова в тексте. */
 @Composable
-private fun HighlightedWord(state: WordCardState) {
+private fun HighlightedWord(state: WordCardState, modifier: Modifier = Modifier) {
     val surface = state.analysis.surface
     val ending = inflectionEnding(surface, state.analysis.lemma, state.analysis.form)
     val colors = WolfyTheme.colors
     if (ending == null) {
-        Text(surface, style = WolfyTheme.typography.screenTitle, color = colors.ink)
+        Text(surface, style = WolfyTheme.typography.screenTitle, color = colors.ink, modifier = modifier)
         return
     }
 
@@ -631,6 +618,7 @@ private fun HighlightedWord(state: WordCardState) {
         },
         style = WolfyTheme.typography.screenTitle,
         color = colors.ink,
+        modifier = modifier,
     )
 }
 
@@ -776,7 +764,10 @@ private fun GrammarNote(finding: Finding, onOpen: () -> Unit) {
     Column(
         Modifier
             .fillMaxWidth()
-            .background(colors.paper, RoundedCornerShape(spacing.small))
+            .background(
+                colors.ruleFamilies.forFamily(finding.rule).copy(alpha = 0.42f),
+                RoundedCornerShape(spacing.small),
+            )
             .pressable(onClick = onOpen)
             .padding(spacing.small),
         verticalArrangement = Arrangement.spacedBy(spacing.tight),
@@ -787,7 +778,17 @@ private fun GrammarNote(finding: Finding, onOpen: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(text = finding.title, style = typography.body, color = colors.ink)
-            Text(text = finding.formula, style = typography.caption, color = colors.accent)
+            Text(
+                text = finding.formula,
+                style = typography.caption,
+                color = colors.ink,
+                modifier = Modifier
+                    .background(
+                        colors.ruleFamilies.forFamily(finding.rule),
+                        RoundedCornerShape(spacing.tight),
+                    )
+                    .padding(horizontal = spacing.tight, vertical = spacing.hair),
+            )
         }
         Text(text = finding.explanation, style = typography.caption, color = colors.inkMuted)
         // Правило в карточке объяснено коротко, потому что читатель посреди
@@ -834,8 +835,9 @@ private fun Frequency(zipf: Float) {
     // растущей полосой и успевает заметить, где она остановилась, а готовую
     // считывает как фон.
     val grown = remember { Animatable(0f) }
+    val motion = WolfyTheme.motion
     LaunchedEffect(fraction) {
-        grown.animateTo(fraction, tween(durationMillis = 520))
+        grown.animateTo(fraction, tween(durationMillis = motion.calm, easing = com.wolfy.theme.Curves.Paper))
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(spacing.small)) {
@@ -855,18 +857,31 @@ private fun Frequency(zipf: Float) {
                 color = tint,
             )
         }
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(spacing.small)
-                .background(colors.paper, CircleShape),
-        ) {
+        Box(Modifier.fillMaxWidth().height(spacing.large)) {
             Box(
                 Modifier
-                    .fillMaxWidth(grown.value)
-                    .height(spacing.small)
-                    .background(tint, CircleShape),
+                    .fillMaxWidth()
+                    .height(spacing.hair)
+                    .align(Alignment.Center)
+                    .background(colors.rule, CircleShape),
             )
+            Box(
+                Modifier
+                    .fillMaxWidth(grown.value.coerceAtLeast(0.001f))
+                    .align(Alignment.CenterStart),
+            ) {
+                Box(
+                    Modifier
+                        .size(spacing.medium)
+                        .align(Alignment.CenterEnd)
+                        .rotate(45f)
+                        .background(tint),
+                )
+            }
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("редко", style = WolfyTheme.typography.caption, color = colors.inkMuted)
+            Text("часто", style = WolfyTheme.typography.caption, color = colors.inkMuted)
         }
     }
 }

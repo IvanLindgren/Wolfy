@@ -25,7 +25,9 @@
 //!
 //! Заголовок для компоновщика — `core/include/wolfy_core.h`.
 
-mod dto;
+// Публичный, потому что в те же формы отвечает и `wasm`-дверь: контракт с
+// клиентом один, и второй его копии быть не должно.
+pub mod dto;
 pub mod session;
 
 use std::cell::RefCell;
@@ -43,8 +45,8 @@ use crate::tokenizer::{split, tokenize};
 use session::{Command, Session};
 
 use dto::{
-    ArticleDto, BookDto, ChapterDto, ExerciseDto, ExercisesDto, FindingDto, GrammarDto,
-    ReferenceDto, TextDto, TokenDto, WordDto,
+    ArticleDto, BookDto, ChapterDto, ChunkDto, ExerciseDto, ExercisesDto, FindingDto, GrammarDto,
+    MarkerDto, ReferenceDto, TextDto, TokenDto, WordDto,
 };
 
 thread_local! {
@@ -152,10 +154,15 @@ pub unsafe extern "C" fn wolfy_explain(text: *const c_char) -> *mut c_char {
     guard(|| {
         let text = unsafe { read_string(text) }?;
         let tokens = tokenize(&text);
-        let findings = crate::grammar::analyze(Lexicon::embedded(), &tokens);
+        let lexicon = Lexicon::embedded();
+        let findings = crate::grammar::analyze(lexicon, &tokens);
+        let chunks = crate::grammar::chunks(lexicon, &tokens, &findings);
+        let markers = crate::grammar::markers(lexicon, &tokens, &findings);
 
         to_json(&GrammarDto {
             findings: findings.iter().map(FindingDto::from).collect(),
+            chunks: chunks.iter().map(ChunkDto::from).collect(),
+            markers: markers.iter().map(MarkerDto::from).collect(),
         })
     })
 }
@@ -640,6 +647,18 @@ mod tests {
         // Смещения обязаны быть в тех же токенах, что отдаёт wolfy_tokenize:
         // по ним клиент подсвечивает страницу.
         assert!(findings[0]["end"].as_u64().unwrap_or(0) > 0);
+        assert!(
+            value["chunks"]
+                .as_array()
+                .is_some_and(|chunks| !chunks.is_empty()),
+            "роли не прошли через FFI: {json}"
+        );
+        assert!(
+            value["markers"]
+                .as_array()
+                .is_some_and(|markers| !markers.is_empty()),
+            "маркеры не прошли через FFI: {json}"
+        );
     }
 
     #[test]

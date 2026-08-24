@@ -217,6 +217,13 @@ pub enum Command {
     SetLineScale {
         scale: f32,
     },
+    SeenOnboarding,
+    SeenVersion {
+        version: String,
+    },
+    SetReduceMotion {
+        on: bool,
+    },
     SetIntensity {
         intensity: String,
     },
@@ -629,6 +636,24 @@ impl Session {
                 self.done(Outcome::default())
             }
 
+            Command::SeenOnboarding => {
+                self.settings.onboarding_seen = true;
+                self.settings_dirty = true;
+                self.done(Outcome::default())
+            }
+
+            Command::SeenVersion { version } => {
+                self.settings.last_seen_version = version;
+                self.settings_dirty = true;
+                self.done(Outcome::default())
+            }
+
+            Command::SetReduceMotion { on } => {
+                self.settings.reduce_motion = on;
+                self.settings_dirty = true;
+                self.done(Outcome::default())
+            }
+
             Command::SetIntensity { intensity } => {
                 self.settings.intensity = intensity;
                 self.settings_dirty = true;
@@ -694,9 +719,17 @@ impl Session {
     fn define(&mut self, word: &str, path: &str) -> Outcome {
         let requested = PathBuf::from(path);
         if requested.as_os_str().is_empty() {
-            return Outcome {
-                dictionary_available: Some(false),
-                ..Outcome::default()
+            // Пустой путь — не ошибка, а «словарь уже в памяти»: в браузере
+            // файловой системы нет и путь взяться неоткуда, а сам словарь
+            // приезжает буфером через [`Session::use_dictionary`].
+            return match self.dictionary.as_mut() {
+                Some(dictionary) if self.dictionary_path.is_none() => {
+                    Session::looked_up(dictionary.lookup(word))
+                }
+                _ => Outcome {
+                    dictionary_available: Some(false),
+                    ..Outcome::default()
+                },
             };
         }
 
@@ -723,22 +756,41 @@ impl Session {
                 ..Outcome::default()
             };
         };
-        match dictionary.lookup(word) {
+        let outcome = Session::looked_up(dictionary.lookup(word));
+        if outcome.dictionary_available == Some(false) {
+            // Повреждённый или исчезнувший файл не остаётся в кэше:
+            // после повторной загрузки тот же путь должен открыться снова.
+            self.dictionary = None;
+            self.dictionary_path = None;
+        }
+        outcome
+    }
+
+    /// Кладёт словарь, пришедший буфером, — так он приезжает в браузере.
+    pub fn use_dictionary(&mut self, bytes: Vec<u8>) -> bool {
+        match Dictionary::from_bytes(bytes) {
+            Ok(dictionary) => {
+                self.dictionary = Some(dictionary);
+                // Пути у него нет: по отсутствию пути `define` и узнаёт, что
+                // словарь лежит в памяти, а не на диске.
+                self.dictionary_path = None;
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    fn looked_up(found: crate::Result<Option<DictionaryEntry>>) -> Outcome {
+        match found {
             Ok(definition) => Outcome {
                 definition,
                 dictionary_available: Some(true),
                 ..Outcome::default()
             },
-            Err(_) => {
-                // Повреждённый или исчезнувший файл не остаётся в кэше:
-                // после повторной загрузки тот же путь должен открыться снова.
-                self.dictionary = None;
-                self.dictionary_path = None;
-                Outcome {
-                    dictionary_available: Some(false),
-                    ..Outcome::default()
-                }
-            }
+            Err(_) => Outcome {
+                dictionary_available: Some(false),
+                ..Outcome::default()
+            },
         }
     }
 
@@ -1007,6 +1059,9 @@ mod tests {
             r#"{"op":"setTheme","theme":"Sepia"}"#,
             r#"{"op":"setFontScale","scale":1.2}"#,
             r#"{"op":"setLineScale","scale":1.1}"#,
+            r#"{"op":"seenOnboarding"}"#,
+            r#"{"op":"seenVersion","version":"1.0.5"}"#,
+            r#"{"op":"setReduceMotion","on":true}"#,
             r#"{"op":"setIntensity","intensity":"Strong"}"#,
             r#"{"op":"markDemoAdded"}"#,
             r#"{"op":"replaceSettings","settings":{"theme":"Oled"}}"#,

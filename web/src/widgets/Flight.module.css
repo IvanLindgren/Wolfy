@@ -1,0 +1,23 @@
+.layer {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  pointer-events: none;
+}
+
+.word {
+  position: absolute;
+  top: 0;
+  left: 0;
+  /* Точка отсчёта — центр слова: дуга целится в центр значка, а не в его
+     верхний левый угол. */
+  translate: -50% -50%;
+  padding: 0.2rem 0.55rem;
+  border-radius: var(--radius);
+  background: var(--inverse);
+  color: var(--on-inverse);
+  font-family: var(--serif), 'Playfair Fallback';
+  font-size: 1.05rem;
+  white-space: nowrap;
+  box-shadow: var(--shadow);
+}

@@ -38,6 +38,9 @@ object WolfyTheme {
 
     val spacing: WolfySpacing
         @Composable get() = LocalWolfySpacing.current
+
+    val motion: WolfyMotion
+        @Composable get() = LocalWolfyMotion.current
 }
 
 /**
@@ -74,6 +77,9 @@ val LocalWolfyFonts: ProvidableCompositionLocal<WolfyFonts> =
 val LocalWolfySpacing: ProvidableCompositionLocal<WolfySpacing> =
     staticCompositionLocalOf { WolfySpacing() }
 
+val LocalWolfyMotion: ProvidableCompositionLocal<WolfyMotion> =
+    staticCompositionLocalOf { WolfyMotion() }
+
 /**
  * Оборачивает интерфейс в выбранную тему.
  *
@@ -87,6 +93,7 @@ fun WolfyTheme(
     theme: ReadingTheme = ReadingTheme.Paper,
     fontScale: Float = 1f,
     lineScale: Float = 1f,
+    reduceMotion: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     val fonts = rememberWolfyFonts()
@@ -100,6 +107,7 @@ fun WolfyTheme(
         LocalWolfyFonts provides fonts,
         LocalWolfyTypography provides typography,
         LocalWolfySpacing provides WolfySpacing(),
+        LocalWolfyMotion provides if (reduceMotion) NoMotion else WolfyMotion(),
         // Ripple убран намеренно: расходящийся круг — жест материальной
         // поверхности, а страница книги бумажная. Нажатие показывается
         // деликатным масштабированием, см. widgets/Pressable.

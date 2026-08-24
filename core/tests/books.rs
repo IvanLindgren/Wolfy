@@ -10,7 +10,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use wolfy_core::lexicon::{analyze, FormKind, Lexicon};
-use wolfy_core::parser::{open, Block};
+use wolfy_core::parser::{from_pages, open, open_bytes, Block};
 use wolfy_core::tokenizer::{split, tokenize, TokenKind};
 
 const CONTAINER: &str = r#"<?xml version="1.0"?>
@@ -213,4 +213,71 @@ fn битый_архив_возвращает_ошибку_а_не_панику(
         "непонятное сообщение: {}",
         err.describe()
     );
+}
+
+/// Та же книга, но из памяти — так она приходит в браузере.
+///
+/// Проверка не про формат, а про то, что дверь одна: браузер отдаёт байты, и
+/// разбираться они обязаны ровно тем же кодом, что и файл на диске. Разойдись
+/// эти два пути — и книга, открытая на телефоне и на вебе, стала бы разной
+/// книгой с разным оглавлением.
+#[test]
+fn epub_из_памяти_читается_так_же_как_с_диска() {
+    let path = собрать_epub("wolfy_integration_bytes.epub");
+    let bytes = std::fs::read(&path).expect("файл читается");
+
+    let mut с_диска = open(&path).expect("книга с диска");
+    let mut из_памяти = open_bytes("epub", None, bytes).expect("книга из памяти");
+
+    assert_eq!(из_памяти.metadata(), с_диска.metadata());
+    assert_eq!(из_памяти.contents().len(), с_диска.contents().len());
+    assert_eq!(
+        из_памяти.chapter(1).expect("глава из памяти"),
+        с_диска.chapter(1).expect("глава с диска")
+    );
+}
+
+#[test]
+fn текст_из_памяти_получает_название_снаружи() {
+    // Имени файла у байтов нет, и название обязан передать тот, кто его видел.
+    let книга = open_bytes(
+        "txt",
+        Some("Тихий вечер".to_string()),
+        "The library smelled of dust.".as_bytes().to_vec(),
+    )
+    .expect("книга из памяти");
+
+    assert_eq!(книга.metadata().title.as_deref(), Some("Тихий вечер"));
+}
+
+#[test]
+fn страницы_из_браузера_сохраняют_пустые() {
+    // Одна физическая страница — одна единица навигации. Выброшенная
+    // иллюстрация без текстового слоя сдвинула бы все номера после себя, и
+    // оглавление разошлось бы с напечатанной колонцифрой.
+    let mut книга = from_pages(
+        Some("Отчёт".to_string()),
+        vec![
+            "The first page.".to_string(),
+            String::new(),
+            "The third page.".to_string(),
+        ],
+    )
+    .expect("книга из страниц");
+
+    assert_eq!(книга.contents().len(), 3);
+    assert!(книга.chapter(1).expect("пустая страница").blocks.is_empty());
+    assert!(книга
+        .chapter(2)
+        .expect("третья страница")
+        .plain_text()
+        .contains("third"));
+}
+
+#[test]
+fn скан_без_текстового_слоя_отвергается_понятной_ошибкой() {
+    let Err(err) = from_pages(None, vec![String::new(), "   ".to_string()]) else {
+        panic!("скан без текста не должен становиться книгой");
+    };
+    assert!(err.describe().contains("OCR"), "{}", err.describe());
 }

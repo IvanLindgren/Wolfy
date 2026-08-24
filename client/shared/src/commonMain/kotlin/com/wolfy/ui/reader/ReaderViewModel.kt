@@ -252,7 +252,8 @@ class ReaderViewModel(
         // же предложение и стоит доли миллисекунды. Тянуть её вторым шагом
         // значило бы показать карточку, которая потом дёрнется.
         val grammar = core.explain(context)
-        val graph = buildSentenceGraph(core, context, grammar)
+        val sentenceTokens = core.tokenize(context).tokens
+        val graph = buildSentenceGraph(core, context, grammar.findings)
 
         _state.update {
             it.copy(
@@ -261,7 +262,10 @@ class ReaderViewModel(
                     token = token,
                     analysis = analysis,
                     context = context,
-                    grammar = grammar,
+                    grammar = grammar.findings,
+                    sentenceTokens = sentenceTokens,
+                    chunks = grammar.chunks,
+                    markers = grammar.markers,
                     graphWords = graph.first,
                     graphLinks = graph.second,
                     translation = TranslationState.Loading,

@@ -9,6 +9,7 @@
 //! дальше главы отдаются из памяти. Для книги в несколько мегабайт это
 //! приемлемо; тяжёлые сканы всё равно идут через OCR, а не сюда.
 
+#[cfg(feature = "native")]
 use std::path::Path;
 
 use crate::error::{CoreError, Result};
@@ -22,6 +23,40 @@ pub struct PdfBook {
 }
 
 impl PdfBook {
+    /// Собирает книгу из готовых страниц.
+    ///
+    /// Так PDF приходит из браузера: `pdf-extract` не собирается под
+    /// `wasm32-unknown-unknown`, а текстовый слой умеет доставать и `pdf.js`.
+    /// Разбивку на страницы при этом обязан сохранить тот, кто извлекал: одна
+    /// физическая страница — одна единица навигации, и склеенный текст сбил
+    /// бы и номера, и оглавление, и прогресс.
+    pub fn from_pages(title: Option<String>, pages: Vec<String>) -> Result<Self> {
+        if pages.iter().all(|page| page.trim().is_empty()) {
+            return Err(CoreError::Malformed(
+                "в PDF нет текстового слоя — похоже, это скан: распознайте страницы через OCR"
+                    .to_string(),
+            ));
+        }
+
+        let chapters = split_pages(&pages);
+        let contents = chapters
+            .iter()
+            .map(|c| ChapterInfo {
+                title: c.title.clone(),
+            })
+            .collect();
+
+        Ok(PdfBook {
+            metadata: Metadata {
+                title,
+                ..Metadata::default()
+            },
+            contents,
+            chapters,
+        })
+    }
+
+    #[cfg(feature = "native")]
     pub fn open(path: &Path) -> Result<Self> {
         let pages = pdf_extract::extract_text_by_pages(path)
             .map_err(|e| CoreError::Malformed(format!("не удалось извлечь текст из PDF: {e}")))?;

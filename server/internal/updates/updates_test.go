@@ -1,0 +1,52 @@
+package updates
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestLatestReturnsOnlyNewerMatchingPlatform(t *testing.T) {
+	directory := t.TempDir()
+	for name, body := range map[string]string{
+		"Wolfy-1.3.0.msi":       "windows-new",
+		"Wolfy-1.2.9.msi":       "windows-old",
+		"Wolfy-9.0.0-debug.apk": "android",
+		"not-a-release.exe":     "ignored",
+	} {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	service := New(directory)
+
+	request := httptest.NewRequest(http.MethodGet, "/v1/update/latest?platform=windows&current=1.2.9", nil)
+	response := httptest.NewRecorder()
+	service.Latest(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"version":"1.3.0"`) {
+		t.Fatalf("unexpected response: %d %s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/v1/update/latest?platform=windows&current=1.3.0", nil)
+	response = httptest.NewRecorder()
+	service.Latest(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("want 204, got %d", response.Code)
+	}
+}
+
+func TestFileRejectsTraversalAndUnknownNames(t *testing.T) {
+	service := New(t.TempDir())
+	for _, name := range []string{"..%2Fsecret", "notes.txt", "Wolfy-bad.msi"} {
+		request := httptest.NewRequest(http.MethodGet, "/v1/update/files/"+name, nil)
+		request.SetPathValue("name", name)
+		response := httptest.NewRecorder()
+		service.File(response, request)
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("%q: want 404, got %d", name, response.Code)
+		}
+	}
+}

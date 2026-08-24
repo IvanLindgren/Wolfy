@@ -6,7 +6,6 @@
 //! список файлов, `spine` — порядок чтения. Текст главы распаковывается
 //! только тогда, когда читатель до неё дошёл.
 
-use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
@@ -15,11 +14,11 @@ use quick_xml::Reader;
 use zip::ZipArchive;
 
 use crate::error::{CoreError, Result};
-use crate::parser::{Block, Book, Chapter, ChapterInfo, Metadata};
+use crate::parser::{Block, Book, Chapter, ChapterInfo, Metadata, Source};
 
 /// Открытая книга EPUB.
 pub struct EpubBook {
-    archive: ZipArchive<File>,
+    archive: ZipArchive<Source>,
     metadata: Metadata,
     contents: Vec<ChapterInfo>,
     /// Пути файлов глав в порядке чтения — параллельно `contents`.
@@ -28,8 +27,19 @@ pub struct EpubBook {
 
 impl EpubBook {
     pub fn open(path: &Path) -> Result<Self> {
-        let file = File::open(path)?;
-        let mut archive = ZipArchive::new(file)
+        EpubBook::read(Source::open(path)?)
+    }
+
+    /// EPUB, целиком лежащий в памяти: так книга приходит из браузера.
+    ///
+    /// Потоковость при этом не теряется. Zip держит оглавление в конце файла,
+    /// и по нему главы достаются поодиночке — из буфера так же, как с диска.
+    pub fn from_bytes(bytes: Vec<u8>) -> Result<Self> {
+        EpubBook::read(Source::bytes(bytes))
+    }
+
+    fn read(source: Source) -> Result<Self> {
+        let mut archive = ZipArchive::new(source)
             .map_err(|e| CoreError::Malformed(format!("не открывается архив EPUB: {e}")))?;
 
         let opf_path = find_opf(&mut archive)?;
@@ -98,7 +108,7 @@ impl Book for EpubBook {
 }
 
 /// Читает файл архива в строку.
-fn read_entry(archive: &mut ZipArchive<File>, path: &str) -> Result<String> {
+fn read_entry(archive: &mut ZipArchive<Source>, path: &str) -> Result<String> {
     let mut entry = archive
         .by_name(path)
         .map_err(|_| CoreError::Malformed(format!("в книге нет файла «{path}»")))?;
@@ -114,7 +124,7 @@ fn read_entry(archive: &mut ZipArchive<File>, path: &str) -> Result<String> {
 /// Путь к манифесту не фиксирован стандартом, и книги действительно кладут его
 /// куда попало — то в `OEBPS/content.opf`, то в корень. Поэтому спрашиваем
 /// container.xml, а не угадываем.
-fn find_opf(archive: &mut ZipArchive<File>) -> Result<String> {
+fn find_opf(archive: &mut ZipArchive<Source>) -> Result<String> {
     let container = read_entry(archive, "META-INF/container.xml")?;
     let mut reader = Reader::from_str(&container);
 

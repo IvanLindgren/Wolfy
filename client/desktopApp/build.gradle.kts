@@ -43,6 +43,19 @@ val coreLibraryFileName = when {
     else -> "libwolfy_core.so"
 }
 
+// Небольшой отдельный процесс ставит MSI после закрытия Wolfy. Он обязательно
+// едет внутри установщика: требовать от пользователя Go или скрипты нельзя.
+val updaterOutput = rootProject.layout.projectDirectory.file("../server/build/wolfy-updater.exe")
+val buildWindowsUpdater by tasks.registering(Exec::class) {
+    description = "Собирает внешний процесс автоматического обновления"
+    workingDir(rootProject.layout.projectDirectory.dir("../server"))
+    commandLine("go", "build", "-trimpath", "-ldflags=-s -w", "-o", updaterOutput.asFile.absolutePath, "./cmd/updater")
+    inputs.file(rootProject.layout.projectDirectory.file("../server/go.mod"))
+    inputs.dir(rootProject.layout.projectDirectory.dir("../server/cmd/updater"))
+    outputs.file(updaterOutput)
+    doFirst { updaterOutput.asFile.parentFile.mkdirs() }
+}
+
 // Установщик обязан быть автономным. Поэтому его нативная часть собирается
 // той же Gradle-цепочкой, что и клиент: нельзя случайно выпустить пакет без
 // DLL или положить в него библиотеку от предыдущей версии исходников.
@@ -61,7 +74,7 @@ val buildCoreLibrary by tasks.registering(Exec::class) {
 
 val copyCoreLibrary by tasks.registering(Copy::class) {
     description = "Кладёт ядро и офлайн-словарь рядом с приложением"
-    dependsOn(buildCoreLibrary)
+    dependsOn(buildCoreLibrary, buildWindowsUpdater)
     from(rootProject.layout.projectDirectory.dir("../core/target/release")) {
         include("wolfy_core.dll", "libwolfy_core.so", "libwolfy_core.dylib")
     }
@@ -69,6 +82,7 @@ val copyCoreLibrary by tasks.registering(Copy::class) {
         include("wolfy_dictionary.tsv.gz")
     }
     from(rootProject.layout.projectDirectory.file("../THIRD_PARTY_NOTICES.md"))
+    from(updaterOutput)
     // Заставка. Её рисует tools/build_splash.py из тех же стикера, шрифта и
     // палитры, что и приложение, — чтобы через две секунды окно не оказалось
     // непохожим на то, что читатель уже увидел.
@@ -97,6 +111,9 @@ tasks.matching { it.name == "prepareAppResources" }.configureEach {
 val packagingRequested = gradle.startParameter.taskNames.any { name ->
     name.contains("package", ignoreCase = true) || name.contains("Distributable")
 }
+val wolfyServerUrl = providers.gradleProperty("wolfyServerUrl")
+    .orElse(providers.environmentVariable("WOLFY_SERVER_URL"))
+    .orElse("http://localhost:8080")
 
 // Путь к ядру для запуска из исходников.
 //
@@ -127,6 +144,10 @@ compose.desktop {
         // пути нет, и JVM молча обходится без заставки. Разработчику она и не
         // нужна, а прятать довод за условием — лишняя развилка в сборке.
         jvmArgs += "-splash:\$APPDIR/resources/splash.png"
+        // В установленном приложении нет терминала и его переменных среды.
+        // Поэтому production-адрес API запекается в launcher при сборке;
+        // WOLFY_SERVER_URL при запуске всё ещё может его переопределить.
+        jvmArgs += "-Dwolfy.server.url=${wolfyServerUrl.get()}"
 
         // JNA находит C-функции динамически. Обычный shrink/optimize не видит
         // эти обращения и удаляет в release-сборке необходимые методы самой
@@ -144,7 +165,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Exe)
             packageName = "Wolfy"
-            packageVersion = "1.0.4"
+            packageVersion = "1.0.7"
             // Латиницей, и не по недосмотру: установщик собирает WiX, а строки
             // он пишет в кодовой странице 1252 — кириллица в неё не влезает и
             // роняет сборку целиком (LGHT0311). Название приложения при этом

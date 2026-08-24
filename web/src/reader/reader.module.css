@@ -1,0 +1,504 @@
+/*
+ * Газетный набор полосы.
+ *
+ * Ширина колонки — 62–72 знака. Верхний предел обязателен: на широком
+ * мониторе строка в полторы сотни знаков нечитаема, глаз теряет начало
+ * следующей и перечитывает уже прочитанное.
+ */
+
+.screen {
+  display: flex;
+  flex-direction: column;
+  height: calc(100dvh - 3.2rem);
+  min-height: 0;
+}
+
+/* --- Шапка чтения ---------------------------------------------------------- */
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem var(--gutter);
+  border-bottom: 1px solid var(--rule);
+  background: var(--paper);
+}
+
+.bar__title {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+
+.bar__book {
+  font-family: var(--reader-font, var(--serif)), 'Playfair Fallback';
+  font-size: 0.9375rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bar__chapter {
+  font-size: 0.6875rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+.bar__spacer {
+  flex: 1;
+}
+
+.iconButton {
+  display: grid;
+  place-items: center;
+  width: 2.1rem;
+  height: 2.1rem;
+  border-radius: var(--radius);
+  color: var(--ink-muted);
+  transition: background var(--quick, 180ms) ease, color var(--quick, 180ms) ease;
+}
+
+.iconButton:hover,
+.iconButton[data-active='true'] {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+
+.iconButton:disabled {
+  opacity: 0.35;
+}
+
+/* --- Полоса прогресса ------------------------------------------------------ */
+
+.progress {
+  height: 2px;
+  background: var(--rule);
+}
+
+.progress__bar {
+  height: 100%;
+  background: var(--accent);
+  transition: width var(--calm, 280ms) var(--paper-curve, ease);
+}
+
+/* --- Полоса текста --------------------------------------------------------- */
+
+.stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  justify-content: center;
+}
+
+.scroller {
+  width: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.column {
+  position: relative;
+  width: min(var(--measure), 100% - clamp(2rem, 7vw, 5rem));
+  margin: 0 auto;
+  padding: clamp(1.5rem, 5vh, 3rem) 0 6rem;
+}
+
+/* Режим страниц: тот же текст, разложенный колонками, и сдвиг по горизонтали. */
+.pages {
+  position: relative;
+  width: min(var(--measure), 100% - clamp(2rem, 7vw, 5rem));
+  margin: 0 auto;
+  height: 100%;
+  overflow: hidden;
+}
+
+.pages__inner {
+  height: 100%;
+  column-gap: var(--page-gap, 3rem);
+  column-fill: auto;
+  padding: clamp(1.25rem, 4vh, 2.5rem) 0;
+  will-change: transform;
+  transition: transform var(--flight, 560ms) var(--paper-curve, ease);
+}
+
+/* --- Типографика книги ----------------------------------------------------- */
+
+.text {
+  font-family: var(--reader-font, var(--serif)), 'Playfair Fallback';
+  font-size: var(--reader-size);
+  line-height: var(--reader-line);
+  color: var(--ink);
+  hyphens: auto;
+  -webkit-hyphens: auto;
+  text-align: justify;
+  text-justify: inter-word;
+  font-kerning: normal;
+  font-variant-ligatures: common-ligatures contextual;
+  font-variant-numeric: oldstyle-nums;
+}
+
+.paragraph {
+  margin: 0 0 0.15em;
+  text-indent: 1.4em;
+}
+
+/* Первый абзац главы и абзац после отбивки начинаются без отступа: красная
+   строка отмечает продолжение, а не начало. */
+.paragraph--opening {
+  text-indent: 0;
+}
+
+/*
+ * Буквица.
+ *
+ * `initial-letter` поддержан не везде, поэтому запасной путь — плавающая
+ * первая буква с подобранной высотой. Оба варианта дают три строки: меньше
+ * не читается как буквица, больше ломает ритм колонки.
+ */
+.dropCap::first-letter {
+  initial-letter: 3;
+  -webkit-initial-letter: 3;
+  font-weight: 700;
+  margin-right: 0.08em;
+  color: var(--ink);
+}
+
+@supports not (initial-letter: 3) {
+  .dropCap::first-letter {
+    float: left;
+    font-size: 3.1em;
+    line-height: 0.86;
+    padding: 0.06em 0.08em 0 0;
+  }
+}
+
+.heading {
+  font-family: var(--serif), 'Playfair Fallback';
+  text-align: center;
+  margin: 1.6em 0 0.9em;
+  text-indent: 0;
+}
+
+.heading--1 {
+  font-size: 1.9em;
+}
+
+.heading--2 {
+  font-size: 1.45em;
+}
+
+.heading--3 {
+  font-size: 1.15em;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.quote {
+  margin: 1.1em 0;
+  padding-left: 1.1em;
+  border-left: 2px solid var(--rule);
+  font-style: italic;
+  color: var(--ink-muted);
+  text-indent: 0;
+}
+
+.listItem {
+  margin: 0.35em 0 0.35em 1.4em;
+  text-indent: 0;
+}
+
+.listItem::before {
+  content: '—';
+  margin-right: 0.5em;
+  color: var(--ink-muted);
+}
+
+/* Разделитель сцен: тонкая акцентная линейка, а не три звёздочки. */
+.divider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 1.8em 0;
+}
+
+.divider::before,
+.divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--rule);
+  max-width: 6rem;
+}
+
+.divider__mark {
+  padding: 0 0.9rem;
+  color: var(--ink-muted);
+  font-size: 0.8em;
+  letter-spacing: 0.4em;
+}
+
+.image {
+  margin: 1.4em auto;
+  text-indent: 0;
+}
+
+.image img {
+  margin: 0 auto;
+  border-radius: 2px;
+}
+
+.image figcaption {
+  margin-top: 0.5em;
+  font-family: var(--sans), 'Inter Fallback';
+  font-size: 0.75em;
+  text-align: center;
+  color: var(--ink-muted);
+}
+
+/* --- Токены ---------------------------------------------------------------- */
+
+/*
+ * Слово — отдельная цель нажатия, но не отдельный компонент с состоянием.
+ * Токены рисуются один раз и больше не перерисовываются: всё изменчивое —
+ * выделение, найденные слова, грамматические диапазоны — живёт слоем выше.
+ */
+.token {
+  cursor: pointer;
+  border-radius: 2px;
+}
+
+@media (hover: hover) {
+  .token:hover {
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+  }
+}
+
+/* --- Слой подсветки -------------------------------------------------------- */
+
+.marks {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.mark {
+  position: absolute;
+  border-radius: 2px;
+}
+
+.mark--saved {
+  background: color-mix(in srgb, var(--highlight) 70%, transparent);
+  /* Подчёркивание, а не заливка целиком: заливка спорит с чтением. */
+  box-shadow: inset 0 -0.16em 0 color-mix(in srgb, var(--gold) 60%, transparent);
+}
+
+.mark--phrase {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+/* --- Оглавление ------------------------------------------------------------ */
+
+.contentsScrim {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: var(--scrim);
+}
+
+.contents {
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: 51;
+  width: min(24rem, 88vw);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-right: 1px solid var(--rule);
+  box-shadow: var(--shadow);
+}
+
+.contents__head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.9rem 1rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.contents__title {
+  font-size: 1.05rem;
+}
+
+.contents__list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.4rem 0.5rem 1.5rem;
+}
+
+.contents__item {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.5rem 0.65rem;
+  border-radius: var(--radius);
+  text-align: left;
+  color: var(--ink);
+  font-size: 0.9375rem;
+}
+
+.contents__item:hover {
+  background: var(--surface-sunken);
+}
+
+.contents__item[data-current='true'] {
+  background: var(--surface-sunken);
+  font-weight: 600;
+}
+
+.contents__number {
+  min-width: 2ch;
+  color: var(--ink-muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Настройка вида -------------------------------------------------------- */
+
+.tuner {
+  position: absolute;
+  top: 0.4rem;
+  right: var(--gutter);
+  z-index: 40;
+  width: min(21rem, calc(100vw - 2rem));
+  padding: 1rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.tuner__row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.45rem 0;
+}
+
+.tuner__label {
+  min-width: 6.5rem;
+  font-size: 0.8125rem;
+  color: var(--ink-muted);
+}
+
+.tuner__value {
+  min-width: 2.6rem;
+  text-align: right;
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted);
+}
+
+.tuner__themes {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.4rem;
+  padding-top: 0.3rem;
+}
+
+.themeChip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.45rem 0.2rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  font-size: 0.6875rem;
+  color: var(--ink-muted);
+}
+
+.themeChip[data-active='true'] {
+  border-color: var(--accent);
+  color: var(--ink);
+}
+
+.themeChip__swatch {
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  border: 1px solid var(--rule);
+}
+
+.segmented {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.2rem;
+  border-radius: var(--radius);
+  background: var(--surface-sunken);
+}
+
+.segmented button {
+  flex: 1;
+  padding: 0.35rem 0.5rem;
+  border-radius: calc(var(--radius) - 2px);
+  font-size: 0.8125rem;
+  color: var(--ink-muted);
+}
+
+.segmented button[data-active='true'] {
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* --- Конец главы ----------------------------------------------------------- */
+
+.chapterEnd {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.9rem;
+  margin-top: 3rem;
+  padding-top: 2rem;
+  border-top: 1px solid var(--rule);
+  text-align: center;
+}
+
+.chapterEnd__note {
+  color: var(--ink-muted);
+  font-family: var(--sans), 'Inter Fallback';
+  font-size: 0.875rem;
+}
+
+/* --- Напоминание о недавних словах ----------------------------------------- */
+
+.recent {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  padding: 0.65rem var(--gutter);
+  border-bottom: 1px solid var(--rule);
+  background: var(--surface-sunken);
+  font-family: var(--sans), 'Inter Fallback';
+  font-size: 0.8125rem;
+}
+
+.recent__word {
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+}
+
+.recent__close {
+  margin-left: auto;
+  color: var(--ink-muted);
+}

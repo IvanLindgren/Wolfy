@@ -5,8 +5,11 @@
 //! сервер. Поэтому здесь живут парсеры форматов, токенизатор, словарь и
 //! грамматические правила, а перевода и синхронизации нет вовсе.
 //!
-//! Наружу ядро выходит только через [`ffi`]: клиент на Kotlin грузит его как
-//! `.so` на Android и `.dll` на Windows.
+//! Наружу ядро выходит двумя дверями в одну и ту же логику: [`ffi`] — C-ABI,
+//! которым клиент на Kotlin грузит `.so` на Android и `.dll` на Windows, и
+//! [`wasm`] — `wasm-bindgen` для браузера. Обе ведут в один
+//! [`ffi::session::Command`]: дублируется способ передать строку, а не
+//! правила.
 //!
 //! Правила слоя — в `rules/rust_core.md`.
 
@@ -30,6 +33,10 @@ pub mod settings;
 pub mod srs;
 pub mod tagger;
 pub mod tokenizer;
+
+/// Вторая дверь в то же ядро — для браузера.
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
+pub mod wasm;
 
 pub use error::{CoreError, Result};
 

@@ -1,0 +1,180 @@
+name: CI and deploy
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: wolfy-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Test and build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: wolfy
+          POSTGRES_PASSWORD: wolfy
+          POSTGRES_DB: wolfy
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U wolfy -d wolfy"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+
+    env:
+      WOLFY_TEST_DB_URL: postgres://wolfy:wolfy@127.0.0.1:5432/wolfy?sslmode=disable
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+
+      - name: Set up Rust
+        shell: bash
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+
+      - name: Install wasm-bindgen CLI
+        shell: bash
+        run: cargo install wasm-bindgen-cli --version 0.2.127 --locked
+
+      - name: Seed shared Citavuk account tables
+        shell: bash
+        run: psql "$WOLFY_TEST_DB_URL" -v ON_ERROR_STOP=1 -f server/testdata/citavuk_accounts.sql
+
+      - name: Test Rust core
+        shell: bash
+        run: |
+          cargo test --manifest-path core/Cargo.toml --locked
+          cargo check --manifest-path core/Cargo.toml --lib --target wasm32-unknown-unknown --no-default-features --features wasm
+
+      - name: Test Go server
+        working-directory: server
+        shell: bash
+        run: |
+          go vet ./...
+          go test -p 1 ./...
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Build browser core
+        working-directory: web
+        run: npm run core
+
+      - name: Test and build web app
+        working-directory: web
+        run: |
+          npm test
+          npm run build
+
+      - name: Build Linux server
+        working-directory: server
+        shell: bash
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: amd64
+        run: go build -trimpath -ldflags="-s -w" -o ../release/server/wolfy-server ./cmd/server
+
+      - name: Package production release
+        shell: bash
+        run: |
+          mkdir -p release/web
+          cp -a web/dist/. release/web/
+          test -x release/server/wolfy-server
+          test -f release/web/index.html
+          tar -C release -czf wolfy-release.tar.gz server web
+
+      - name: Upload production artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wolfy-production-${{ github.sha }}
+          path: wolfy-release.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  deploy:
+    name: Deploy production
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment:
+      name: production
+      url: https://wolfy.citavuk.ru
+
+    steps:
+      - name: Checkout deploy script
+        uses: actions/checkout@v4
+
+      - name: Download tested artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: wolfy-production-${{ github.sha }}
+
+      - name: Configure SSH
+        shell: bash
+        env:
+          SSH_KEY: ${{ secrets.WOLFY_VDS_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.WOLFY_VDS_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/wolfy_vds
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/wolfy_vds ~/.ssh/known_hosts
+
+      - name: Upload release
+        shell: bash
+        env:
+          VDS_HOST: ${{ secrets.WOLFY_VDS_HOST }}
+          VDS_USER: ${{ secrets.WOLFY_VDS_USER }}
+        run: >-
+          scp -C -i ~/.ssh/wolfy_vds -o BatchMode=yes
+          wolfy-release.tar.gz
+          "${VDS_USER}@${VDS_HOST}:/tmp/wolfy-${GITHUB_SHA}.tar.gz"
+
+      - name: Activate release with rollback
+        shell: bash
+        env:
+          VDS_HOST: ${{ secrets.WOLFY_VDS_HOST }}
+          VDS_USER: ${{ secrets.WOLFY_VDS_USER }}
+        run: >-
+          ssh -i ~/.ssh/wolfy_vds -o BatchMode=yes
+          "${VDS_USER}@${VDS_HOST}"
+          "bash -s -- '${GITHUB_SHA}' '/tmp/wolfy-${GITHUB_SHA}.tar.gz'"
+          < deploy/deploy-release.sh
+
+      - name: Verify public HTTPS endpoints
+        shell: bash
+        run: |
+          curl --fail --silent --show-error --retry 6 --retry-delay 3 https://wolfy.citavuk.ru/ -o /dev/null
+          curl --fail --silent --show-error --retry 6 --retry-delay 3 https://wolfy.citavuk.ru/healthz

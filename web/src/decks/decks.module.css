@@ -1,0 +1,406 @@
+/* --- Хаб колод ------------------------------------------------------------- */
+
+.decks {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 1rem;
+}
+
+.deck {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 1.1rem 1.15rem 1.25rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  text-align: left;
+  color: inherit;
+  text-decoration: none;
+  transition:
+    border-color var(--quick, 180ms) ease,
+    transform var(--quick, 180ms) var(--paper-curve, ease);
+}
+
+.deck:hover {
+  border-color: var(--ink-muted);
+  transform: translateY(-2px);
+}
+
+.deck__title {
+  font-family: var(--serif), 'Playfair Fallback';
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.deck__hint {
+  font-size: 0.8125rem;
+  color: var(--ink-muted);
+  line-height: 1.4;
+}
+
+.deck__numbers {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  margin-top: auto;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--rule);
+}
+
+.deck__due {
+  font-size: 1.9rem;
+  font-family: var(--serif), 'Playfair Fallback';
+  font-weight: 700;
+  line-height: 1;
+  color: var(--accent);
+}
+
+.deck__due[data-empty='true'] {
+  color: var(--ink-muted);
+}
+
+.deck__meta {
+  font-size: 0.75rem;
+  color: var(--ink-muted);
+  line-height: 1.35;
+}
+
+/* --- Серия дней ------------------------------------------------------------ */
+
+.streak {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1.5rem;
+  border-radius: var(--radius-lg);
+  background: var(--inverse);
+  color: var(--on-inverse);
+}
+
+.streak__flame {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 3rem;
+  height: 3rem;
+  color: var(--gold);
+}
+
+.streak__days {
+  font-family: var(--serif), 'Playfair Fallback';
+  font-size: 1.6rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.streak__note {
+  font-size: 0.8125rem;
+  opacity: 0.8;
+}
+
+.streak__history {
+  display: flex;
+  gap: 0.2rem;
+  margin-left: auto;
+}
+
+.streak__day {
+  width: 0.55rem;
+  height: 1.6rem;
+  border-radius: 2px;
+  background: color-mix(in srgb, currentColor 22%, transparent);
+}
+
+.streak__day[data-on='true'] {
+  background: var(--gold);
+}
+
+/* --- Тренировка ------------------------------------------------------------ */
+
+.training {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: clamp(1rem, 4vw, 2rem) var(--gutter) 5rem;
+}
+
+.trainingBar {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  margin-bottom: 1.25rem;
+}
+
+.trainingProgress {
+  flex: 1;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--rule);
+  overflow: hidden;
+}
+
+.trainingProgress__bar {
+  height: 100%;
+  background: var(--accent);
+  transition: width var(--calm, 280ms) var(--paper-curve, ease);
+}
+
+.trainingCount {
+  font-size: 0.75rem;
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * Карточка задания.
+ *
+ * Перспектива на обёртке, а не на самой карточке: без неё переворот выглядит
+ * как сжатие по горизонтали, а не как поворот листа.
+ */
+.stage {
+  perspective: 1200px;
+  min-height: 22rem;
+}
+
+.card {
+  transform-style: preserve-3d;
+  padding: 1.5rem 1.35rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.question {
+  font-family: var(--serif), 'Playfair Fallback';
+  font-size: 1.9rem;
+  line-height: 1.2;
+  text-align: center;
+  margin-bottom: 0.5rem;
+}
+
+.subject {
+  text-align: center;
+  color: var(--ink-muted);
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  margin-bottom: 1.25rem;
+}
+
+.options {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  text-align: left;
+  font-size: 1rem;
+  background: var(--surface);
+  transition:
+    border-color var(--quick, 180ms) ease,
+    background var(--quick, 180ms) ease,
+    transform var(--instant, 90ms) ease;
+}
+
+.option:hover:not(:disabled) {
+  border-color: var(--ink-muted);
+}
+
+.option:active:not(:disabled) {
+  transform: scale(0.985);
+}
+
+.option[data-state='right'] {
+  border-color: var(--pos-adj);
+  background: color-mix(in srgb, var(--pos-adj) 12%, transparent);
+}
+
+.option[data-state='wrong'] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.option__key {
+  min-width: 1.1rem;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--ink-muted);
+}
+
+/* --- Пятнашки из букв ------------------------------------------------------ */
+
+.slots {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.35rem;
+  margin-bottom: 1.1rem;
+}
+
+.slot {
+  width: 2.4rem;
+  height: 2.9rem;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface-sunken);
+  font-family: var(--serif), 'Playfair Fallback';
+  font-size: 1.4rem;
+  font-weight: 600;
+}
+
+.slot[data-given='true'] {
+  background: var(--surface);
+  border-style: dashed;
+  color: var(--ink-muted);
+}
+
+.slot[data-filled='true'] {
+  background: var(--surface);
+  border-color: var(--ink-muted);
+}
+
+.tiles {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.4rem;
+}
+
+.tile {
+  width: 2.4rem;
+  height: 2.9rem;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-family: var(--serif), 'Playfair Fallback';
+  font-size: 1.35rem;
+  box-shadow: 0 1px 0 var(--rule);
+  transition: transform var(--instant, 90ms) ease;
+}
+
+.tile:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.tile[data-used='true'] {
+  opacity: 0.25;
+  pointer-events: none;
+}
+
+/* --- Конструктор фразы ----------------------------------------------------- */
+
+.blocks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  justify-content: center;
+}
+
+.block {
+  padding: 0.45rem 0.75rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-family: var(--serif), 'Playfair Fallback';
+  font-size: 1.05rem;
+  transition: transform var(--instant, 90ms) ease;
+}
+
+.block:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.block[data-used='true'] {
+  opacity: 0.25;
+  pointer-events: none;
+}
+
+.assembled {
+  min-height: 3.4rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 0.6rem;
+  margin-bottom: 1rem;
+  border: 1px dashed var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface-sunken);
+}
+
+/* --- Ввод по памяти -------------------------------------------------------- */
+
+.typing {
+  width: 100%;
+  padding: 0.8rem 1rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-family: var(--serif), 'Playfair Fallback';
+  font-size: 1.4rem;
+  text-align: center;
+  letter-spacing: 0.04em;
+}
+
+/* --- HP -------------------------------------------------------------------- */
+
+.hp {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 1.1rem;
+  font-size: 0.75rem;
+  color: var(--ink-muted);
+}
+
+.hp__track {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--rule);
+  overflow: hidden;
+}
+
+.hp__bar {
+  height: 100%;
+  background: var(--gold);
+  transition: width var(--flight, 560ms) var(--paper-curve, ease);
+}
+
+/* --- Итог ------------------------------------------------------------------ */
+
+.verdict {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1.1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--rule);
+  font-size: 0.9375rem;
+  line-height: 1.45;
+}
+
+.explanation {
+  margin-top: 0.4rem;
+  font-size: 0.875rem;
+  color: var(--ink-muted);
+  line-height: 1.45;
+}
+
+.formula {
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+  color: var(--ink-muted);
+}

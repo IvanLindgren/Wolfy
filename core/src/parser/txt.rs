@@ -23,12 +23,19 @@ pub struct TxtBook {
 impl TxtBook {
     pub fn open(path: &Path) -> Result<Self> {
         let bytes = fs::read(path)?;
-        let text = decode(&bytes);
-
         let title = path
             .file_stem()
             .and_then(|s| s.to_str())
             .map(str::to_string);
+        Ok(TxtBook::from_bytes(&bytes, title))
+    }
+
+    /// Текст, лежащий в памяти: так книга приходит из браузера.
+    ///
+    /// Название здесь параметром, а не из имени файла: имени у байтов нет, а
+    /// у того, кто их принёс, оно было.
+    pub fn from_bytes(bytes: &[u8], title: Option<String>) -> TxtBook {
+        let text = decode(bytes);
 
         let chapters = split_chapters(&text);
         let contents = chapters
@@ -38,14 +45,14 @@ impl TxtBook {
             })
             .collect();
 
-        Ok(TxtBook {
+        TxtBook {
             metadata: Metadata {
                 title,
                 ..Metadata::default()
             },
             contents,
             chapters,
-        })
+        }
     }
 }
 

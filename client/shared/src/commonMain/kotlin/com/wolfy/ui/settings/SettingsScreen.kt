@@ -47,6 +47,11 @@ fun SettingsScreen(
     coreVersion: String,
     serverUrl: String,
     signedIn: Boolean,
+    accountEmail: String,
+    reduceMotion: Boolean,
+    onReduceMotion: (Boolean) -> Unit,
+    onSignIn: () -> Unit,
+    onSignOut: () -> Unit,
     onOpenReference: () -> Unit,
     dictionary: DictionaryStatus,
     onDownloadDictionary: () -> Unit,
@@ -105,6 +110,24 @@ fun SettingsScreen(
                 "были: растянутые, они полезли бы друг на друга.",
             style = WolfyTheme.typography.caption,
             color = colors.inkMuted,
+        )
+
+        MotionToggle(reduceMotion, onReduceMotion)
+
+        Rule()
+        SectionLabel("Аккаунт")
+        Fact(
+            label = if (signedIn) "Выполнен вход" else "Состояние",
+            value = if (signedIn) accountEmail.ifBlank { "аккаунт Читавука" } else "без аккаунта",
+        )
+        Text(
+            text = if (signedIn) "Выйти" else "Войти",
+            style = WolfyTheme.typography.button,
+            color = colors.accent,
+            modifier = Modifier
+                .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.huge))
+                .pressable(onClick = if (signedIn) onSignOut else onSignIn)
+                .padding(horizontal = spacing.large, vertical = spacing.small),
         )
 
         Rule()
@@ -188,6 +211,34 @@ fun SettingsScreen(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun MotionToggle(reduced: Boolean, onChange: (Boolean) -> Unit) {
+    val colors = WolfyTheme.colors
+    val spacing = WolfyTheme.spacing
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .pressable { onChange(!reduced) }
+            .padding(vertical = spacing.small),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(spacing.tight)) {
+            Text("Убавить движение", style = WolfyTheme.typography.body, color = colors.ink)
+            Text(
+                "Переходы и полёт слова станут мгновенными.",
+                style = WolfyTheme.typography.caption,
+                color = colors.inkMuted,
+            )
+        }
+        Text(
+            if (reduced) "включено" else "выключено",
+            style = WolfyTheme.typography.button,
+            color = if (reduced) colors.accent else colors.inkMuted,
+        )
     }
 }
 

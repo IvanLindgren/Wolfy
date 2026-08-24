@@ -34,6 +34,18 @@ func TestРазборЗаголовкаAuthorization(t *testing.T) {
 	}
 }
 
+func TestТокенЗапросаБерётсяИзCookie(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
+	r.AddCookie(&http.Cookie{Name: auth.SessionCookie, Value: "ctv_cookie"})
+	if got := auth.RequestToken(r); got != "ctv_cookie" {
+		t.Fatalf("cookie token = %q", got)
+	}
+	r.Header.Set("Authorization", "Bearer ctv_header")
+	if got := auth.RequestToken(r); got != "ctv_header" {
+		t.Fatalf("Bearer не получил приоритет: %q", got)
+	}
+}
+
 func openStore(t *testing.T) *store.Store {
 	t.Helper()
 	url := os.Getenv("WOLFY_TEST_DB_URL")

@@ -6,4 +6,7 @@
 -->
 <paths>
     <cache-path name="photos" path="photos/" />
+    <!-- Проверенный APK доступен только системному установщику и только после
+         явного нажатия кнопки перезапуска в Wolfy. -->
+    <cache-path name="updates" path="updates/" />
 </paths>

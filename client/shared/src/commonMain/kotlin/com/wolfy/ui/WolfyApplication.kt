@@ -41,6 +41,9 @@ import com.wolfy.data.Settings
 import com.wolfy.data.AccountSession
 import com.wolfy.data.SyncService
 import com.wolfy.data.WolfyApi
+import com.wolfy.data.DeviceInfo
+import com.wolfy.data.AuthOutcome
+import com.wolfy.data.Capabilities
 import com.wolfy.data.library.CoreSession
 import com.wolfy.data.library.Library
 import com.wolfy.data.library.LibraryBook
@@ -61,8 +64,14 @@ import com.wolfy.platform.rememberReminderPermission
 import com.wolfy.platform.rememberBookPicker
 import com.wolfy.platform.rememberPhotoPicker
 import com.wolfy.platform.rememberPronouncer
+import com.wolfy.platform.rememberBrowserAuthLauncher
+import com.wolfy.platform.deviceName
+import com.wolfy.platform.devicePlatform
+import com.wolfy.platform.rememberAppUpdateController
 import com.wolfy.theme.ReadingTheme
 import com.wolfy.theme.WolfyTheme
+import com.wolfy.theme.WolfyMotion
+import com.wolfy.theme.Curves
 import com.wolfy.srs.Deck
 import com.wolfy.srs.TrainingViewModel
 import com.wolfy.ui.decks.DecksScreen
@@ -77,17 +86,26 @@ import com.wolfy.ui.nav.globalShortcuts
 import com.wolfy.ui.nav.digitOf
 import com.wolfy.ui.nav.ShortcutsSheet
 import com.wolfy.ui.nav.Section
+import com.wolfy.ui.nav.FLIGHT_CARDS
 import com.wolfy.ui.reader.ReaderScreen
 import com.wolfy.ui.reader.ReaderViewModel
 import com.wolfy.ui.reference.ReferenceScreen
 import com.wolfy.ui.settings.SettingsScreen
+import com.wolfy.ui.account.AuthMode
+import com.wolfy.ui.account.SignInScreen
+import com.wolfy.ui.onboarding.WelcomeScreen
 import com.wolfy.ui.srs.SrsScreen
 import com.wolfy.ui.srs.TrainingScreen
 import com.wolfy.widgets.pressable
+import com.wolfy.widgets.FlightController
+import com.wolfy.widgets.FlightOverlay
+import com.wolfy.widgets.LocalFlight
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+private const val APP_VERSION = "1.0.7"
 
 /**
  * Корень приложения.
@@ -107,6 +125,8 @@ import kotlinx.coroutines.withContext
 fun WolfyApplication(
     serverUrl: String = "http://localhost:8080",
     sessionToken: String? = null,
+    currentVersion: String = APP_VERSION,
+    onExitForUpdate: () -> Unit = {},
     /**
      * Есть ли у устройства камера, которой снимают страницу.
      *
@@ -116,6 +136,8 @@ fun WolfyApplication(
      */
     onPhone: Boolean = false,
 ) {
+    val updater = rememberAppUpdateController(serverUrl, currentVersion)
+    LaunchedEffect(updater) { updater.monitor() }
     var failure by remember { mutableStateOf<String?>(null) }
     var loaded by remember { mutableStateOf<Parts?>(null) }
 
@@ -133,7 +155,13 @@ fun WolfyApplication(
             val library = Library(coreSession, store)
             val settings = Settings(coreSession)
             val session = AccountSession(store, sessionToken)
-            val api = WolfyApi(baseUrl = serverUrl, tokenProvider = { session.token.value })
+            val api = WolfyApi(
+                baseUrl = serverUrl,
+                tokenProvider = { session.token.value },
+                deviceProvider = {
+                    DeviceInfo(session.deviceId(), deviceName(), devicePlatform())
+                },
+            )
             val dictionary = DictionaryManager(coreSession, store, api)
             Parts(
                 core = core,
@@ -151,6 +179,7 @@ fun WolfyApplication(
                 session = session,
                 discovery = DiscoveryViewModel(api, session, library),
                 dictionary = dictionary,
+                api = api,
             )
             }
         }
@@ -173,33 +202,133 @@ fun WolfyApplication(
 
     val settings by parts.settings.state.collectAsState()
     val activeToken by parts.session.token.collectAsState()
+    val accountProfile by parts.session.profile.collectAsState()
     val dictionaryStatus by parts.dictionary.status.collectAsState()
     val scope = rememberCoroutineScope()
+    var authMode by remember { mutableStateOf(AuthMode.SignIn) }
+    var authBusy by remember { mutableStateOf(false) }
+    var authError by remember { mutableStateOf<String?>(null) }
+    var awaitingEmail by remember { mutableStateOf("") }
+    var capabilities by remember { mutableStateOf(Capabilities()) }
+    val browserAuth = rememberBrowserAuthLauncher()
+    LaunchedEffect(parts.api) { capabilities = parts.api.capabilities() }
+
+    fun acceptAuth(outcome: AuthOutcome) {
+        when (outcome) {
+            is AuthOutcome.SignedIn -> parts.session.save(outcome.token, outcome.email, outcome.name)
+            is AuthOutcome.AwaitingEmail -> {
+                awaitingEmail = outcome.email
+                authMode = AuthMode.AwaitingEmail
+            }
+            is AuthOutcome.EmailNotConfirmed -> {
+                awaitingEmail = outcome.email
+                authMode = AuthMode.AwaitingEmail
+            }
+            is AuthOutcome.Refused -> authError = outcome.message
+            AuthOutcome.Offline -> authError = "Нет связи с сервером."
+        }
+    }
 
     // Клавиатура объявляется один раз на всё приложение: от неё зависят и
     // сочетания клавиш, и подсказки к ним. `onPhone` уже отвечает на тот же
     // вопрос с другой стороны — у телефона её нет.
-    CompositionLocalProvider(LocalKeyboard provides !onPhone) {
+    val flight = remember { FlightController() }
+    CompositionLocalProvider(
+        LocalKeyboard provides !onPhone,
+        LocalFlight provides flight,
+    ) {
     WolfyTheme(
         theme = settings.readingTheme,
         fontScale = settings.fontScale,
         lineScale = settings.lineScale,
+        reduceMotion = settings.reduceMotion,
     ) {
-
-        // Первый запуск: библиотека пуста, и вместо пустого экрана в неё
-        // кладётся демо-глава. Она проходит ровно тот же путь, что настоящая
-        // книга, — никакого отдельного «режима примера» в читалке нет.
-        LaunchedEffect(parts) {
-            if (!parts.settings.current.demoAdded) {
-                parts.settings.markDemoAdded()
-                parts.catalogue.import(
-                    PickedBook(path = writeDemoBook(), name = "Старая библиотека.txt"),
-                )
-            }
-        }
-
         Box(Modifier.fillMaxSize()) {
-            Shell(
+        when {
+            !settings.onboardingSeen -> WelcomeScreen(
+                analysis = remember(parts.core) { parts.core.analyzeWord("serendipity") },
+                exercise = remember(parts.core) { parts.core.exercises().firstOrNull() },
+                dictionary = dictionaryStatus,
+                onDownloadDictionary = { scope.launch { parts.dictionary.download() } },
+                onFinish = {
+                    parts.settings.seenOnboarding()
+                    parts.settings.seenVersion(APP_VERSION)
+                },
+                onSkip = {
+                    parts.settings.seenOnboarding()
+                    parts.settings.seenVersion(APP_VERSION)
+                },
+            )
+
+            activeToken == null && !accountProfile.skipped -> SignInScreen(
+                mode = authMode,
+                busy = authBusy,
+                error = authError,
+                canRegister = capabilities.register,
+                canGoogle = capabilities.google,
+                canYandex = capabilities.yandex,
+                awaitingEmail = awaitingEmail,
+                onMode = {
+                    authMode = it
+                    authError = null
+                },
+                onSkip = parts.session::skip,
+                onGoogle = {
+                    scope.launch {
+                        authBusy = true
+                        authError = null
+                        acceptAuth(parts.api.signInWithGoogle(browserAuth))
+                        authBusy = false
+                    }
+                },
+                onYandex = {
+                    scope.launch {
+                        authBusy = true
+                        authError = null
+                        acceptAuth(parts.api.signInWithYandex(browserAuth))
+                        authBusy = false
+                    }
+                },
+                onResend = { email ->
+                    scope.launch {
+                        authBusy = true
+                        authError = if (parts.api.resendVerification(email)) {
+                            "Письмо отправлено ещё раз."
+                        } else {
+                            "Не получилось отправить письмо. Проверьте соединение."
+                        }
+                        authBusy = false
+                    }
+                },
+                onSubmit = { email, password, name ->
+                    scope.launch {
+                        authBusy = true
+                        authError = null
+                        val outcome = if (authMode == AuthMode.SignUp) {
+                            parts.api.signUp(email, password, name)
+                        } else {
+                            parts.api.signIn(email, password)
+                        }
+                        acceptAuth(outcome)
+                        authBusy = false
+                    }
+                },
+            )
+
+            else -> {
+                // Первый запуск: библиотека пуста, и вместо пустого экрана в неё
+                // кладётся демо-глава. Она проходит тот же путь, что настоящая.
+                LaunchedEffect(parts) {
+                    if (!parts.settings.current.demoAdded) {
+                        parts.settings.markDemoAdded()
+                        parts.catalogue.import(
+                            PickedBook(path = writeDemoBook(), name = "Старая библиотека.txt"),
+                        )
+                    }
+                }
+
+                Box(Modifier.fillMaxSize()) {
+                    Shell(
                 parts = parts,
                 onPhone = onPhone,
                 theme = settings.readingTheme,
@@ -210,12 +339,34 @@ fun WolfyApplication(
                 onLineScaleChange = parts.settings::setLineScale,
                 serverUrl = serverUrl,
                 signedIn = activeToken != null,
+                accountEmail = accountProfile.email,
+                reduceMotion = settings.reduceMotion,
+                onReduceMotion = parts.settings::setReduceMotion,
+                onSignIn = parts.session::requestSignIn,
+                onSignOut = parts.session::clear,
             )
-            DictionaryOffer(
-                status = dictionaryStatus,
-                onDownload = { scope.launch { parts.dictionary.download() } },
-                onLater = parts.dictionary::dismissOffer,
-            )
+                    DictionaryOffer(
+                        status = dictionaryStatus,
+                        onDownload = { scope.launch { parts.dictionary.download() } },
+                        onLater = parts.dictionary::dismissOffer,
+                    )
+                }
+            }
+        }
+        UpdateReadyButton(
+            controller = updater,
+            onRestart = {
+                scope.launch {
+                    if (runCatching { updater.install() }.getOrDefault(false)) {
+                        onExitForUpdate()
+                    }
+                }
+            },
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .systemBarsPadding()
+                .padding(WolfyTheme.spacing.pageMargin),
+        )
         }
     }
     }
@@ -233,6 +384,7 @@ private class Parts(
     val session: AccountSession,
     val discovery: DiscoveryViewModel,
     val dictionary: DictionaryManager,
+    val api: WolfyApi,
 )
 
 @Composable
@@ -247,8 +399,17 @@ private fun Shell(
     onLineScaleChange: (Float) -> Unit,
     serverUrl: String,
     signedIn: Boolean,
+    accountEmail: String,
+    reduceMotion: Boolean,
+    onReduceMotion: (Boolean) -> Unit,
+    onSignIn: () -> Unit,
+    onSignOut: () -> Unit,
 ) {
     var section by remember { mutableStateOf(Section.Books) }
+    val flightController = LocalFlight.current
+    LaunchedEffect(section) {
+        if (section == Section.Cards) flightController.clearArrivals(FLIGHT_CARDS)
+    }
     // Открытая книга — состояние оболочки, а не читалки: по ней оболочка
     // решает, показывать библиотеку или страницу, и она же переживает переход
     // в другой раздел и обратно.
@@ -322,6 +483,7 @@ private fun Shell(
         }
     }
     val syncStatus by parts.sync.status.collectAsState()
+    val motion = WolfyTheme.motion
 
     // Обмен с сервером: при запуске и потом, пока есть что отправлять.
     //
@@ -399,7 +561,7 @@ private fun Shell(
         // без единого слова — вглубь приходит справа, назад уходит туда же.
         AnimatedContent(
             targetState = route,
-            transitionSpec = { screenTransition(initialState.depth, targetState.depth) },
+            transitionSpec = { screenTransition(initialState.depth, targetState.depth, motion) },
             label = "screen",
             modifier = Modifier.weight(1f),
         ) { screen ->
@@ -488,6 +650,11 @@ private fun Shell(
                     },
                     serverUrl = serverUrl,
                     signedIn = signedIn,
+                    accountEmail = accountEmail,
+                    reduceMotion = reduceMotion,
+                    onReduceMotion = onReduceMotion,
+                    onSignIn = onSignIn,
+                    onSignOut = onSignOut,
                     onOpenReference = { reference = "" },
                     dictionary = dictionaryStatus,
                     onDownloadDictionary = { scope.launch { parts.dictionary.download() } },
@@ -505,6 +672,7 @@ private fun Shell(
     }
 
         ShortcutsSheet(visible = helpOpen, onDismiss = { helpOpen = false })
+        FlightOverlay()
     }
 }
 
@@ -570,10 +738,10 @@ private sealed interface Route {
  * пролететь. Целая ширина на большом окне превращается в заметную поездку,
  * которую приходится пережидать.
  */
-private fun screenTransition(from: Int, to: Int): ContentTransform {
-    val appear = tween<Float>(durationMillis = 220)
-    val vanish = tween<Float>(durationMillis = 120)
-    val slide = tween<IntOffset>(durationMillis = 220)
+private fun screenTransition(from: Int, to: Int, motion: WolfyMotion): ContentTransform {
+    val appear = tween<Float>(durationMillis = motion.calm, easing = Curves.Paper)
+    val vanish = tween<Float>(durationMillis = motion.quick, easing = Curves.Paper)
+    val slide = tween<IntOffset>(durationMillis = motion.calm, easing = Curves.Paper)
 
     val enter = when {
         to > from -> slideInHorizontally(slide) { width -> width / 6 } + fadeIn(appear)

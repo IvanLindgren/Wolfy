@@ -50,6 +50,8 @@ data class WolfyColors(
     val onInverse: Color,
     /** Палитра частей речи для грамматической подсветки. */
     val partsOfSpeech: PartOfSpeechColors,
+    /** Цветовые семейства правил: одно семейство всегда узнаётся одинаково. */
+    val ruleFamilies: RuleFamilyColors,
     /** Тёмная ли тема — нужно для системных панелей и статус-бара. */
     val dark: Boolean,
 )
@@ -86,6 +88,25 @@ data class PartOfSpeechColors(
     }
 }
 
+@Immutable
+data class RuleFamilyColors(
+    val tense: Color,
+    val voice: Color,
+    val mood: Color,
+    val condition: Color,
+    val comparison: Color,
+    val reference: Color,
+) {
+    fun forFamily(rule: String): Color = when {
+        "passive" in rule || "voice" in rule -> voice
+        "conditional" in rule || rule.startsWith("if-") -> condition
+        "compar" in rule || "superlative" in rule -> comparison
+        "relative" in rule || "reported" in rule || "reference" in rule -> reference
+        "subjunctive" in rule || "wish" in rule || "modal" in rule -> mood
+        else -> tense
+    }
+}
+
 /** Палитра частей речи одинакова во всех темах — меняется только фон. */
 private val partsOfSpeech = PartOfSpeechColors(
     noun = Color(0xFF2C5AA0),
@@ -93,6 +114,24 @@ private val partsOfSpeech = PartOfSpeechColors(
     adjective = Color(0xFF3F7A3F),
     adverb = Color(0xFFB08A3C),
     pronoun = Color(0xFF7B5EA7),
+)
+
+private val lightRuleFamilies = RuleFamilyColors(
+    tense = Color(0xFFFFD9D2),
+    voice = Color(0xFFDCE8FA),
+    mood = Color(0xFFE8DDF6),
+    condition = Color(0xFFFFE4B8),
+    comparison = Color(0xFFD9EBD8),
+    reference = Color(0xFFE5E2D9),
+)
+
+private val darkRuleFamilies = RuleFamilyColors(
+    tense = Color(0xFF63382F),
+    voice = Color(0xFF304A6C),
+    mood = Color(0xFF4B3B63),
+    condition = Color(0xFF65502C),
+    comparison = Color(0xFF36563A),
+    reference = Color(0xFF46443E),
 )
 
 /** Классическая газета: белизна бумаги и густые чернила. */
@@ -109,6 +148,7 @@ val PaperColors = WolfyColors(
     inverse = Color(0xFF111111),
     onInverse = Color(0xFFF7F7F4),
     partsOfSpeech = partsOfSpeech,
+    ruleFamilies = lightRuleFamilies,
     dark = false,
 )
 
@@ -134,6 +174,7 @@ val SepiaColors = WolfyColors(
         adverb = Color(0xFFD9B871),
         pronoun = Color(0xFFB79BDB),
     ),
+    ruleFamilies = darkRuleFamilies,
     dark = true,
 )
 
@@ -157,6 +198,7 @@ val DarkColors = WolfyColors(
         adverb = Color(0xFFD9B871),
         pronoun = Color(0xFFB79BDB),
     ),
+    ruleFamilies = darkRuleFamilies,
     dark = true,
 )
 
@@ -189,6 +231,7 @@ val OledColors = WolfyColors(
         adverb = Color(0xFFE5C47D),
         pronoun = Color(0xFFC5A9E8),
     ),
+    ruleFamilies = darkRuleFamilies,
     dark = true,
 )
 

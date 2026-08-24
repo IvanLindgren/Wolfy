@@ -41,6 +41,7 @@ mod phrasal;
 mod reference;
 mod relative;
 mod reported;
+mod roles;
 mod subjunctive;
 mod tense;
 mod verbal;
@@ -49,6 +50,33 @@ mod wish;
 pub use chain::{Chain, Link, Part};
 pub use exercise::{exercises, exercises_for, Exercise, Task, GAP};
 pub use reference::{articles, Article, Topic};
+pub use roles::{chunks, markers, Chunk, Marker, MarkerKind, Role};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Family {
+    Tense,
+    Voice,
+    Mood,
+    Condition,
+    Comparison,
+    Reference,
+}
+
+pub fn family(rule: &str) -> Family {
+    if rule.contains("passive") || rule.contains("voice") {
+        Family::Voice
+    } else if rule.contains("conditional") || rule.starts_with("if-") {
+        Family::Condition
+    } else if rule.contains("compar") || rule.contains("superlative") {
+        Family::Comparison
+    } else if rule.contains("relative") || rule.contains("reported") || rule.contains("reference") {
+        Family::Reference
+    } else if rule.contains("subjunctive") || rule.contains("wish") || rule.contains("modal") {
+        Family::Mood
+    } else {
+        Family::Tense
+    }
+}
 
 use std::ops::Range;
 
