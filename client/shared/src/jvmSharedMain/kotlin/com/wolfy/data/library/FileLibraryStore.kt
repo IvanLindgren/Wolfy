@@ -79,6 +79,39 @@ internal class FileLibraryStore(private val directory: File) : LibraryStore {
         return file.absolutePath
     }
 
+    // --- обложки ---
+
+    private val coversDirectory = File(directory, "covers")
+
+    override fun writeCover(bookId: String, extension: String, bytes: ByteArray): String {
+        coversDirectory.mkdirs()
+        // Одна книга — одна обложка: прежние стираются до записи новой.
+        coversDirectory.listFiles()
+            ?.filter { it.name.startsWith("$bookId.") }
+            ?.forEach { it.delete() }
+        val file = File(coversDirectory, "$bookId.${extension.lowercase()}")
+        file.writeBytes(bytes)
+        return file.absolutePath
+    }
+
+    override fun findCover(bookId: String): String? =
+        coversDirectory
+            .takeIf { it.isDirectory }
+            ?.listFiles()
+            ?.firstOrNull { it.isFile && it.name.startsWith("$bookId.") && it.length() > 0L }
+            ?.absolutePath
+
+    override fun deleteCover(bookId: String) {
+        coversDirectory
+            .takeIf { it.isDirectory }
+            ?.listFiles()
+            ?.filter { it.name.startsWith("$bookId.") }
+            ?.forEach { it.delete() }
+    }
+
+    override fun readBinary(path: String): ByteArray? =
+        runCatching { File(path).takeIf { it.isFile }?.readBytes() }.getOrNull()
+
     override fun dictionaryPath(): String =
         File(directory, DICTIONARY_FILE).takeIf { dictionary ->
             dictionary.isFile && dictionary.length() > 0L && runCatching {

@@ -1,5 +1,6 @@
 package com.wolfy.widgets
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -16,29 +17,58 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import com.wolfy.theme.WolfyTheme
 
 /**
- * Обложка книги, набранная, а не нарисованная.
+ * Обложка книги.
  *
  * У книги из файла обложки чаще всего нет: txt её не хранит вовсе, а в epub
  * она бывает у одной книги из трёх. Показывать вместо неё серый прямоугольник
  * с надписью «нет обложки» — значит превратить библиотеку в список ошибок.
  *
- * Поэтому обложка набирается из того, что есть: название антиквой, автор
- * мелким шрифтом, фон одного из четырёх цветов. Цвет выбирается по названию, а
- * не случайно, — обложка обязана быть одной и той же при каждом запуске, иначе
- * читатель перестаёт узнавать свои книги в лицо.
+ * Поэтому без своей картинки обложка набирается из того, что есть: название
+ * антиквой, автор мелким шрифтом, фон одного из четырёх цветов. Цвет
+ * выбирается по названию, а не случайно, — обложка обязана быть одной и той же
+ * при каждом запуске, иначе читатель перестаёт узнавать свои книги в лицо.
+ *
+ * Свою картинку читатель ставит сам ([cover]); набранная остаётся запасным
+ * видом для всех остальных книг.
  */
 @Composable
 fun BookCover(
     title: String,
     author: String?,
     modifier: Modifier = Modifier,
+    cover: ImageBitmap? = null,
 ) {
+    val shape = RoundedCornerShape(WolfyTheme.spacing.tight)
+    Box(
+        modifier
+            .aspectRatio(0.68f)
+            .clip(shape),
+    ) {
+        if (cover != null) {
+            Image(
+                bitmap = cover,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            TypesetCover(title = title, author = author)
+        }
+    }
+}
+
+/** Обложка, набранная из того, что известно о книге: титул и автор. */
+@Composable
+private fun TypesetCover(title: String, author: String?) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
     val typography = WolfyTheme.typography
@@ -55,9 +85,9 @@ fun BookCover(
     val (background, foreground) = palette[fingerprint(title) % palette.size]
 
     Box(
-        modifier
-            .aspectRatio(0.68f)
-            .background(background, RoundedCornerShape(spacing.tight))
+        Modifier
+            .fillMaxSize()
+            .background(background)
             .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.tight)),
     ) {
         // Тонкая линия вдоль левого края: она превращает прямоугольник в
@@ -116,4 +146,3 @@ private fun fingerprint(text: String): Int {
     }
     return value
 }
-

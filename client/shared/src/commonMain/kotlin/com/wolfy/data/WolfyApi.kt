@@ -450,6 +450,117 @@ class WolfyApi(
         }
     }
 
+    // --- Открытая библиотека ---
+
+    /**
+     * Ищет книги в Открытой библиотеке.
+     *
+     * Поиск идёт через свой сервер, а не напрямую в каталог: один канал
+     * наружу, один ограничитель частоты и одна точка, где ответ каталога
+     * превращается в понятные приложению поля.
+     */
+    suspend fun searchCatalogue(query: String): CatalogueResult = try {
+        val response = client.get("$baseUrl/v1/library/catalogue") {
+            parameter("q", query.trim())
+            parameter("limit", 24)
+        }
+        when (response.status) {
+            HttpStatusCode.OK -> CatalogueResult.Ready(response.body<CatalogueResponse>().books)
+            HttpStatusCode.TooManyRequests ->
+                CatalogueResult.Failed("Слишком много поисков подряд, подождите минуту.")
+            else -> CatalogueResult.Failed("Каталог сейчас недоступен.")
+        }
+    } catch (e: Exception) {
+        CatalogueResult.Failed("Нет связи с сервером.")
+    }
+
+    /**
+     * Скачивает книгу каталога через защищённый загрузчик сервера.
+     *
+     * У находки бывает несколько ссылок — сначала EPUB из архива, затем
+     * послойный текст. Пробуем по порядку до первой удачи: у части отскоков
+     * производного EPUB нет, и текстовая версия лучше пустого ответа.
+     */
+    suspend fun downloadCatalogueBook(book: CatalogueBook): RemoteBookResult {
+        var failure: String? = null
+        for (address in book.urls) {
+            when (val attempt = fetchRemoteBook(address)) {
+                is RemoteBookResult.Ready -> return attempt
+                is RemoteBookResult.Failed -> failure = attempt.message
+            }
+        }
+        return RemoteBookResult.Failed(failure ?: "Книгу не удалось скачать.")
+    }
+
+    /**
+     * Скачивает книгу с публичного HTTPS-адреса через сервер.
+     *
+     * Напрямую приложение могло бы и само, но проверку адреса при каждом
+     * перенаправлении, предел размера и опознание формата по содержимому
+     * держат в одном месте — на сервере.
+     */
+    suspend fun fetchRemoteBook(address: String): RemoteBookResult = try {
+        val response = client.post("$baseUrl/v1/library/fetch") {
+            contentType(ContentType.Application.Json)
+            setBody(RemoteBookRequest(url = address.trim()))
+            timeout { requestTimeoutMillis = 180_000 }
+        }
+        when {
+            response.status == HttpStatusCode.OK -> {
+                val name = remoteFileName(
+                    disposition = response.headers["Content-Disposition"],
+                    address = address,
+                )
+                RemoteBookResult.Ready(bytes = response.body(), fileName = name)
+            }
+            response.status == HttpStatusCode.TooManyRequests ->
+                RemoteBookResult.Failed("Сервер уже качает другую книгу, подождите немного.")
+            else -> {
+                // Тело ошибки короткое и человеческое: «по ссылке нет
+                // поддерживаемой книги…» годится для показа без переделки.
+                val note = runCatching {
+                    response.body<ApiErrorBody>().error
+                }.getOrNull()
+                RemoteBookResult.Failed(note ?: "Книгу по ссылке сейчас не удалось скачать.")
+            }
+        }
+    } catch (e: Exception) {
+        RemoteBookResult.Failed("Нет связи с сервером.")
+    }
+
+    private fun remoteFileName(disposition: String?, address: String): String {
+        val encoded = Regex("filename\\*=UTF-8''([^;]+)", RegexOption.IGNORE_CASE)
+            .find(disposition.orEmpty())?.groupValues?.get(1)
+        return decodePercent(encoded ?: address.substringAfterLast('/')).ifBlank { "book" }
+    }
+
+    /**
+     * Разбирает percent-кодирование заголовка.
+     *
+     * Своя реализация вместо платформенной по той же причине, что и Base64
+     * выше: двадцать строк надёжнее оговорки про API 26.
+     */
+    private fun decodePercent(value: String): String {
+        val bytes = ArrayList<Byte>(value.length)
+        var index = 0
+        while (index < value.length) {
+            val symbol = value[index]
+            val byte = if (symbol == '%' && index + 2 < value.length) {
+                value.substring(index + 1, index + 3).toIntOrNull(16)
+            } else {
+                null
+            }
+            if (byte != null) {
+                bytes.add(byte.toByte())
+                index += 3
+            } else {
+                symbol.toString().encodeToByteArray().forEach(bytes::add)
+                index += 1
+            }
+        }
+        return bytes.toByteArray().decodeToString()
+    }
+
     companion object {
         fun defaultClient(): HttpClient = HttpClient {
             // Распознавание снимка идёт секунды, а иногда и десятки секунд:
@@ -645,6 +756,41 @@ sealed interface DictionaryDownloadResult {
     data class Ready(val bytes: ByteArray) : DictionaryDownloadResult
     data class Failed(val message: String) : DictionaryDownloadResult
 }
+
+// --- Открытая библиотека ---
+
+/** Находка поиска по Открытой библиотеке. */
+@Serializable
+data class CatalogueBook(
+    /** Номер работы в каталоге вида «OL267218W». */
+    val id: String,
+    val title: String,
+    val author: String = "",
+    val year: Int = 0,
+    /** Ссылки на скачивание по убыванию предпочтительности. */
+    val urls: List<String> = emptyList(),
+)
+
+sealed interface CatalogueResult {
+    data class Ready(val books: List<CatalogueBook>) : CatalogueResult
+    data class Failed(val message: String) : CatalogueResult
+}
+
+@Serializable
+private data class CatalogueResponse(val books: List<CatalogueBook> = emptyList())
+
+@Serializable
+private data class RemoteBookRequest(val url: String)
+
+@Serializable
+private data class ApiErrorBody(val error: String = "", val message: String = "")
+
+/** Результат скачивания книги с публичного адреса. */
+sealed interface RemoteBookResult {
+    data class Ready(val bytes: ByteArray, val fileName: String) : RemoteBookResult
+    data class Failed(val message: String) : RemoteBookResult
+}
+
 
 @Serializable
 private data class TranslateRequest(

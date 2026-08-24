@@ -1,8 +1,13 @@
 package com.wolfy.ui.library
 
 import androidx.compose.runtime.Immutable
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.wolfy.data.CatalogueBook
+import com.wolfy.data.CatalogueResult
+import com.wolfy.data.RemoteBookResult
+import com.wolfy.data.WolfyApi
 import com.wolfy.data.library.Library
 import com.wolfy.data.library.Card
 import com.wolfy.data.library.LibraryBook
@@ -10,9 +15,10 @@ import com.wolfy.data.library.Shelf
 import com.wolfy.ffi.CoreException
 import com.wolfy.ffi.WolfyCore
 import com.wolfy.data.OcrResult
-import com.wolfy.data.WolfyApi
 import com.wolfy.platform.PickedBook
+import com.wolfy.platform.PickedCover
 import com.wolfy.platform.PickedPhoto
+import com.wolfy.platform.decodeImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -37,6 +43,13 @@ data class LibraryUiState(
     val message: String? = null,
     /** Идёт распознавание снимка страницы. */
     val recognizing: Boolean = false,
+    /**
+     * Номер смены обложек.
+     *
+     * Обложки живут вне ядра, и библиотека о их смене не знает; экрану нужен
+     * повод перечитать картинки, и этот счётчик им служит.
+     */
+    val coversVersion: Int = 0,
 ) {
     /** Колода книги. */
     fun deck(bookId: String): List<Card> = cards.filter { it.bookId == bookId && !it.deleted }
@@ -44,6 +57,28 @@ data class LibraryUiState(
     /** Сколько слов книги лежит в колоде. */
     fun deckSize(bookId: String): Int = deck(bookId).size
 }
+
+/**
+ * Что показывает каталог Открытой библиотеки.
+ *
+ * Каталог живёт в той же модели, что и библиотека: найденная книга после
+ * скачивания запоминается по номеру работы, чтобы повторное «скачать» вернуло
+ * уже имеющуюся книгу, а не завело вторую.
+ */
+@Immutable
+data class CatalogUiState(
+    val query: String = "",
+    val searching: Boolean = false,
+    /** Что нашлось в последний поиск. Пусто до первого поиска и при неудаче. */
+    val results: List<CatalogueBook> = emptyList(),
+    /** Поиск уже выполнялся: отличаем «ничего не искали» от «ничего не нашлось». */
+    val searched: Boolean = false,
+    /** Работы, чьи файлы качаются прямо сейчас. */
+    val downloading: Set<String> = emptySet(),
+    /** Скачанные: номер работы → книга в библиотеке. */
+    val downloaded: Map<String, LibraryBook> = emptyMap(),
+    val message: String? = null,
+)
 
 /**
  * Библиотека: список книг, добавление файлов, полки.
@@ -56,20 +91,28 @@ class LibraryViewModel(
     private val library: Library,
     private val core: WolfyCore,
     private val api: WolfyApi,
+    /** Хранилище нужно обложкам: они живут вне библиотеки ядра. */
+    private val store: com.wolfy.data.library.LibraryStore,
 ) : ViewModel() {
 
     private val message = MutableStateFlow<String?>(null)
     private val recognizing = MutableStateFlow(false)
+    private val coversVersion = MutableStateFlow(0)
 
     /** Книга, только что собранная из снимка: оболочка её откроет. */
     private val _recognized = MutableSharedFlow<LibraryBook>(extraBufferCapacity = 1)
     val recognized: SharedFlow<LibraryBook> = _recognized
 
+    /** Книга, только что скачанная из каталога: оболочка её откроет. */
+    private val _addedFromCatalog = MutableSharedFlow<LibraryBook>(extraBufferCapacity = 1)
+    val addedFromCatalog: SharedFlow<LibraryBook> = _addedFromCatalog
+
     val state: StateFlow<LibraryUiState> = combine(
         library.state,
         message,
         recognizing,
-    ) { library, message, recognizing ->
+        coversVersion,
+    ) { library, message, recognizing, covers ->
         LibraryUiState(
             // Недавно открытые впереди, а никогда не открытые — по дате
             // добавления. Алфавит здесь был бы честнее, но библиотеку читают
@@ -85,6 +128,7 @@ class LibraryViewModel(
                 .maxByOrNull { it.progress.openedAt },
             message = message,
             recognizing = recognizing,
+            coversVersion = covers,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), LibraryUiState())
 
@@ -218,4 +262,132 @@ class LibraryViewModel(
         val author: String?,
         val chapters: Int,
     )
+
+    // --- обложки ---
+
+    /** Декодированные картинки по книгам; ключ — путь, чтобы видеть смену. */
+    private val coverCache = mutableMapOf<String, Pair<String, ImageBitmap?>>()
+
+    /**
+     * Своя обложка книги, готовая к показу.
+     *
+     * `null` — своей обложки нет, и плитка рисуется набранной. Чтение и
+     * декодирование дешёвые: картинка при записи ужата до размера плитки.
+     */
+    fun coverFor(bookId: String): ImageBitmap? {
+        val path = store.findCover(bookId) ?: return null
+        coverCache[bookId]?.let { (cached, bitmap) -> if (cached == path) return bitmap }
+        val bitmap = store.readBinary(path)?.let { bytes -> runCatching { decodeImage(bytes) }.getOrNull() }
+        coverCache[bookId] = path to bitmap
+        return bitmap
+    }
+
+    /** Ставит книге обложку из галереи. */
+    fun setCover(bookId: String, picked: PickedCover) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { store.writeCover(bookId, picked.extension, picked.bytes) }
+                .onSuccess {
+                    coverCache.remove(bookId)
+                    coversVersion.value += 1
+                }
+                .onFailure { message.value = "Обложку не получилось сохранить: ${it.message}" }
+        }
+    }
+
+    /** Убирает свою обложку: книга возвращается к набранной. */
+    fun clearCover(bookId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            store.deleteCover(bookId)
+            coverCache.remove(bookId)
+            coversVersion.value += 1
+        }
+    }
+
+    // --- каталог Открытой библиотеки ---
+
+    private val catalogState = MutableStateFlow(CatalogUiState())
+    val catalog: StateFlow<CatalogUiState> = catalogState
+
+    private fun changeCatalog(change: (CatalogUiState) -> CatalogUiState) {
+        catalogState.value = change(catalogState.value)
+    }
+
+    /** Печатает в поле поиска без похода в сеть. */
+    fun typeQuery(query: String) = changeCatalog { it.copy(query = query) }
+
+    fun searchCatalogue(query: String) {
+        val clean = query.trim()
+        if (clean.isEmpty()) return
+
+        viewModelScope.launch {
+            changeCatalog { it.copy(searching = true, query = clean, message = null) }
+            when (val result = api.searchCatalogue(clean)) {
+                is CatalogueResult.Ready -> changeCatalog {
+                    it.copy(searching = false, searched = true, results = result.books)
+                }
+                is CatalogueResult.Failed -> changeCatalog {
+                    it.copy(
+                        searching = false,
+                        searched = true,
+                        results = emptyList(),
+                        message = result.message,
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * Скачивает найденную книгу и заводит её в библиотеке.
+     *
+     * Источник записывается номером работы каталога: одна и та же книга,
+     * скачанная на телефоне и на компьютере, узнаётся как одна — тем же
+     * способом, каким узнаются книги из ленты «Открытий».
+     */
+    fun downloadCatalogue(item: CatalogueBook) {
+        if (item.id in catalogState.value.downloading) return
+        if (catalogState.value.downloaded.containsKey(item.id)) return
+
+        viewModelScope.launch {
+            message.value = null
+            changeCatalog { it.copy(downloading = it.downloading + item.id, message = null) }
+
+            when (val result = api.downloadCatalogueBook(item)) {
+                is RemoteBookResult.Failed -> changeCatalog {
+                    it.copy(downloading = it.downloading - item.id, message = result.message)
+                }
+
+                is RemoteBookResult.Ready -> {
+                    val book = withContext(Dispatchers.IO) {
+                        val added = library.addDownloaded(
+                            bytes = result.bytes,
+                            fileName = result.fileName,
+                            title = item.title,
+                            author = item.author.takeIf(String::isNotBlank),
+                            sourceKey = "openlibrary:${item.id}",
+                        )
+                        runCatching {
+                            val described = withContext(Dispatchers.Default) { describe(added.path) }
+                            library.describe(
+                                id = added.id,
+                                title = described.title ?: added.title,
+                                author = described.author
+                                    ?: item.author.takeIf(String::isNotBlank),
+                                chapters = described.chapters,
+                            )
+                        }
+                        library.book(added.id) ?: added
+                    }
+                    changeCatalog {
+                        it.copy(
+                            downloading = it.downloading - item.id,
+                            downloaded = it.downloaded + (item.id to book),
+                            message = "«${item.title}» добавлена в библиотеку.",
+                        )
+                    }
+                    _addedFromCatalog.tryEmit(book)
+                }
+            }
+        }
+    }
 }

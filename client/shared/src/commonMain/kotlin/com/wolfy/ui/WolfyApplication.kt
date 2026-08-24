@@ -60,6 +60,7 @@ import com.wolfy.platform.fileDropTarget
 import com.wolfy.platform.fileNameOf
 import com.wolfy.platform.looksLikePhoto
 import com.wolfy.platform.readBytes
+import com.wolfy.platform.rememberCoverPicker
 import com.wolfy.platform.rememberReminderPermission
 import com.wolfy.platform.rememberBookPicker
 import com.wolfy.platform.rememberPhotoPicker
@@ -77,6 +78,7 @@ import com.wolfy.srs.TrainingViewModel
 import com.wolfy.ui.decks.DecksScreen
 import com.wolfy.ui.discovery.DiscoveryScreen
 import com.wolfy.ui.discovery.DiscoveryViewModel
+import com.wolfy.ui.library.CatalogScreen
 import com.wolfy.ui.library.LibraryScreen
 import com.wolfy.ui.library.LibraryViewModel
 import com.wolfy.ui.library.ShelvesScreen
@@ -174,7 +176,7 @@ fun WolfyApplication(
                     library = library,
                     dictionary = dictionary,
                 ),
-                catalogue = LibraryViewModel(library, core, api),
+                catalogue = LibraryViewModel(library, core, api, store),
                 training = TrainingViewModel(library, settings, coreSession),
                 session = session,
                 discovery = DiscoveryViewModel(api, session, library),
@@ -453,6 +455,17 @@ private fun Shell(
         attachTo = null
     }
 
+    // Каталог Открытой библиотеки и обложки. Обе истории живут внутри раздела
+    // книг: каталог — второй способ пополнить библиотеку, обложка — способ
+    // узнавать её книги в лицо.
+    var catalogOpen by remember { mutableStateOf(false) }
+    var coverTarget by remember { mutableStateOf<String?>(null) }
+    val pickCover = rememberCoverPicker { picked ->
+        coverTarget?.let { parts.catalogue.setCover(it, picked) }
+        coverTarget = null
+    }
+    val catalog by parts.catalogue.catalog.collectAsState()
+
     val open: (LibraryBook) -> Unit = { book ->
         if (book.readable) {
             reading = book
@@ -473,13 +486,17 @@ private fun Shell(
     // телефоном и переносят.
     val shoot = rememberPhotoPicker(fromCamera = onPhone, onPicked = parts.catalogue::recognize)
 
-    // Распознанную страницу открываем сразу: читатель снимал её, чтобы читать,
-    // а не чтобы найти в списке.
+    // Распознанную страницу и только что скачанную книгу открываем сразу:
+    // читатель их добыл ради чтения, а не ради строчки в списке.
     LaunchedEffect(parts) {
-        parts.catalogue.recognized.collect { book ->
-            reading = book
-            section = Section.Books
-            parts.reader.open(book)
+        launch {
+            parts.catalogue.recognized.collect { open(it) }
+        }
+        launch {
+            parts.catalogue.addedFromCatalog.collect { book ->
+                catalogOpen = false
+                open(book)
+            }
         }
     }
     val syncStatus by parts.sync.status.collectAsState()
@@ -502,7 +519,11 @@ private fun Shell(
     // переменных: анимации перехода нужно знать не только куда идём, но и
     // откуда, а «откуда» к моменту перехода из переменных уже стёрто.
     val route: Route = when (section) {
-        Section.Books -> reading?.let(Route::Reader) ?: Route.Library
+        Section.Books -> when {
+            catalogOpen -> Route.Catalog
+            reading != null -> Route.Reader(reading!!)
+            else -> Route.Library
+        }
         Section.Shelves -> Route.Shelves
         Section.Discover -> Route.Discover
         Section.Cards -> when {
@@ -572,6 +593,22 @@ private fun Shell(
                     onImport = pick,
                     onShoot = shoot,
                     onRemove = { parts.catalogue.remove(it.id) },
+                    onRequestCover = { book ->
+                        coverTarget = book.id
+                        pickCover()
+                    },
+                    onClearCover = { parts.catalogue.clearCover(it.id) },
+                    onCatalog = { catalogOpen = true },
+                    coverOf = parts.catalogue::coverFor,
+                )
+
+                is Route.Catalog -> CatalogScreen(
+                    state = catalog,
+                    onQuery = parts.catalogue::typeQuery,
+                    onSearch = { parts.catalogue.searchCatalogue(catalog.query) },
+                    onDownload = parts.catalogue::downloadCatalogue,
+                    onOpen = open,
+                    onBack = { catalogOpen = false },
                 )
 
                 is Route.Reader -> ReaderScreen(
@@ -702,6 +739,11 @@ private sealed interface Route {
 
     data object Shelves : Route {
         override val depth: Int get() = 0
+    }
+
+    /** Каталог Открытой библиотеки — внутри раздела книг, глубже библиотеки. */
+    data object Catalog : Route {
+        override val depth: Int get() = 1
     }
 
     data object Discover : Route {

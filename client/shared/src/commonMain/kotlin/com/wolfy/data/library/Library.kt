@@ -273,11 +273,12 @@ class Library(
      * Файл стирается сразу, а запись остаётся с пометкой: файл больше не
      * нужен никому, а пометка обязана доехать до второго устройства, иначе
      * книга там воскреснет. Колода уходит вместе с книгой — это уже забота
-     * ядра.
+     * ядра. Обложка — украшение устройства, уходит вместе с книгой тоже.
      */
     fun remove(id: String) {
         val book = book(id) ?: return
         if (book.readable) store.deleteBook(book.path)
+        store.deleteCover(id)
         send(command("removeBook") { put("id", id) })
     }
 

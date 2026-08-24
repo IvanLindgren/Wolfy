@@ -27,6 +27,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -54,6 +55,14 @@ fun LibraryScreen(
     onImport: () -> Unit,
     onShoot: () -> Unit,
     onRemove: (LibraryBook) -> Unit,
+    /** Поставить книге свою обложку из галереи. */
+    onRequestCover: (LibraryBook) -> Unit = {},
+    /** Убрать свою обложку, вернув набранную. */
+    onClearCover: (LibraryBook) -> Unit = {},
+    /** Открыть каталог Открытой библиотеки. */
+    onCatalog: () -> Unit = {},
+    /** Своя обложка книги, готовая к показу; `null` — обложки нет. */
+    coverOf: (String) -> ImageBitmap? = { null },
     modifier: Modifier = Modifier,
 ) {
     val colors = WolfyTheme.colors
@@ -77,6 +86,7 @@ fun LibraryScreen(
                     ContinueCard(
                         book = current,
                         savedWords = state.deckSize(current.id),
+                        cover = coverOf(current.id),
                         onOpen = { onOpen(current) },
                     )
                 }
@@ -85,6 +95,7 @@ fun LibraryScreen(
                     recognizing = state.recognizing,
                     onImport = onImport,
                     onShoot = onShoot,
+                    onCatalog = onCatalog,
                 )
                 state.message?.let { message ->
                     Text(
@@ -101,11 +112,16 @@ fun LibraryScreen(
         }
 
         items(state.books, key = { it.id }) { book ->
+            val key = "${book.id}:${state.coversVersion}"
+            val cover = remember(key) { coverOf(book.id) }
             BookTile(
                 book = book,
                 savedWords = state.deckSize(book.id),
+                cover = cover,
                 onOpen = { onOpen(book) },
                 onRemove = { onRemove(book) },
+                onRequestCover = { onRequestCover(book) },
+                onClearCover = { onClearCover(book) },
             )
         }
     }
@@ -119,7 +135,12 @@ fun LibraryScreen(
  * а если открытых нет — её нет вовсе.
  */
 @Composable
-private fun ContinueCard(book: LibraryBook, savedWords: Int, onOpen: () -> Unit) {
+private fun ContinueCard(
+    book: LibraryBook,
+    savedWords: Int,
+    cover: ImageBitmap?,
+    onOpen: () -> Unit,
+) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
     val typography = WolfyTheme.typography
@@ -155,6 +176,7 @@ private fun ContinueCard(book: LibraryBook, savedWords: Int, onOpen: () -> Unit)
         BookCover(
             title = book.title,
             author = book.author,
+            cover = cover,
             modifier = Modifier.height(96.dp),
         )
     }
@@ -166,6 +188,7 @@ private fun LibraryHeader(
     recognizing: Boolean,
     onImport: () -> Unit,
     onShoot: () -> Unit,
+    onCatalog: () -> Unit,
 ) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
@@ -200,6 +223,14 @@ private fun LibraryHeader(
                 )
             }
         }
+        // Каталог — третий способ пополнить библиотеку: без файла на руках и
+        // без выхода из приложения.
+        Text(
+            text = "из Открытой библиотеки →",
+            style = WolfyTheme.typography.button,
+            color = colors.accent,
+            modifier = Modifier.pressable(onClick = onCatalog),
+        )
         if (recognizing) {
             Row(
                 horizontalArrangement = Arrangement.spacedBy(spacing.medium),
@@ -226,30 +257,44 @@ private fun LibraryHeader(
 /**
  * Обложка с процентом и счётчиком слов — плитка сетки.
  *
- * Удаление спрятано за долгое нажатие и подтверждение. Книга — это часы
- * чтения и накопленная колода, и кнопка «удалить», по которой можно попасть
- * пальцем, здесь стоит дороже, чем неудобство долгого нажатия.
+ * Долгое нажатие открывает действия на месте плитки: своя обложка и удаление.
+ * Книга — это часы чтения и накопленная колода, и кнопка «удалить», по
+ * которой можно попасть пальцем случайно, здесь стоит дороже, чем
+ * неудобство долгого нажатия.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun BookTile(
     book: LibraryBook,
     savedWords: Int,
+    cover: ImageBitmap?,
     onOpen: () -> Unit,
     onRemove: () -> Unit,
+    onRequestCover: () -> Unit,
+    onClearCover: () -> Unit,
 ) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
-    var confirming by remember { mutableStateOf(false) }
+    var menu by remember { mutableStateOf(false) }
 
-    if (confirming) {
-        RemoveConfirmation(
+    if (menu) {
+        TileMenu(
+            bookTitle = book.title,
             savedWords = savedWords,
-            onConfirm = {
-                confirming = false
+            hasCustomCover = cover != null,
+            onSetCover = {
+                menu = false
+                onRequestCover()
+            },
+            onClearCover = {
+                menu = false
+                onClearCover()
+            },
+            onRemove = {
+                menu = false
                 onRemove()
             },
-            onCancel = { confirming = false },
+            onCancel = { menu = false },
         )
         return
     }
@@ -257,12 +302,12 @@ private fun BookTile(
     Column(
         Modifier.combinedClickable(
             onClick = onOpen,
-            onLongClick = { confirming = true },
+            onLongClick = { menu = true },
         ),
         verticalArrangement = Arrangement.spacedBy(spacing.small),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        BookCover(title = book.title, author = book.author, modifier = Modifier.fillMaxWidth())
+        BookCover(title = book.title, author = book.author, cover = cover, modifier = Modifier.fillMaxWidth())
 
         Text(
             text = when {
@@ -289,9 +334,17 @@ private fun BookTile(
     }
 }
 
-/** Подтверждение удаления — на месте самой плитки, а не поверх экрана. */
+/** Действия над книгой — на месте самой плитки, без диалогов поверх. */
 @Composable
-private fun RemoveConfirmation(savedWords: Int, onConfirm: () -> Unit, onCancel: () -> Unit) {
+private fun TileMenu(
+    bookTitle: String,
+    savedWords: Int,
+    hasCustomCover: Boolean,
+    onSetCover: () -> Unit,
+    onClearCover: () -> Unit,
+    onRemove: () -> Unit,
+    onCancel: () -> Unit,
+) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
 
@@ -304,10 +357,33 @@ private fun RemoveConfirmation(savedWords: Int, onConfirm: () -> Unit, onCancel:
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
-            text = "Удалить книгу?",
-            style = WolfyTheme.typography.caption,
+            text = bookTitle,
+            style = WolfyTheme.typography.button,
             color = colors.ink,
             textAlign = TextAlign.Center,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            text = "поставить обложку",
+            style = WolfyTheme.typography.button,
+            color = colors.accent,
+            modifier = Modifier.pressable(onClick = onSetCover),
+        )
+        if (hasCustomCover) {
+            Text(
+                text = "убрать свою обложку",
+                style = WolfyTheme.typography.caption,
+                color = colors.inkMuted,
+                modifier = Modifier.pressable(onClick = onClearCover),
+            )
+        }
+        Rule()
+        Text(
+            text = "удалить книгу",
+            style = WolfyTheme.typography.button,
+            color = colors.accent,
+            modifier = Modifier.pressable(onClick = onRemove),
         )
         if (savedWords > 0) {
             // Колода уходит вместе с книгой, и узнать об этом после — хуже
@@ -320,12 +396,6 @@ private fun RemoveConfirmation(savedWords: Int, onConfirm: () -> Unit, onCancel:
                 textAlign = TextAlign.Center,
             )
         }
-        Text(
-            text = "удалить",
-            style = WolfyTheme.typography.button,
-            color = colors.accent,
-            modifier = Modifier.pressable(onClick = onConfirm),
-        )
         Text(
             text = "отмена",
             style = WolfyTheme.typography.caption,
@@ -379,7 +449,7 @@ private fun EmptyLibrary(onImport: () -> Unit) {
             color = colors.ink,
         )
         Text(
-            text = "Добавьте книгу в epub, txt или pdf — или снимите страницу бумажной.",
+            text = "Добавьте книгу в epub, txt или pdf — или выберите свободную из каталога.",
             style = WolfyTheme.typography.body,
             color = colors.inkMuted,
             textAlign = TextAlign.Center,
