@@ -221,7 +221,10 @@ func (g *Google) seal(state callbackState) (string, error) {
 func (g *Google) open(value string) (callbackState, error) {
 	var state callbackState
 	sealed, err := base64.RawURLEncoding.DecodeString(value)
-	if err != nil {
+	// Отклоняем неканоническую base64url-запись. У последнего символа могут
+	// быть неиспользуемые биты: другая строка иногда декодируется в те же байты
+	// и формально проходит AEAD, хотя OAuth state в URL был изменён.
+	if err != nil || base64.RawURLEncoding.EncodeToString(sealed) != value {
 		return state, ErrInvalidState
 	}
 	block, err := aes.NewCipher(g.stateKey[:])
