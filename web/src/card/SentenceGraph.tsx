@@ -26,8 +26,6 @@ import styles from './card.module.css'
 interface GraphProps {
   tokens: Token[]
   chunks: Chunk[]
-  /** Номер первого токена предложения: `chunk.start` считается от него. */
-  offset: number
   mode: 'graph' | 'tree'
   /** Длительности движения. Ноль — «меньше движения». */
   stagger: number
@@ -58,7 +56,6 @@ function linksOf(nodes: Node[]): { from: number; to: number }[] {
 export function SentenceGraph({
   tokens,
   chunks,
-  offset,
   mode,
   stagger,
   duration,
@@ -67,10 +64,10 @@ export function SentenceGraph({
     () =>
       chunks.map((chunk) => ({
         role: chunk.role,
-        text: tokens[chunk.head - offset]?.text ?? headText(tokens, chunk, offset),
+        text: tokens[chunk.head]?.text ?? headText(tokens, chunk),
         head: chunk.head,
       })),
-    [chunks, tokens, offset],
+    [chunks, tokens],
   )
 
   const links = useMemo(() => linksOf(nodes), [nodes])
@@ -91,9 +88,9 @@ export function SentenceGraph({
   )
 }
 
-function headText(tokens: Token[], chunk: Chunk, offset: number): string {
+function headText(tokens: Token[], chunk: Chunk): string {
   const words = tokens
-    .slice(Math.max(0, chunk.start - offset), Math.max(0, chunk.end - offset))
+    .slice(Math.max(0, chunk.start), Math.max(0, chunk.end))
     .filter((token) => token.kind === 'word')
   return words[words.length - 1]?.text ?? ''
 }

@@ -96,35 +96,37 @@ func (l *rateLimiter) withRateLimit(next http.Handler) http.Handler {
 		// 429, а не 403: читателю отказано временно, и через минуту он снова
 		// сможет переводить. Сообщение написано для него, а не для отладки.
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{
-			"error": "слишком много переводов подряд, подождите минуту",
+			"error": "слишком много запросов подряд, подождите минуту",
 		})
 	})
 }
 
 // clientIP достаёт адрес запроса.
 //
-// X-Forwarded-For учитывается, потому что сервис стоит за обратным прокси и
-// без этого все запросы пришли бы с одного адреса — самого прокси, — и первый
-// же читатель исчерпал бы запас на всех. Берётся первый адрес цепочки: его
-// подставляет ближайший к клиенту прокси.
-//
-// Заголовок подделывается тривиально, и полагаться на него как на защиту
-// нельзя. Здесь он и не защита: настоящий предел ставит DeepL своей квотой, а
-// это — вежливая просьба не частить.
+// Production-сервис слушает loopback за нашим Nginx. Только от loopback можно
+// доверять X-Real-IP, который vhost всегда перезаписывает через $remote_addr.
+// Клиентский X-Forwarded-For намеренно игнорируется: `$proxy_add_x_forwarded_for`
+// сохраняет подложенный первый адрес и позволил бы обходить лимит новым
+// заголовком на каждом запросе. При прямом подключении источником остаётся
+// RemoteAddr независимо от любых заголовков.
 func clientIP(r *http.Request) string {
-	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-		for i := 0; i < len(forwarded); i++ {
-			if forwarded[i] == ',' {
-				return trimSpace(forwarded[:i])
-			}
+	host := remoteHost(r.RemoteAddr)
+	parsed := net.ParseIP(host)
+	if parsed != nil && parsed.IsLoopback() {
+		real := net.ParseIP(trimSpace(r.Header.Get("X-Real-IP")))
+		if real != nil {
+			return real.String()
 		}
-		return trimSpace(forwarded)
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
 	}
 	return host
+}
+
+func remoteHost(address string) string {
+	host, _, err := net.SplitHostPort(address)
+	if err == nil {
+		return host
+	}
+	return address
 }
 
 func trimSpace(text string) string {

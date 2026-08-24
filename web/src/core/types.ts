@@ -149,7 +149,16 @@ export interface Marker {
   note: string
 }
 
+/** Часть речи слова, выбранная теггером по всему предложению. */
+export interface ContextPart {
+  /** Индекс в массиве токенов предложения. */
+  token: number
+  pos: PosTag
+}
+
 export interface Grammar {
+  /** Необязательно для совместимости с уже закешированной старой WASM-сборкой. */
+  parts?: ContextPart[]
   findings: Finding[]
   chunks: Chunk[]
   markers: Marker[]

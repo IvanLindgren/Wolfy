@@ -75,7 +75,7 @@ func run() error {
 		cfg.CitavukGoogleURL,
 		cfg.CitavukYandexStartURL,
 		cfg.CitavukYandexCompleteURL,
-	)
+	).WithYandexWebReturn(cfg.CitavukYandexWebReturn)
 	googleAuth := social.NewGoogle(
 		accountService,
 		cfg.GoogleClientID,
@@ -85,7 +85,13 @@ func run() error {
 		cfg.RequestTimeout,
 	).WithWebOrigin(cfg.WebOrigin)
 	if !googleAuth.Configured() {
-		log.Warn("Google OAuth не настроен — кнопка Google будет скрыта")
+		log.Info("Google code+PKCE OAuth не настроен — браузер использует GIS")
+	}
+	if cfg.GoogleWebClientID == "" || !accountService.CanGoogle() {
+		log.Warn("Google GIS не настроен — кнопка Google будет скрыта")
+	}
+	if !accountService.CanYandexWeb() {
+		log.Warn("trusted web-return Яндекса не включён — кнопка Яндекса будет скрыта")
 	}
 	discoveryService := discovery.New(
 		db,
@@ -119,7 +125,9 @@ func run() error {
 			dictionaryService,
 			updates.New(cfg.ReleasesPath),
 			log,
-		).WithWebOrigin(cfg.WebOrigin).Handler(),
+		).WithWebOrigin(cfg.WebOrigin).
+			WithGoogleWebClientID(cfg.GoogleWebClientID).
+			Handler(),
 		// Таймауты обязательны: без них одно зависшее соединение держит
 		// горутину и файловый дескриптор до перезапуска сервиса.
 		ReadHeaderTimeout: 10 * time.Second,

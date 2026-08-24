@@ -32,9 +32,10 @@ var ErrUnavailable = errors.New("перевод недоступен")
 
 // Request — что переводим.
 type Request struct {
-	Text   string
-	Source string // "EN"; пустая строка — пусть определяет провайдер
-	Target string // "RU"
+	Text    string
+	Context string // окружающая фраза для короткого неоднозначного текста
+	Source  string // "EN"; пустая строка — пусть определяет провайдер
+	Target  string // "RU"
 }
 
 // Result — перевод и откуда он взялся.
@@ -83,8 +84,12 @@ func (s *Service) Translate(ctx context.Context, req Request) (Result, error) {
 		target = "RU"
 	}
 	source := strings.ToUpper(strings.TrimSpace(req.Source))
+	contextText := strings.TrimSpace(req.Context)
 
-	key := cacheKey(text, source, target)
+	// Одно и то же слово в разных предложениях может переводиться по-разному:
+	// `book` — «книга» или «бронировать». Контекст обязан входить в ключ кэша,
+	// иначе первый встреченный смысл навсегда подменил бы остальные.
+	key := cacheKey(text, contextText, source, target)
 
 	if cached, ok := s.fromCache(ctx, key); ok {
 		return Result{Text: cached, Cached: true}, nil
@@ -93,7 +98,7 @@ func (s *Service) Translate(ctx context.Context, req Request) (Result, error) {
 		return Result{}, ErrUnavailable
 	}
 
-	translated, err := s.fromDeepL(ctx, text, source, target)
+	translated, err := s.fromDeepL(ctx, text, contextText, source, target)
 	if err != nil {
 		return Result{}, err
 	}
@@ -106,8 +111,8 @@ func (s *Service) Translate(ctx context.Context, req Request) (Result, error) {
 //
 // Хеш, а не сам текст ключом: предложение бывает длиной в несколько сотен
 // символов, а индекс по bytea фиксированной длины и меньше, и быстрее.
-func cacheKey(text, source, target string) []byte {
-	sum := sha256.Sum256([]byte(source + "\x00" + target + "\x00" + text))
+func cacheKey(text, contextText, source, target string) []byte {
+	sum := sha256.Sum256([]byte(source + "\x00" + target + "\x00" + contextText + "\x00" + text))
 	return sum[:]
 }
 
@@ -147,12 +152,17 @@ type deeplResponse struct {
 	} `json:"translations"`
 }
 
-func (s *Service) fromDeepL(ctx context.Context, text, source, target string) (string, error) {
+func (s *Service) fromDeepL(ctx context.Context, text, contextText, source, target string) (string, error) {
 	form := url.Values{}
 	form.Set("text", text)
 	form.Set("target_lang", target)
 	if source != "" {
 		form.Set("source_lang", source)
+	}
+	// DeepL не переводит context и не тарифицирует его, а использует только
+	// для выбора смысла короткого текста. Это ровно наш случай карточки слова.
+	if contextText != "" {
+		form.Set("context", contextText)
 	}
 	// Книга — это проза, и предложение в ней надо переводить целиком, не
 	// разрывая по знакам препинания.

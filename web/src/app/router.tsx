@@ -42,6 +42,12 @@ const libraryRoute = createRoute({
   component: screen(() => import('../library/LibraryScreen'), 'LibraryScreen'),
 })
 
+const allWordsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/library/words',
+  component: screen(() => import('../library/AllWordsScreen'), 'AllWordsScreen'),
+})
+
 const bookWordsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/library/$bookId/words',
@@ -124,6 +130,7 @@ const photoRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   homeRoute,
   libraryRoute,
+  allWordsRoute,
   bookWordsRoute,
   readerIndexRoute,
   readerRoute,

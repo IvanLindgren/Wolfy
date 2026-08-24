@@ -14,6 +14,7 @@ use serde::Serialize;
 use crate::grammar::{Article, Chunk, Exercise, Finding, Marker, MarkerKind, Role};
 use crate::lexicon::{Fact, PosSet, WordAnalysis};
 use crate::parser::{Block, Chapter, ChapterInfo, Metadata};
+use crate::tagger::Word as TaggedWord;
 use crate::tokenizer::{Sentence, Token, TokenKind};
 
 /// Разбор слова для карточки.
@@ -170,9 +171,29 @@ impl From<&Finding> for FindingDto {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GrammarDto {
+    /// Часть речи каждого слова, выбранная с учётом всего предложения.
+    pub parts: Vec<PartDto>,
     pub findings: Vec<FindingDto>,
     pub chunks: Vec<ChunkDto>,
     pub markers: Vec<MarkerDto>,
+}
+
+/// Слово предложения и его контекстная часть речи.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PartDto {
+    /// Индекс в массиве токенов, а не порядковый номер среди слов.
+    pub token: usize,
+    pub pos: &'static str,
+}
+
+impl From<&TaggedWord> for PartDto {
+    fn from(word: &TaggedWord) -> Self {
+        PartDto {
+            token: word.token,
+            pos: pos_name(word.pos),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]

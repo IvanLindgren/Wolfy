@@ -83,7 +83,8 @@ func TestSocialEndpointsStayWithCitavuk(t *testing.T) {
 	defer upstream.Close()
 
 	service := New("https://example.invalid/login", "", "", time.Second).
-		WithSocial(upstream.URL+"/google", upstream.URL+"/yandex/start", upstream.URL+"/yandex/complete")
+		WithSocial(upstream.URL+"/google", upstream.URL+"/yandex/start", upstream.URL+"/yandex/complete").
+		WithYandexWebReturn(true)
 	service.client = upstream.Client()
 	if !service.CanGoogle() || !service.CanYandex() {
 		t.Fatal("настроенные социальные способы скрыты")
@@ -95,5 +96,28 @@ func TestSocialEndpointsStayWithCitavuk(t *testing.T) {
 	_, err = service.YandexStart(context.Background(), []byte(`{"returnTarget":"desktop"}`))
 	if err != nil || visited != "/yandex/start" {
 		t.Fatalf("Yandex start ушёл не туда: %q %v", visited, err)
+	}
+}
+
+func TestYandexWebStaysHiddenUntilCitavukSupportsTrustedReturn(t *testing.T) {
+	service := New("https://example.invalid/login", "", "", time.Second).
+		WithSocial("", "https://example.invalid/yandex/start", "https://example.invalid/yandex/complete")
+
+	if !service.CanYandex() {
+		t.Fatal("desktop endpoints настроены, но способ скрыт")
+	}
+	if service.CanYandexWeb() {
+		t.Fatal("web-вход объявлен без поддержки trusted returnUrl у Читавука")
+	}
+	_, err := service.YandexStart(context.Background(), []byte(
+		`{"returnTarget":"web","returnUrl":"https://wolfy.citavuk.ru/auth/return"}`,
+	))
+	if !errors.Is(err, ErrNotConfigured) {
+		t.Fatalf("небезопасный web-start не остановлен: %v", err)
+	}
+
+	service.WithYandexWebReturn(true)
+	if !service.CanYandexWeb() {
+		t.Fatal("обновлённый контракт Читавука не включил web-вход")
 	}
 }

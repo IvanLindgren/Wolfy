@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { localDay, newId, plural } from '../../src/core/clock'
+import { dueDay, localDay, newId, plural } from '../../src/core/clock'
 import { translationKey } from '../../src/storage/idb'
 
 describe('время и локальные идентификаторы', () => {
@@ -25,5 +25,15 @@ describe('время и локальные идентификаторы', () => 
 
   it('нормализует контекстный ключ перевода', () => {
     expect(translationKey('  The  bank\nclosed. ', 'BANK')).toBe('The bank closed.\u0000bank')
+  })
+
+  it('различает новую, сегодняшнюю и будущую карточку', () => {
+    const day = 86_400_000
+    const reference = Date.UTC(2026, 7, 24, 12)
+    expect(dueDay(0, reference, 0)).toBe('новая')
+    expect(dueDay(reference, reference, 0)).toBe('сегодня')
+    expect(dueDay(reference + day, reference, 0)).toBe('завтра')
+    expect(dueDay(reference + 3 * day, reference, 0)).toBe('через 3 дня')
+    expect(dueDay(reference - 2 * day, reference, 0)).toBe('2 дня назад')
   })
 })

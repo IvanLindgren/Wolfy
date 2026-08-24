@@ -11,6 +11,7 @@
  */
 
 import * as bridge from '../core/bridge'
+import { downloadBookURL } from '../api/client'
 import { newId, now } from '../core/clock'
 import { session, useSession } from '../core/session'
 import type { LibraryBook } from '../core/types'
@@ -64,6 +65,32 @@ export async function addFile(file: File): Promise<ImportResult> {
     return {
       kind: 'refused',
       message: error instanceof Error ? error.message : 'Книгу не удалось открыть.',
+    }
+  }
+}
+
+/** Добавляет книгу по публичной HTTPS-ссылке через защищённый прокси API. */
+export async function addURL(address: string): Promise<ImportResult> {
+  const clean = address.trim()
+  let parsed: URL
+  try {
+    parsed = new URL(clean)
+  } catch {
+    return { kind: 'refused', message: 'Введите полную HTTPS-ссылку на файл книги.' }
+  }
+  if (parsed.protocol !== 'https:') {
+    return { kind: 'refused', message: 'Для загрузки книги нужна HTTPS-ссылка.' }
+  }
+
+  try {
+    const downloaded = await downloadBookURL(clean)
+    return await addFile(
+      new File([downloaded.bytes], downloaded.fileName, { type: downloaded.contentType }),
+    )
+  } catch (error) {
+    return {
+      kind: 'refused',
+      message: error instanceof Error ? error.message : 'Книгу по ссылке не удалось скачать.',
     }
   }
 }

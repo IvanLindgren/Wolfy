@@ -18,17 +18,19 @@
 import { useEffect, useState } from 'react'
 
 import * as bridge from '../core/bridge'
-import type { Marker, PosTag, Token } from '../core/types'
+import type { ContextPart, Marker, PosTag, Token } from '../core/types'
 import { MARKER_TITLES, POS_TITLES, posColor } from './grammarColors'
 import styles from './card.module.css'
 
 interface PhraseTextProps {
   tokens: Token[]
   markers: Marker[]
-  /** Номер первого токена фразы: маркеры считаются от него. */
-  offset: number
+  /** Части речи в индексах локального массива `tokens`. */
+  parts?: ContextPart[]
   /** Показывать ли подстрочник. */
   interlinear: boolean
+  /** Подписать часть речи под каждым словом. */
+  showParts?: boolean
 }
 
 interface Gloss {
@@ -37,12 +39,18 @@ interface Gloss {
   pos: string
 }
 
-export function PhraseText({ tokens, markers, offset, interlinear }: PhraseTextProps) {
+export function PhraseText({
+  tokens,
+  markers,
+  parts = [],
+  interlinear,
+  showParts = false,
+}: PhraseTextProps) {
   const words = tokens.filter((token) => token.kind === 'word').map((token) => token.text)
   const [glosses, setGlosses] = useState<Gloss[]>([])
 
   useEffect(() => {
-    if (!interlinear || !words.length) {
+    if ((!interlinear && !showParts) || !words.length) {
       setGlosses([])
       return
     }
@@ -56,20 +64,21 @@ export function PhraseText({ tokens, markers, offset, interlinear }: PhraseTextP
     // Ключ по самой фразе: пересчитывать подстрочник при каждой перерисовке
     // незачем, а массив слов — новый объект на каждый рендер.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [interlinear, words.join(' ')])
+  }, [interlinear, showParts, words.join(' ')])
 
   let wordNumber = -1
 
   return (
-    <p className={styles.phrase} lang="en">
+    <p className={styles.phrase} data-parts={showParts} lang="en">
       {tokens.map((token, index) => {
         if (token.kind !== 'word') {
           return <span key={index}>{token.text}</span>
         }
         wordNumber += 1
         const gloss = glosses[wordNumber]
-        const mine = markers.filter((marker) => marker.token - offset === index)
-        const tag = (gloss?.pos || '') as PosTag
+        const mine = markers.filter((marker) => marker.token === index)
+        const tag = parts.find((part) => part.token === index)?.pos ??
+          ((gloss?.pos || '') as PosTag)
 
         return (
           <span key={index} className={styles.phrase__word}>
@@ -85,11 +94,35 @@ export function PhraseText({ tokens, markers, offset, interlinear }: PhraseTextP
             >
               {marked(token.text, mine)}
             </span>
+            {showParts && tag && (
+              <span
+                className={styles.phrase__pos}
+                lang="ru"
+                title={POS_TITLES[tag] ?? tag}
+                aria-label={POS_TITLES[tag] ?? tag}
+              >
+                {POS_SHORT[tag] ?? tag.toLowerCase()}
+              </span>
+            )}
           </span>
         )
       })}
     </p>
   )
+}
+
+const POS_SHORT: Partial<Record<PosTag, string>> = {
+  NOUN: 'сущ.',
+  VERB: 'гл.',
+  ADJ: 'прил.',
+  ADV: 'нар.',
+  PRON: 'мест.',
+  DET: 'опр.',
+  ADP: 'предл.',
+  CONJ: 'союз',
+  PART: 'част.',
+  PRT: 'част.',
+  NUM: 'числ.',
 }
 
 /**

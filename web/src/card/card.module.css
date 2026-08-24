@@ -106,6 +106,216 @@
   background: var(--surface);
 }
 
+/* --- Главное в карточке ------------------------------------------------ */
+
+.primaryGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin-bottom: 0.9rem;
+}
+
+.primaryCard,
+.phrasePrimary {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  padding: 0.85rem 0.95rem;
+  border: 1px solid color-mix(in srgb, var(--card-tone, var(--accent)) 24%, var(--rule));
+  border-radius: calc(var(--radius) + 3px);
+  background:
+    radial-gradient(circle at 100% 0, color-mix(in srgb, var(--card-tone, var(--accent)) 13%, transparent), transparent 44%),
+    color-mix(in srgb, var(--card-tone, var(--accent)) 5%, var(--surface));
+}
+
+.primaryCard:last-child {
+  grid-column: 1 / -1;
+}
+
+.primaryCard[data-tone='translation'],
+.phrasePrimary[data-tone='translation'] {
+  --card-tone: var(--accent);
+}
+
+.primaryCard[data-tone='definition'] {
+  --card-tone: var(--pos-noun);
+}
+
+.primaryCard[data-tone='form'],
+.phrasePrimary[data-tone='parts'] {
+  --card-tone: var(--pos-pron);
+}
+
+.phrasePrimary[data-tone='graph'] {
+  --card-tone: var(--pos-verb);
+}
+
+.primaryCard__title {
+  margin: 0 0 0.45rem;
+  font-family: var(--sans), 'Inter Fallback';
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--card-tone, var(--accent)) 76%, var(--ink));
+}
+
+.primaryCard__value {
+  font-family: var(--serif), 'Playfair Fallback';
+  font-size: 1.12rem;
+  line-height: 1.4;
+  text-wrap: pretty;
+}
+
+.primaryCard__context {
+  margin-top: 0.5rem;
+  padding-top: 0.45rem;
+  border-top: 1px solid color-mix(in srgb, var(--card-tone, var(--accent)) 18%, transparent);
+  color: var(--ink-muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.primaryCard__meta,
+.primaryCard__pending {
+  color: var(--ink-muted);
+  font-size: 0.78rem;
+}
+
+.primaryCard__pending {
+  font-style: italic;
+}
+
+.wordForm {
+  font-family: var(--serif), 'Playfair Fallback';
+  font-size: 1.25rem;
+}
+
+.wordForm__lemma {
+  color: var(--ink-muted);
+}
+
+.formSummary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.45rem;
+}
+
+.formSummary span {
+  padding: 0.18rem 0.48rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--pos-pron) 10%, var(--surface));
+  color: var(--ink-muted);
+  font-size: 0.7rem;
+}
+
+.phrasePrimary {
+  margin-bottom: 0.65rem;
+}
+
+/* --- Вульфи раскрывает подробности ------------------------------------ */
+
+.disclosure {
+  margin-top: 0.8rem;
+  border-radius: calc(var(--radius) + 4px);
+}
+
+.disclosure__button {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 4.6rem;
+  padding: 0.75rem 5.3rem 0.75rem 0.9rem;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--gold) 35%, var(--rule));
+  border-radius: calc(var(--radius) + 4px);
+  background:
+    linear-gradient(120deg, color-mix(in srgb, var(--gold) 10%, var(--surface)), var(--surface));
+  text-align: left;
+  transition:
+    border-color var(--quick, 180ms) ease,
+    box-shadow var(--quick, 180ms) ease,
+    transform var(--instant, 90ms) ease;
+}
+
+.disclosure__button:hover {
+  border-color: color-mix(in srgb, var(--gold) 65%, var(--rule));
+  box-shadow: 0 0.45rem 1.1rem rgb(17 17 17 / 8%);
+}
+
+.disclosure__button:active {
+  transform: scale(0.992);
+}
+
+.disclosure__button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.disclosure__copy {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  gap: 0.2rem;
+}
+
+.disclosure__copy strong {
+  font-size: 0.94rem;
+}
+
+.disclosure__copy span {
+  color: var(--ink-muted);
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+.disclosure__wolfy {
+  position: absolute;
+  z-index: 3;
+  right: 0.75rem;
+  bottom: -0.35rem;
+  display: grid;
+  transform-origin: 50% 100%;
+  pointer-events: none;
+}
+
+.disclosure__wolfy img {
+  filter: drop-shadow(0 0.35rem 0.4rem rgb(17 17 17 / 12%));
+}
+
+.disclosure__handle {
+  position: absolute;
+  z-index: 1;
+  right: 0.65rem;
+  bottom: 0.55rem;
+  width: 4.9rem;
+  height: 1.65rem;
+  border: 1px solid color-mix(in srgb, var(--gold) 32%, var(--rule));
+  border-radius: 0.45rem;
+  background: color-mix(in srgb, var(--gold) 9%, var(--surface));
+  transform-origin: 50% 100%;
+  transition: transform var(--calm, 280ms) var(--paper-curve, ease);
+}
+
+.disclosure[data-open='true'] .disclosure__handle {
+  transform: perspective(90px) rotateX(-22deg) translateY(6px);
+}
+
+.disclosure__reveal {
+  overflow: hidden;
+}
+
+.disclosure__content {
+  margin-top: -0.35rem;
+  padding: 1.15rem 0.9rem 0.3rem;
+  border: 1px solid color-mix(in srgb, var(--gold) 24%, var(--rule));
+  border-top: 0;
+  border-radius: 0 0 calc(var(--radius) + 4px) calc(var(--radius) + 4px);
+  background: color-mix(in srgb, var(--gold) 3%, var(--surface));
+}
+
 /* --- Теги -------------------------------------------------------------- */
 
 .tags {
@@ -343,6 +553,12 @@
   margin-bottom: 1rem;
 }
 
+.phrase[data-parts='true'] {
+  margin: 0;
+  padding: 0.2rem 0 0.45rem;
+  line-height: 2.65;
+}
+
 .phrase__word {
   position: relative;
   display: inline-block;
@@ -363,6 +579,20 @@
 
 .phrase__surface {
   white-space: pre-wrap;
+}
+
+.phrase__pos {
+  position: absolute;
+  top: calc(100% - 0.35rem);
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: var(--sans), 'Inter Fallback';
+  font-size: 0.53rem;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  color: var(--ink-muted);
+  white-space: nowrap;
 }
 
 /* Маркер подчёркивается, а не заливается: заливка спорит с чтением. */
@@ -519,4 +749,19 @@
 
 .iconButton:disabled {
   opacity: 0.35;
+}
+
+@media (max-width: 34rem) {
+  .primaryGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .primaryCard:last-child {
+    grid-column: auto;
+  }
+
+  .primaryCard,
+  .phrasePrimary {
+    padding: 0.75rem 0.8rem;
+  }
 }

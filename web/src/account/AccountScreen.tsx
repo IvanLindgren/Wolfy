@@ -6,6 +6,8 @@ import { Button } from '../widgets/Button'
 import page from '../widgets/Page.module.css'
 import styles from '../screens.module.css'
 import { ACCOUNT_KEY, deviceInfo, useAccount, useCapabilities, useSignOut } from './useAccount'
+import { GoogleButton } from './GoogleButton'
+import { beginYandexReturnURL, socialReturnURL } from './socialFlow'
 
 export function AccountScreen() {
   const account = useAccount()
@@ -36,12 +38,33 @@ function AuthForm({ capabilities }: { capabilities?: api.Capabilities }) {
     accept(mode === 'login' ? await api.signIn(email, password, deviceInfo()) : await api.register(email, password, name, deviceInfo()))
     setBusy(false)
   }
-  const social = async (provider: 'google' | 'yandex') => {
+  const yandex = async () => {
     setBusy(true)
-    try { const returnUrl = `${location.origin}/auth/return?next=${encodeURIComponent('/account')}`; location.assign(await api.socialStart(provider, returnUrl, deviceInfo())) } catch (error) { setMessage(error instanceof Error ? error.message : 'Вход не начался.'); setBusy(false) }
+    try {
+      const returnUrl = beginYandexReturnURL(location.origin)
+      location.assign(await api.socialStart('yandex', returnUrl, deviceInfo()))
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Вход не начался.')
+      setBusy(false)
+    }
+  }
+  const google = async (idToken: string) => {
+    setBusy(true)
+    setMessage('')
+    try {
+      const outcome = await api.googleComplete(idToken, deviceInfo())
+      if (outcome.kind === 'signedIn') {
+        location.assign(socialReturnURL('google', location.origin))
+        return
+      }
+      accept(outcome)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Не удалось войти через Google.')
+    }
+    setBusy(false)
   }
   return <div className={`${page.page} ${styles.hero}`}><section className={styles.panel}><div className={page.kicker}>Общий аккаунт Читавука</div><h1 className={page.title}>{mode === 'login' ? 'Войти и продолжить' : 'Создать аккаунт'}</h1><p className={styles.lead}>Без аккаунта работают чтение, разбор, перевод и тренировки. Вход нужен только для ленты и синхронизации.</p>{capabilities?.register && <div className={styles.tabs}><button className={styles.tab} data-active={mode === 'login'} onClick={() => setMode('login')}>Вход</button><button className={styles.tab} data-active={mode === 'register'} onClick={() => setMode('register')}>Регистрация</button></div>}
     <form className={styles.form} onSubmit={(event) => void submit(event)}>{mode === 'register' && <label className={page.field}><span className={page.label}>Имя</span><input className={page.input} value={name} onChange={(event) => setName(event.target.value)} autoComplete="name" required /></label>}<label className={page.field}><span className={page.label}>Почта</span><input className={page.input} type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" required /></label><label className={page.field}><span className={page.label}>Пароль</span><input className={page.input} type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} minLength={8} required /></label><Button wide variant="primary" type="submit" disabled={busy || capabilities?.signIn === false}>{busy ? 'Подождите…' : mode === 'login' ? 'Войти' : 'Создать аккаунт'}</Button></form>
     {waiting && capabilities?.resend && <Button wide variant="quiet" onClick={async () => setMessage(await api.resendVerification(waiting) ? `Новое письмо отправлено на ${waiting}.` : 'Письмо сейчас не отправляется.')}>Отправить письмо ещё раз</Button>}
-    {(capabilities?.google || capabilities?.yandex) && <><div className={styles.divider}>или</div><div className={styles.social}>{capabilities.google && <Button disabled={busy} onClick={() => void social('google')}>Google</Button>}{capabilities.yandex && <Button disabled={busy} onClick={() => void social('yandex')}>Яндекс</Button>}</div></>}{message && <p className={styles.message} role="status">{message}</p>}</section></div>
+    {(capabilities?.google || capabilities?.yandex) && <><div className={styles.divider}>или</div><div className={styles.social}>{capabilities.google && capabilities.googleClientId && <GoogleButton clientID={capabilities.googleClientId} disabled={busy} onCredential={(token) => void google(token)} onError={setMessage} />}{capabilities.yandex && <Button disabled={busy} onClick={() => void yandex()}>Яндекс</Button>}</div></>}{message && <p className={styles.message} role="status">{message}</p>}</section></div>
 }

@@ -108,6 +108,7 @@ export interface Capabilities {
   register: boolean
   resend: boolean
   google: boolean
+  googleClientId: string
   yandex: boolean
 }
 
@@ -120,6 +121,7 @@ const NOTHING: Capabilities = {
   register: false,
   resend: false,
   google: false,
+  googleClientId: '',
   yandex: false,
 }
 
@@ -256,14 +258,15 @@ export async function resendVerification(email: string): Promise<boolean> {
 }
 
 /**
- * Начинает вход через провайдера.
+ * Начинает web-вход через Яндекс.
  *
- * Схема с loopback `127.0.0.1` — десктопная. В браузере нужен обычный
- * редирект: сервер возвращает адрес провайдера, а потом сам ставит куку и
- * возвращает браузер на сохранённый путь внутри приложения.
+ * Читавук возвращает браузер на доверенный `/auth/return` Wolfy с одноразовым
+ * completion code; уже Wolfy меняет его на общую сессию в httpOnly cookie.
+ * Google этот redirect-flow не использует: его GIS ID token идёт сразу в
+ * `googleComplete`.
  */
 export async function socialStart(
-  provider: 'google' | 'yandex',
+  provider: 'yandex',
   returnUrl: string,
   device: DeviceInfo,
 ): Promise<string> {
@@ -279,6 +282,25 @@ export async function socialStart(
     throw new ApiError(502, 'Сервер не вернул адрес входа.')
   }
   return response.authorizationUrl
+}
+
+/** Меняет подписанный Google GIS ID token на общую сессию в httpOnly cookie. */
+export async function googleComplete(
+  idToken: string,
+  device: DeviceInfo,
+): Promise<AuthOutcome> {
+  try {
+    const response = await request<AuthResponse>('/v1/auth/google', {
+      method: 'POST',
+      headers: COOKIE_SESSION,
+      body: { idToken, device },
+    })
+    return { kind: 'signedIn', account: accountOf(response, '') }
+  } catch (error) {
+    if (error instanceof OfflineError) return { kind: 'offline' }
+    if (error instanceof ApiError) return { kind: 'refused', message: error.message }
+    throw error
+  }
 }
 
 /** Завершает вход через Яндекс: одноразовый код в обмен на сессию. */
@@ -324,12 +346,12 @@ export async function signOut(): Promise<void> {
 export async function translate(
   text: string,
   signal?: AbortSignal,
-  source = 'EN',
-  target = 'RU',
+  options: { source?: string; target?: string; context?: string } = {},
 ): Promise<string> {
+  const { source = 'EN', target = 'RU', context = '' } = options
   const response = await request<{ text?: string }>('/v1/translate', {
     method: 'POST',
-    body: { text, source, target },
+    body: { text, context, source, target },
     signal,
   })
   return response.text ?? ''
@@ -495,5 +517,57 @@ export async function downloadDiscoveryItem(id: string): Promise<{
     title: header('X-Wolfy-Title'),
     author: header('X-Wolfy-Author'),
     sourceKey: header('X-Wolfy-Source') || id,
+  }
+}
+
+// --- Книга по ссылке -------------------------------------------------------
+
+/**
+ * Получает EPUB, PDF или TXT через защищённый серверный загрузчик.
+ *
+ * Напрямую браузер почти всегда упрётся в CORS. Сервер дополнительно не даёт
+ * ссылке обратиться к localhost/локальной сети и обрывает ответ после 64 МБ.
+ */
+export async function downloadBookURL(address: string): Promise<{
+  bytes: ArrayBuffer
+  fileName: string
+  contentType: string
+}> {
+  let response: Response
+  try {
+    response = await fetch('/v1/library/fetch', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: address.trim() }),
+    })
+  } catch {
+    throw new OfflineError()
+  }
+
+  if (!response.ok) {
+    const payload = safeParse(await response.text()) as { error?: string; message?: string } | null
+    throw new ApiError(
+      response.status,
+      payload?.message || payload?.error || `Сервер ответил ${response.status}`,
+    )
+  }
+
+  const disposition = response.headers.get('content-disposition') ?? ''
+  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1]
+  let fileName = 'book'
+  if (encoded) {
+    try {
+      fileName = decodeURIComponent(encoded)
+    } catch {
+      // Заголовок формирует наш сервер, но повреждённый reverse proxy не
+      // должен ломать уже скачанную книгу: расширение проверит addFile.
+    }
+  }
+
+  return {
+    bytes: await response.arrayBuffer(),
+    fileName,
+    contentType: response.headers.get('content-type') ?? 'application/octet-stream',
   }
 }

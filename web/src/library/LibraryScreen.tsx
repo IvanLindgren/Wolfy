@@ -12,11 +12,19 @@
  * и это честнее, чем притворяться.
  */
 
-import { useCallback, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent as ReactDragEvent,
+  type FormEvent,
+} from 'react'
 import { Link, useNavigate } from '@tanstack/react-router'
 import {
   DndContext,
   DragOverlay,
+  KeyboardSensor,
   PointerSensor,
   useDroppable,
   useSensor,
@@ -27,6 +35,7 @@ import {
 import {
   SortableContext,
   rectSortingStrategy,
+  sortableKeyboardCoordinates,
   useSortable,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
@@ -35,12 +44,13 @@ import { toast } from '../app/toasts'
 import { session, useSession } from '../core/session'
 import type { LibraryBook } from '../core/types'
 import { Appear } from '../widgets/Appear'
-import { Button } from '../widgets/Button'
-import { CameraIcon, PlusIcon, TrashIcon } from '../widgets/icons'
+import { Button, buttonClassName } from '../widgets/Button'
+import { CameraIcon, DecksIcon, PlusIcon, TrashIcon } from '../widgets/icons'
 import page from '../widgets/Page.module.css'
 import { WolfyCompanion } from '../widgets/Wolfy'
 import { BookCover, fraction } from './BookCover'
-import { ACCEPTED, addFile } from './import'
+import { droppedFiles, isFileDrag } from './drop'
+import { ACCEPTED, addFile, addURL, type ImportResult } from './import'
 import styles from './library.module.css'
 import { bookOrder, saveBookOrder } from './order'
 
@@ -56,12 +66,18 @@ export function LibraryScreen() {
 
   const [dragging, setDragging] = useState<LibraryBook | null>(null)
   const [order, setOrder] = useState<string[]>(bookOrder)
+  const [fileOver, setFileOver] = useState(false)
+  const [urlOpen, setURLOpen] = useState(false)
+  const [address, setAddress] = useState('')
+  const [urlBusy, setURLBusy] = useState(false)
   const chooser = useRef<HTMLInputElement>(null)
+  const fileDragDepth = useRef(0)
 
   const sensors = useSensors(
     // Восемь пикселей до старта перетаскивания: без порога обычное нажатие на
     // книгу превращалось бы в микро-перетаскивание и не открывало бы её.
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   )
 
   const visible = useMemo(
@@ -110,23 +126,73 @@ export function LibraryScreen() {
     [visible],
   )
 
-  const pick = useCallback(async (files: FileList | null) => {
+  const finishImport = useCallback((result: ImportResult) => {
+    if (result.kind === 'refused') {
+      toast(result.message)
+    } else if (result.kind === 'known') {
+      toast('Эта книга уже в библиотеке', {
+        label: 'Открыть',
+        run: () => void navigate({ to: '/reader/$bookId', params: { bookId: result.book.id } }),
+      })
+    } else {
+      void navigate({ to: '/reader/$bookId', params: { bookId: result.book.id } })
+    }
+  }, [navigate])
+
+  const pick = useCallback(async (files: FileList | File[] | null) => {
     if (!files) return
     for (const file of Array.from(files)) {
-      const result = await addFile(file)
-      if (result.kind === 'refused') {
-        toast(result.message)
-      } else if (result.kind === 'known') {
-        toast('Эта книга уже в библиотеке', {
-          label: 'Открыть',
-          run: () => void navigate({ to: '/reader/$bookId', params: { bookId: result.book.id } }),
-        })
-      } else {
-        void navigate({ to: '/reader/$bookId', params: { bookId: result.book.id } })
-      }
+      finishImport(await addFile(file))
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [finishImport])
+
+  const onFileDragEnter = useCallback((event: ReactDragEvent<HTMLDivElement>) => {
+    if (!isFileDrag(event.dataTransfer.types)) return
+    event.preventDefault()
+    // Shell умеет принимать файл на любом экране. В библиотеке владелец
+    // импорта — эта зона: без остановки всплытия один drop обрабатывался дважды.
+    event.stopPropagation()
+    fileDragDepth.current += 1
+    setFileOver(true)
   }, [])
+
+  const onFileDragOver = useCallback((event: ReactDragEvent<HTMLDivElement>) => {
+    if (!isFileDrag(event.dataTransfer.types)) return
+    event.preventDefault()
+    event.stopPropagation()
+    event.dataTransfer.dropEffect = 'copy'
+  }, [])
+
+  const onFileDragLeave = useCallback((event: ReactDragEvent<HTMLDivElement>) => {
+    if (fileDragDepth.current === 0) return
+    event.preventDefault()
+    event.stopPropagation()
+    fileDragDepth.current = Math.max(0, fileDragDepth.current - 1)
+    if (fileDragDepth.current === 0) setFileOver(false)
+  }, [])
+
+  const onFileDrop = useCallback((event: ReactDragEvent<HTMLDivElement>) => {
+    const files = droppedFiles(event.dataTransfer)
+    if (!files.length) return
+    event.preventDefault()
+    event.stopPropagation()
+    fileDragDepth.current = 0
+    setFileOver(false)
+    void pick(files)
+  }, [pick])
+
+  const submitURL = useCallback(async (event: FormEvent) => {
+    event.preventDefault()
+    if (urlBusy) return
+    setURLBusy(true)
+    const result = await addURL(address)
+    setURLBusy(false)
+    finishImport(result)
+    if (result.kind !== 'refused') {
+      setAddress('')
+      setURLOpen(false)
+    }
+  }, [address, finishImport, urlBusy])
 
   const groups = useMemo(() => {
     const named = shelves.map((shelf) => ({
@@ -140,17 +206,24 @@ export function LibraryScreen() {
   }, [shelves, visible])
 
   return (
-    <div className={`${page.page} ${page['page--wide']}`}>
+    <div
+      className={`${page.page} ${page['page--wide']}`}
+      onDragEnter={onFileDragEnter}
+      onDragOver={onFileDragOver}
+      onDragLeave={onFileDragLeave}
+      onDrop={onFileDrop}
+    >
       <header className={page.head}>
         <div>
           <div className={page.kicker}>Библиотека</div>
           <h1 className={page.title}>Книги</h1>
         </div>
         <div className={page.headActions}>
-          <Link to="/photo">
-            <Button>
-              <CameraIcon size={16} /> Страница по фото
-            </Button>
+          <Link to="/library/words" className={buttonClassName()}>
+            <DecksIcon size={16} /> Все слова
+          </Link>
+          <Link to="/photo" className={buttonClassName()}>
+            <CameraIcon size={16} /> Страница по фото
           </Link>
           <Button variant="primary" onClick={() => chooser.current?.click()}>
             <PlusIcon size={16} /> Добавить книгу
@@ -170,16 +243,36 @@ export function LibraryScreen() {
         }}
       />
 
-      {ready && visible.length === 0 ? (
-        <WolfyCompanion mood="calm" title="Здесь пока пусто">
-          <p className={page.muted} style={{ maxWidth: '34rem' }}>
-            <strong>EPUB · TXT · PDF</strong> — перетащите файл сюда. Книга
-            останется только на этом устройстве.
-          </p>
-          <Button variant="primary" onClick={() => chooser.current?.click()}>
-            Выбрать файл
+      <section className={styles.importer} data-file-over={fileOver}>
+        <div className={styles.importer__prompt}>
+          <span className={styles.importer__formats}>EPUB · PDF · TXT</span>
+          <strong>{fileOver ? 'Отпускайте — добавим в библиотеку' : 'Перетащите книгу сюда'}</strong>
+          <Button small variant="quiet" onClick={() => setURLOpen((open) => !open)}>
+            {urlOpen ? 'Скрыть ссылку' : 'Добавить по ссылке'}
           </Button>
-        </WolfyCompanion>
+        </div>
+        {urlOpen && (
+          <form className={styles.importer__url} onSubmit={(event) => void submitURL(event)}>
+            <input
+              className={page.input}
+              type="url"
+              inputMode="url"
+              value={address}
+              onChange={(event) => setAddress(event.target.value)}
+              placeholder="https://example.org/book.epub"
+              aria-label="HTTPS-ссылка на книгу"
+              required
+              autoFocus
+            />
+            <Button type="submit" variant="primary" disabled={urlBusy}>
+              {urlBusy ? 'Загружаем…' : 'Добавить'}
+            </Button>
+          </form>
+        )}
+      </section>
+
+      {ready && visible.length === 0 ? (
+        <WolfyCompanion mood="calm" title="Здесь пока пусто" />
       ) : (
         <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd}>
           {groups.map((group) =>
@@ -308,8 +401,6 @@ function BookTile({
         className={styles.book}
         data-dragging={isDragging}
         style={{ transform: CSS.Transform.toString(transform), transition }}
-        {...attributes}
-        {...listeners}
       >
         <Link to="/reader/$bookId" params={{ bookId: book.id }} className={styles.book}>
           <BookCover book={book} />
@@ -327,6 +418,16 @@ function BookTile({
             </Link>
           )}
           <div className={styles.book__actions}>
+            <button
+              type="button"
+              className={styles.book__drag}
+              title="Переместить книгу"
+              aria-label={`Переместить «${book.title}»`}
+              {...attributes}
+              {...listeners}
+            >
+              <span aria-hidden="true">⠿</span>
+            </button>
             <Button
               variant="quiet"
               small

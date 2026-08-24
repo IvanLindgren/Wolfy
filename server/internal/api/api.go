@@ -13,6 +13,7 @@ import (
 	"html"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -25,6 +26,7 @@ import (
 	"github.com/wolfy/server/internal/discovery"
 	"github.com/wolfy/server/internal/library"
 	"github.com/wolfy/server/internal/ocr"
+	"github.com/wolfy/server/internal/remotebook"
 	"github.com/wolfy/server/internal/social"
 	"github.com/wolfy/server/internal/store"
 	"github.com/wolfy/server/internal/translate"
@@ -33,29 +35,40 @@ import (
 
 // Server связывает слои и раздаёт маршруты.
 type Server struct {
-	store      *store.Store
-	verifier   *auth.Verifier
-	translate  *translate.Service
-	library    *library.Service
-	ocr        *ocr.Service
-	account    *account.Service
-	google     *social.Google
-	discovery  *discovery.Service
-	dictionary *dictionary.Service
-	updates    *updates.Service
-	log        *slog.Logger
-	webOrigin  string
+	store             *store.Store
+	verifier          *auth.Verifier
+	translate         *translate.Service
+	library           *library.Service
+	ocr               *ocr.Service
+	account           *account.Service
+	google            *social.Google
+	discovery         *discovery.Service
+	dictionary        *dictionary.Service
+	remoteBooks       *remotebook.Service
+	updates           *updates.Service
+	log               *slog.Logger
+	webOrigin         string
+	googleWebClientID string
 
 	// Ограничитель для открытого перевода — см. Handler.
 	translateLimit *rateLimiter
 	// И отдельный, куда более строгий, для входа и регистрации.
 	authLimit *rateLimiter
+	// Загрузка по ссылке расходует внешний трафик и память сервера.
+	bookLimit *rateLimiter
 }
 
 // WithWebOrigin включает credentialed CORS только для одного известного
 // origin. Основной деплой остаётся same-origin и обходится без CORS вовсе.
 func (s *Server) WithWebOrigin(origin string) *Server {
 	s.webOrigin = strings.TrimRight(strings.TrimSpace(origin), "/")
+	return s
+}
+
+// WithGoogleWebClientID включает Google Identity Services в браузере. Client
+// ID публичен; client secret веб-потоку не нужен и в SPA не передаётся.
+func (s *Server) WithGoogleWebClientID(clientID string) *Server {
+	s.googleWebClientID = strings.TrimSpace(clientID)
 	return s
 }
 
@@ -74,13 +87,15 @@ func NewServer(
 ) *Server {
 	return &Server{
 		store: s, verifier: v, translate: t, library: l, ocr: o,
-		account: a, google: g, discovery: d, dictionary: dict, updates: updater, log: log,
+		account: a, google: g, discovery: d, dictionary: dict,
+		remoteBooks: remotebook.New(30 * time.Second), updates: updater, log: log,
 		// Двести переводов залпом и один в секунду сверху: страница книги
 		// редко даёт больше двухсот незнакомых слов, а секунда — это дольше,
 		// чем читатель успевает выбрать следующее слово, но много быстрее,
 		// чем перебор словаря скриптом.
 		translateLimit: newRateLimiter(200, 1, 30*time.Minute),
 		authLimit:      newRateLimiter(8, 0.1, 30*time.Minute),
+		bookLimit:      newRateLimiter(8, 0.05, 30*time.Minute),
 	}
 }
 
@@ -108,6 +123,9 @@ func (s *Server) Handler() http.Handler {
 	))
 	mux.Handle("POST /v1/auth/resend-verification", s.authLimit.withRateLimit(
 		http.HandlerFunc(s.postResendVerification),
+	))
+	mux.Handle("POST /v1/auth/google", s.authLimit.withRateLimit(
+		http.HandlerFunc(s.postGoogleToken),
 	))
 	mux.Handle("POST /v1/auth/google/start", s.authLimit.withRateLimit(
 		http.HandlerFunc(s.postGoogleStart),
@@ -140,6 +158,11 @@ func (s *Server) Handler() http.Handler {
 	// а вход не должен быть условием офлайн-чтения.
 	mux.HandleFunc("GET /v1/define", s.getDefinition)
 	mux.HandleFunc("GET /v1/dictionary", s.getDictionary)
+	// Локальная библиотека работает без аккаунта, поэтому и загрузка книги
+	// по ссылке не требует входа. SSRF, размер и формат проверяет remotebook.
+	mux.Handle("POST /v1/library/fetch", s.bookLimit.withRateLimit(
+		http.HandlerFunc(s.postRemoteBook),
+	))
 	// Манифест и сами пакеты публичны: проверка обновлений начинается до
 	// входа в аккаунт. Целостность пакета клиент отдельно сверяет по SHA-256.
 	if s.updates != nil {
@@ -173,6 +196,14 @@ func (s *Server) postRegister(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) postResendVerification(w http.ResponseWriter, r *http.Request) {
 	s.proxyAccount(w, r, "письмо с подтверждением", s.account.ResendVerification)
+}
+
+func (s *Server) postGoogleToken(w http.ResponseWriter, r *http.Request) {
+	if s.googleWebClientID == "" {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "вход через Google не настроен"})
+		return
+	}
+	s.proxyAccount(w, r, "вход через Google", s.account.Google)
 }
 
 func (s *Server) postGoogleStart(w http.ResponseWriter, r *http.Request) {
@@ -304,8 +335,20 @@ func cookieSessionBody(body []byte) (string, []byte) {
 func sessionCookie(r *http.Request, token string) *http.Cookie {
 	return &http.Cookie{
 		Name: auth.SessionCookie, Value: token, Path: "/", HttpOnly: true,
-		Secure: r.TLS != nil, SameSite: http.SameSiteLaxMode,
+		Secure: requestIsHTTPS(r), SameSite: http.SameSiteLaxMode,
 	}
+}
+
+// TLS завершается в локальном Nginx, поэтому backend видит обычный HTTP.
+// X-Forwarded-Proto принимается только от loopback-прокси; прямой клиент не
+// может снять или навязать cookie-флаг поддельным заголовком.
+func requestIsHTTPS(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	host := net.ParseIP(remoteHost(r.RemoteAddr))
+	return host != nil && host.IsLoopback() &&
+		strings.EqualFold(trimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
 }
 
 func expiredSessionCookie(r *http.Request) *http.Cookie {
@@ -484,11 +527,12 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		"dictionary": s.dictionary.Configured(),
 		// По этим двум клиент решает, показывать ли «Создать аккаунт» и
 		// «Выслать письмо ещё раз».
-		"signIn":   s.account.Configured(),
-		"register": s.account.CanRegister(),
-		"resend":   s.account.CanResend(),
-		"google":   s.google != nil && s.google.Configured(),
-		"yandex":   s.account.CanYandex(),
+		"signIn":         s.account.Configured(),
+		"register":       s.account.CanRegister(),
+		"resend":         s.account.CanResend(),
+		"google":         s.googleWebClientID != "" && s.account.CanGoogle(),
+		"googleClientId": s.googleWebClientID,
+		"yandex":         s.account.CanYandexWeb(),
 	})
 }
 
@@ -562,9 +606,10 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 }
 
 type translateRequest struct {
-	Text   string `json:"text"`
-	Source string `json:"source"`
-	Target string `json:"target"`
+	Text    string `json:"text"`
+	Context string `json:"context"`
+	Source  string `json:"source"`
+	Target  string `json:"target"`
 }
 
 // postTranslate переводит предложение или слово в контексте.
@@ -577,9 +622,10 @@ func (s *Server) postTranslate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := s.translate.Translate(r.Context(), translate.Request{
-		Text:   req.Text,
-		Source: req.Source,
-		Target: req.Target,
+		Text:    req.Text,
+		Context: req.Context,
+		Source:  req.Source,
+		Target:  req.Target,
 	})
 	switch {
 	case errors.Is(err, translate.ErrUnavailable):

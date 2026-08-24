@@ -19,18 +19,29 @@
 /** Сколько страниц PDF считаем разумным пределом. */
 const MAX_PAGES = 3000
 
+let sharedWorker: Worker | null = null
+
 export async function extractPdfPages(bytes: ArrayBuffer): Promise<string[]> {
   const pdfjs = await import('pdfjs-dist')
-  // Воркер `pdf.js` собирается Vite как отдельный модуль: без него разбор
-  // идёт в главном потоке и подвешивает интерфейс на весь документ.
-  const worker = await import('pdfjs-dist/build/pdf.worker.min.mjs?url')
-  pdfjs.GlobalWorkerOptions.workerSrc = worker.default
+  // Передаём настоящий экземпляр Worker, а не URL исходного `.mjs`.
+  // В production Nginx мог отдать `.mjs` как application/octet-stream;
+  // браузер отвергал модуль, а pdf.js падал при попытке поднять fake worker.
+  // `?worker` заставляет Vite выпустить воркер как свой JS-чанк и не зависит
+  // от MIME-настройки расширения на конкретном хостинге.
+  const workerModule = await import('pdfjs-dist/build/pdf.worker.min.mjs?worker')
+  sharedWorker ??= new workerModule.default({ name: 'wolfy-pdf' })
+  pdfjs.GlobalWorkerOptions.workerPort = sharedWorker
 
   const document = await pdfjs.getDocument({ data: new Uint8Array(bytes) }).promise
-  const total = Math.min(document.numPages, MAX_PAGES)
   const pages: string[] = []
 
   try {
+    if (document.numPages > MAX_PAGES) {
+      throw new Error(
+        `В PDF ${document.numPages} страниц. Wolfy поддерживает книги не больше ${MAX_PAGES} страниц — разделите файл на части.`,
+      )
+    }
+    const total = document.numPages
     for (let number = 1; number <= total; number += 1) {
       const page = await document.getPage(number)
       const content = await page.getTextContent()

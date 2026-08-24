@@ -1,0 +1,100 @@
+.continueCard {
+  display: grid;
+  grid-template-columns: 9rem minmax(0, 1fr);
+  gap: clamp(1.2rem, 4vw, 2rem);
+  align-items: center;
+  padding: clamp(1rem, 3vw, 1.6rem);
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--rule));
+  border-radius: var(--radius-lg);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 7%, var(--surface)), var(--surface));
+}
+
+.continueCover {
+  width: 100%;
+}
+
+.continueBody {
+  min-width: 0;
+}
+
+.eyebrow {
+  display: inline-block;
+  margin-bottom: 0.35rem;
+  color: var(--accent);
+  font-size: 0.7rem;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.continueTitle {
+  font-size: clamp(1.55rem, 4vw, 2.2rem);
+  line-height: 1.08;
+}
+
+.progressText {
+  margin: 0.7rem 0 1rem;
+  color: var(--ink-muted);
+  font-size: 0.875rem;
+}
+
+.allBooks {
+  margin-top: 2.2rem;
+}
+
+.allBooks input {
+  max-width: 16rem;
+}
+
+.bookGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr));
+  gap: 1.2rem 1rem;
+}
+
+.bookLink {
+  display: grid;
+  gap: 0.4rem;
+  color: inherit;
+  text-decoration: none;
+}
+
+.bookCover {
+  width: 100%;
+  transition: transform var(--quick, 180ms) var(--paper-curve, ease);
+}
+
+.bookLink:hover .bookCover {
+  transform: translateY(-4px) rotate(-0.5deg);
+}
+
+.bookTitle {
+  overflow: hidden;
+  font-weight: 600;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bookMeta {
+  overflow: hidden;
+  color: var(--ink-muted);
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 560px) {
+  .continueCard {
+    grid-template-columns: 6.5rem minmax(0, 1fr);
+  }
+
+  .allBooks :global(.sectionHead) {
+    align-items: stretch;
+  }
+
+  .allBooks input {
+    max-width: none;
+    flex-basis: 100%;
+  }
+}

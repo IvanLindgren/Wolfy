@@ -73,6 +73,14 @@ func TestStartAllowsOnlyConfiguredWebReturn(t *testing.T) {
 	if err != ErrInvalidReturn {
 		t.Fatalf("чужой origin принят: %v", err)
 	}
+	_, err = g.Start(StartRequest{
+		ReturnURL:    "https://app.wolfy.example/auth/return-evil",
+		ReturnTarget: "web",
+		Device:       json.RawMessage(`{"id":"browser-1"}`),
+	})
+	if err != ErrInvalidReturn {
+		t.Fatalf("похожий, но чужой путь принят: %v", err)
+	}
 }
 
 func TestStateCannotBeChanged(t *testing.T) {

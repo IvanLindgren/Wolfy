@@ -14,9 +14,10 @@
  *    десять слов, не должен оставить десять висящих запросов — за каждым
  *    стоит платный сервис.
  *
- * Двух переводов, а не одного: слово отдельно — это словарная строка
- * («library — библиотека»), предложение целиком отвечает на другой вопрос —
- * что здесь вообще сказано. Подменять первое вторым нельзя.
+ * Двух переводов, а не одного: для слова отправляется короткий текст вместе с
+ * предложением в поле `context`, чтобы `book` в «I will book…» не становилось
+ * «книгой». Предложение целиком отвечает на другой вопрос — что здесь вообще
+ * сказано. Подменять первое вторым нельзя.
  */
 
 import { useEffect, useState } from 'react'
@@ -30,26 +31,80 @@ export type Translation =
   | { state: 'ready'; word: string; sentence: string }
   | { state: 'failed'; message: string }
 
-/** Идущие запросы: ключ → обещание. Второй тап по тому же слову ждёт первый. */
-const inflight = new Map<string, Promise<string>>()
+interface InflightTranslation {
+  promise: Promise<string>
+  controller: AbortController
+  subscribers: number
+}
 
-async function once(key: string, text: string, signal: AbortSignal): Promise<string> {
+/** Идущие запросы: второй потребитель ждёт первый, но не владеет его abort. */
+const inflight = new Map<string, InflightTranslation>()
+
+function abortError(): DOMException {
+  return new DOMException('Перевод больше не нужен', 'AbortError')
+}
+
+async function subscribe(
+  key: string,
+  entry: InflightTranslation,
+  signal: AbortSignal,
+): Promise<string> {
+  if (signal.aborted) throw abortError()
+  entry.subscribers += 1
+
+  let rejectAbort: ((reason: DOMException) => void) | undefined
+  const cancelled = new Promise<never>((_, reject) => {
+    rejectAbort = reject
+  })
+  const onAbort = () => rejectAbort?.(abortError())
+  signal.addEventListener('abort', onAbort, { once: true })
+
+  try {
+    return await Promise.race([entry.promise, cancelled])
+  } finally {
+    signal.removeEventListener('abort', onAbort)
+    entry.subscribers = Math.max(0, entry.subscribers - 1)
+    if (entry.subscribers === 0 && inflight.get(key) === entry) {
+      // Удаляем до abort: мгновенно открытая заново карточка должна создать
+      // свежий запрос, а не подписаться на уже отменённое обещание.
+      inflight.delete(key)
+      entry.controller.abort()
+    }
+  }
+}
+
+async function once(
+  key: string,
+  text: string,
+  context: string,
+  signal: AbortSignal,
+): Promise<string> {
   const cached = await cachedTranslation(key)
+  if (signal.aborted) throw abortError()
   if (cached !== null) return cached
 
-  const running = inflight.get(key)
-  if (running) return running
+  let entry = inflight.get(key)
+  if (!entry || entry.controller.signal.aborted) {
+    const controller = new AbortController()
+    entry = {
+      controller,
+      subscribers: 0,
+      promise: Promise.resolve(''),
+    }
+    const current = entry
+    entry.promise = api
+      .translate(text, controller.signal, { context })
+      .then(async (translated) => {
+        if (translated) await cacheTranslation(key, translated)
+        return translated
+      })
+      .finally(() => {
+        if (inflight.get(key) === current) inflight.delete(key)
+      })
+    inflight.set(key, entry)
+  }
 
-  const request = api
-    .translate(text, signal)
-    .then(async (translated) => {
-      if (translated) await cacheTranslation(key, translated)
-      return translated
-    })
-    .finally(() => inflight.delete(key))
-
-  inflight.set(key, request)
-  return request
+  return subscribe(key, entry, signal)
 }
 
 /**
@@ -76,10 +131,10 @@ export function useTranslation(word: string, sentence: string): Translation {
         // другого значит удвоить время до строки на экране.
         const [wordText, sentenceText] = await Promise.all([
           word.trim()
-            ? once(translationKey('', word), word, controller.signal)
+            ? once(translationKey(sentence, word), word, sentence, controller.signal)
             : Promise.resolve(''),
           sentence.trim()
-            ? once(translationKey(sentence, ''), sentence, controller.signal)
+            ? once(translationKey(sentence, ''), sentence, '', controller.signal)
             : Promise.resolve(''),
         ])
         if (!alive) return

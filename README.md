@@ -87,3 +87,4 @@ cd client && ./gradlew :shared:desktopTest  # тесты общего кода
 - `WOLFY_PROMPT.md` — продуктовый промпт: функции, дизайн-система, грамматика
 - `WOLFY_WEB_PROMPT.md` — промпт на веб-версию с тем же функционалом
 - `deploy/README.md` — CI/CD и одноразовая подготовка `wolfy.citavuk.ru`
+- `docs/agents/deploy.md` — безопасный выпуск, OAuth с Читавуком и откат для агентов

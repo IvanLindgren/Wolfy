@@ -46,7 +46,7 @@ use session::{Command, Session};
 
 use dto::{
     ArticleDto, BookDto, ChapterDto, ChunkDto, ExerciseDto, ExercisesDto, FindingDto, GrammarDto,
-    MarkerDto, ReferenceDto, TextDto, TokenDto, WordDto,
+    MarkerDto, PartDto, ReferenceDto, TextDto, TokenDto, WordDto,
 };
 
 thread_local! {
@@ -155,11 +155,13 @@ pub unsafe extern "C" fn wolfy_explain(text: *const c_char) -> *mut c_char {
         let text = unsafe { read_string(text) }?;
         let tokens = tokenize(&text);
         let lexicon = Lexicon::embedded();
+        let parts = crate::tagger::tag(lexicon, &tokens);
         let findings = crate::grammar::analyze(lexicon, &tokens);
         let chunks = crate::grammar::chunks(lexicon, &tokens, &findings);
         let markers = crate::grammar::markers(lexicon, &tokens, &findings);
 
         to_json(&GrammarDto {
+            parts: parts.iter().map(PartDto::from).collect(),
             findings: findings.iter().map(FindingDto::from).collect(),
             chunks: chunks.iter().map(ChunkDto::from).collect(),
             markers: markers.iter().map(MarkerDto::from).collect(),
@@ -659,6 +661,29 @@ mod tests {
                 .is_some_and(|markers| !markers.is_empty()),
             "маркеры не прошли через FFI: {json}"
         );
+    }
+
+    #[test]
+    fn грамматика_отдаёт_часть_речи_в_контексте() {
+        let text = c"I will book a room.";
+        let json = забрать(unsafe { wolfy_explain(text.as_ptr()) }).expect("разбор есть");
+        let value: serde_json::Value = serde_json::from_str(&json).expect("это JSON");
+
+        let book = value["parts"]
+            .as_array()
+            .and_then(|parts| parts.iter().find(|part| part["token"].as_u64() == Some(4)))
+            .expect("контекстная часть речи book");
+        assert_eq!(book["pos"], "VERB", "неверный контекстный разбор: {json}");
+
+        let predicate = value["chunks"]
+            .as_array()
+            .and_then(|chunks| {
+                chunks
+                    .iter()
+                    .find(|chunk| chunk["head"].as_u64() == Some(4))
+            })
+            .expect("book — вершина сказуемого");
+        assert_eq!(predicate["tint"], "VERB", "неверная роль book: {json}");
     }
 
     #[test]

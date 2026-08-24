@@ -14,6 +14,7 @@ package account
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -43,13 +44,14 @@ type LoginResult = Result
 // Service ходит в Читавук за тремя вещами. Адреса разные, поведение одно,
 // поэтому и код один.
 type Service struct {
-	login          string
-	register       string
-	resend         string
-	google         string
-	yandexStart    string
-	yandexComplete string
-	client         *http.Client
+	login           string
+	register        string
+	resend          string
+	google          string
+	yandexStart     string
+	yandexComplete  string
+	yandexWebReturn bool
+	client          *http.Client
 }
 
 // WithSocial подключает социальные способы к тому же аккаунту Читавука.
@@ -60,6 +62,14 @@ func (s *Service) WithSocial(google, yandexStart, yandexComplete string) *Servic
 	s.google = strings.TrimSpace(google)
 	s.yandexStart = strings.TrimSpace(yandexStart)
 	s.yandexComplete = strings.TrimSpace(yandexComplete)
+	return s
+}
+
+// WithYandexWebReturn подтверждает, что upstream Читавука умеет вернуть
+// браузер на проверенный returnUrl Wolfy. Старый контракт всегда возвращает
+// returnTarget=web на citavuk.ru; включать флаг до обновления Читавука нельзя.
+func (s *Service) WithYandexWebReturn(enabled bool) *Service {
+	s.yandexWebReturn = enabled
 	return s
 }
 
@@ -94,6 +104,12 @@ func (s *Service) CanYandex() bool {
 	return usable(s.yandexStart) && usable(s.yandexComplete)
 }
 
+// CanYandexWeb отделён от CanYandex: desktop использует безопасный loopback и
+// работал в старом контракте, а сайт требует явно доверенного HTTPS-возврата.
+func (s *Service) CanYandexWeb() bool {
+	return s.CanYandex() && s.yandexWebReturn
+}
+
 func (s *Service) Login(ctx context.Context, body []byte) (Result, error) {
 	return s.forward(ctx, s.login, body)
 }
@@ -119,6 +135,12 @@ func (s *Service) Google(ctx context.Context, body []byte) (Result, error) {
 }
 
 func (s *Service) YandexStart(ctx context.Context, body []byte) (Result, error) {
+	var request struct {
+		ReturnTarget string `json:"returnTarget"`
+	}
+	if json.Unmarshal(body, &request) == nil && request.ReturnTarget == "web" && !s.CanYandexWeb() {
+		return Result{}, ErrNotConfigured
+	}
 	return s.forward(ctx, s.yandexStart, body)
 }
 

@@ -23,13 +23,14 @@ import { THEMES, applyTheme, motionFor } from '../app/theme'
 import { WordCard, type CardTarget } from '../card/WordCard'
 import * as bridge from '../core/bridge'
 import { session, useSession } from '../core/session'
-import type { ThemeName } from '../core/types'
+import type { LibraryBook, ThemeName } from '../core/types'
 import { seconds } from '../theme/motion'
 import { Button } from '../widgets/Button'
 import {
   BackIcon,
   CloseIcon,
   ContentsIcon,
+  DecksIcon,
   ForwardIcon,
   ReaderIcon,
   TuneIcon,
@@ -57,12 +58,16 @@ export function ReaderScreen() {
   const navigate = useNavigate()
 
   const book = useSession((state) => state.library.books.find((item) => item.id === bookId))
+  const libraryBooks = useSession((state) => state.library.books)
   const cards = useSession((state) => state.library.cards)
   const settings = useSession((state) => state.settings)
   const ready = useSession((state) => state.ready)
   const timing = motionFor(settings)
 
-  const [opened, setOpened] = useState(false)
+  // Не просто boolean: при переходе между `/reader/:bookId` компонент остаётся
+  // смонтированным. Старое `true` позволяло useChapter запросить новую книгу
+  // раньше, чем её успевал открыть worker.
+  const [openedBookId, setOpenedBookId] = useState<string | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
   const [chapterIndex, setChapterIndex] = useState(-1)
   const [mode, setMode] = useState<ReadingMode>(readingMode)
@@ -87,12 +92,15 @@ export function ReaderScreen() {
     )
   }, [])
 
+  const opened = openedBookId === bookId
   const { chapter, error } = useChapter(bookId, Math.max(0, chapterIndex), opened)
 
   // --- Открытие книги -------------------------------------------------------
 
   useEffect(() => {
     if (!ready || !book) return
+    setOpenedBookId(null)
+    setFailure(null)
     if (!book.path) {
       setFailure(
         'Этой книги нет на этом устройстве: она приехала синхронизацией. Добавьте файл — прогресс и колода уже ждут её.',
@@ -106,7 +114,7 @@ export function ReaderScreen() {
         if (!alive) return
         setChapterTitles(info.chapters.map((item) => item.title))
         setChapterIndex(Math.min(book.progress.chapter, Math.max(0, info.chapters.length - 1)))
-        setOpened(true)
+        setOpenedBookId(book.id)
         // Книга открывается ровно там, где её закрыли, — включая место внутри
         // главы. Оно восстанавливается после того, как глава разложилась.
         restored.current = false
@@ -314,6 +322,7 @@ export function ReaderScreen() {
           ? chapter.tokens.slice(sentence.firstToken, sentence.lastToken)
           : [word],
         offset: sentence?.firstToken ?? token,
+        selectedToken: token - (sentence?.firstToken ?? token),
         origin: element,
       })
     },
@@ -463,6 +472,8 @@ export function ReaderScreen() {
     />
   )
 
+  const readableBooks = libraryBooks.filter((item) => !item.deleted && item.path)
+
   return (
     <div className={styles.screen}>
       <div className={styles.bar}>
@@ -484,6 +495,16 @@ export function ReaderScreen() {
         </div>
 
         <div className={styles.bar__spacer} />
+
+        <Link
+          to="/library/$bookId/words"
+          params={{ bookId }}
+          className={styles.iconButton}
+          aria-label="Слова этой книги"
+          title="Слова этой книги"
+        >
+          <DecksIcon />
+        </Link>
 
         <button
           type="button"
@@ -583,6 +604,8 @@ export function ReaderScreen() {
           <Contents
             titles={chapterTitles}
             current={chapterIndex}
+            bookId={bookId}
+            books={readableBooks}
             onPick={goChapter}
             onClose={() => setContents(false)}
             quick={timing.quick}
@@ -613,12 +636,16 @@ function ChapterEnd({ onNext }: { onNext: () => void }) {
 function Contents({
   titles,
   current,
+  bookId,
+  books,
   onPick,
   onClose,
   quick,
 }: {
   titles: (string | null)[]
   current: number
+  bookId: string
+  books: LibraryBook[]
   onPick: (index: number) => void
   onClose: () => void
   quick: number
@@ -655,6 +682,30 @@ function Contents({
             <CloseIcon />
           </button>
         </header>
+        <nav className={styles.contents__quick} aria-label="Навигация по книге">
+          <Link to="/library" onClick={onClose}>Все книги</Link>
+          <Link to="/library/$bookId/words" params={{ bookId }} onClick={onClose}>
+            Слова книги
+          </Link>
+        </nav>
+        {books.length > 1 && (
+          <div className={styles.contents__books}>
+            <span className={styles.contents__label}>Перейти к книге</span>
+            {books.map((book) => (
+              <Link
+                key={book.id}
+                to="/reader/$bookId"
+                params={{ bookId: book.id }}
+                className={styles.contents__book}
+                data-current={book.id === bookId}
+                onClick={onClose}
+              >
+                {book.title}
+              </Link>
+            ))}
+          </div>
+        )}
+        <span className={styles.contents__label}>Главы</span>
         <div className={styles.contents__list}>
           {titles.map((title, index) => (
             <button

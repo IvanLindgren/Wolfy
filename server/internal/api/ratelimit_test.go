@@ -66,21 +66,24 @@ func TestМолчащиеАдресаЗабываются(t *testing.T) {
 	}
 }
 
-// За прокси все запросы приходят с одного адреса, и без разбора заголовка
-// первый же читатель исчерпал бы запас на всех.
-func TestАдресБерётсяИзЦепочкиПрокси(t *testing.T) {
+// Только локальному reverse proxy разрешено сообщать реальный адрес. Чужие
+// X-Forwarded-For/X-Real-IP не должны превращать rate limit в декорацию.
+func TestАдресБерётсяТолькоОтДоверенногоПрокси(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/v1/translate", nil)
-	r.RemoteAddr = "10.0.0.1:5555"
+	r.RemoteAddr = "127.0.0.1:5555"
+	r.Header.Set("X-Real-IP", "203.0.113.7")
 	r.Header.Set("X-Forwarded-For", "203.0.113.7, 10.0.0.1")
 
 	if got := clientIP(r); got != "203.0.113.7" {
-		t.Fatalf("взят адрес %q вместо ближайшего к читателю", got)
+		t.Fatalf("взят адрес %q вместо адреса от локального proxy", got)
 	}
 
 	bare := httptest.NewRequest(http.MethodPost, "/v1/translate", nil)
 	bare.RemoteAddr = "198.51.100.9:4444"
+	bare.Header.Set("X-Real-IP", "1.2.3.4")
+	bare.Header.Set("X-Forwarded-For", "5.6.7.8")
 	if got := clientIP(bare); got != "198.51.100.9" {
-		t.Fatalf("без заголовка взят адрес %q", got)
+		t.Fatalf("прямой клиент подменил адрес заголовком: %q", got)
 	}
 }
 

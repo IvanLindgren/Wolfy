@@ -11,7 +11,7 @@
  * спиннер на месте разбора и превращает тап по слову в ожидание.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion as m } from 'motion/react'
 import { Link } from '@tanstack/react-router'
 
@@ -19,7 +19,7 @@ import { motionFor } from '../app/theme'
 import { useShortcuts } from '../app/shortcuts'
 import * as bridge from '../core/bridge'
 import { session, useSession } from '../core/session'
-import type { Card, Grammar, Token, WordAnalysis } from '../core/types'
+import type { Card, Grammar, PosTag, Token, WordAnalysis } from '../core/types'
 import { seconds } from '../theme/motion'
 import { Button } from '../widgets/Button'
 import { CheckIcon, CloseIcon, GraphIcon, SoundIcon, TreeIcon } from '../widgets/icons'
@@ -34,6 +34,7 @@ import {
 } from './grammarColors'
 import { PhraseText } from './PhraseText'
 import { SentenceGraph } from './SentenceGraph'
+import { contextualPos, otherSenses, primarySense } from './cardEssentials'
 import { canSpeak, onVoicesReady, speak } from './speech'
 import { useDefinition } from './useDefinition'
 import { useTranslation } from './useTranslation'
@@ -49,6 +50,8 @@ export interface CardTarget {
   /** Токены предложения (или фразы) и номер первого из них в главе. */
   tokens: Token[]
   offset: number
+  /** Индекс выбранного слова внутри `tokens`; у карточки фразы его нет. */
+  selectedToken?: number
   /** Откуда стартует полёт слова в колоду. */
   origin: HTMLElement | null
 }
@@ -74,7 +77,11 @@ export function WordCard({ target, onClose }: WordCardProps) {
             transition={{ duration: seconds(timing.quick) }}
             onClick={onClose}
           />
-          <Sheet key={`${target.kind}:${target.sentence}:${target.surface}`} target={target} onClose={onClose} />
+          <Sheet
+            key={`${target.kind}:${target.sentence}:${target.surface}:${target.selectedToken ?? ''}`}
+            target={target}
+            onClose={onClose}
+          />
         </>
       )}
     </AnimatePresence>
@@ -118,6 +125,12 @@ function Sheet({ target, onClose }: { target: CardTarget; onClose: () => void })
     target.kind === 'word' ? target.surface : '',
     target.sentence,
   )
+  const wordPos = target.kind === 'word'
+    ? contextualPos(grammar, target.selectedToken) ??
+      analysis?.matchedPos ??
+      analysis?.dominantPos ??
+      analysis?.pos[0]
+    : undefined
 
   const existing = useMemo(
     () =>
@@ -152,7 +165,7 @@ function Sheet({ target, onClose }: { target: CardTarget; onClose: () => void })
         lemma,
         translation: wordTranslation,
         context: target.sentence,
-        pos: analysis?.matchedPos ?? analysis?.dominantPos ?? analysis?.pos[0] ?? '',
+        pos: wordPos ?? '',
         cefr: analysis?.cefr ?? '',
       })
     }
@@ -168,6 +181,7 @@ function Sheet({ target, onClose }: { target: CardTarget; onClose: () => void })
     lemma,
     wordTranslation,
     analysis,
+    wordPos,
     onClose,
   ])
 
@@ -266,6 +280,8 @@ function Sheet({ target, onClose }: { target: CardTarget; onClose: () => void })
             definition={definition}
             translation={translation}
             existing={existing}
+            mainPos={wordPos}
+            duration={timing.calm}
           />
         ) : (
           <PhraseBody
@@ -311,6 +327,8 @@ function WordBody({
   definition,
   translation,
   existing,
+  mainPos,
+  duration,
 }: {
   target: CardTarget
   analysis: WordAnalysis | null
@@ -318,98 +336,153 @@ function WordBody({
   definition: ReturnType<typeof useDefinition>
   translation: ReturnType<typeof useTranslation>
   existing: Card | undefined
+  mainPos: PosTag | undefined
+  duration: number
 }) {
+  const mainSense = definition.state === 'ready'
+    ? primarySense(definition.entry.senses, mainPos)
+    : undefined
+  const remainingSenses = definition.state === 'ready'
+    ? otherSenses(definition.entry.senses, mainSense)
+    : []
+
   return (
     <>
-      <div className={styles.tags}>
-        {analysis?.pos.map((tag) => (
-          <span key={tag} className={styles.tag}>
-            {POS_TITLES[tag] ?? tag}
-          </span>
-        ))}
-        {analysis && <span className={styles.tag}>уровень {analysis.cefr}</span>}
-        {analysis && analysis.zipf > 0 && (
-          <span className={styles.tag} title="Частотность по шкале Zipf: 6 — «the», 4 — обычное книжное слово">
-            Zipf {analysis.zipf.toFixed(1)}
-          </span>
-        )}
-        {analysis && (
-          <span className={styles.tag}>
-            {analysis.surface.length} букв · {syllables(analysis.surface)} слог.
-          </span>
-        )}
-        {analysis && !analysis.known && (
-          <span className={styles.tag}>нет в словаре форм</span>
-        )}
-      </div>
-
-      <Familiarity
-        target={target}
-        existing={existing}
-        translation={translation}
-        analysis={analysis}
-      />
-
-      {target.sentence && (
-        <section className={styles.section}>
-          <h3 className={styles.section__title}>Предложение</h3>
-          {translation.state === 'ready' && translation.sentence ? (
-            <p className={styles.context}>{translation.sentence}</p>
+      <div className={styles.primaryGrid}>
+        <section className={styles.primaryCard} data-tone="translation">
+          <h3 className={styles.primaryCard__title}>Перевод в контексте</h3>
+          {translation.state === 'ready' && translation.word ? (
+            <p className={styles.primaryCard__value}>{translation.word}</p>
+          ) : existing?.translation ? (
+            <p className={styles.primaryCard__value}>{existing.translation}</p>
           ) : translation.state === 'failed' ? (
-            <p className={styles.pending}>{translation.message}</p>
+            <p className={styles.primaryCard__pending}>{translation.message}</p>
           ) : (
-            <p className={styles.pending}>Перевод предложения едет…</p>
+            <p className={styles.primaryCard__pending}>Перевожу…</p>
+          )}
+          {translation.state === 'ready' && translation.sentence ? (
+            <p className={styles.primaryCard__context}>{translation.sentence}</p>
+          ) : null}
+        </section>
+
+        <section className={styles.primaryCard} data-tone="definition">
+          <h3 className={styles.primaryCard__title}>Толкование</h3>
+          {mainSense ? (
+            <>
+              <p className={styles.primaryCard__value} lang="en">
+                {mainSense.definition}
+              </p>
+              <span className={styles.primaryCard__meta}>
+                {POS_TITLES[mainSense.pos] ?? mainSense.pos}
+              </span>
+            </>
+          ) : definition.state === 'missing' || definition.state === 'ready' ? (
+            <p className={styles.primaryCard__pending}>Толкование пока не найдено</p>
+          ) : (
+            <p className={styles.primaryCard__pending}>Ищу толкование…</p>
           )}
         </section>
-      )}
 
-      {analysis && analysis.facts.length > 0 && (
-        <section className={styles.section}>
-          <h3 className={styles.section__title}>Разбор формы</h3>
-          <div className={styles.facts}>
-            {analysis.facts.map((fact, index) => (
-              <div key={index} className={styles.fact}>
-                <span className={styles.fact__label}>{fact.label}</span>
-                <span>{fact.value}</span>
+        <section className={styles.primaryCard} data-tone="form">
+          <h3 className={styles.primaryCard__title}>Форма в этом контексте</h3>
+          {analysis ? (
+            <>
+              <p className={styles.wordForm} lang="en">
+                <strong>{analysis.surface}</strong>
+                {analysis.surface.toLowerCase() !== analysis.lemma.toLowerCase() && (
+                  <>
+                    <span aria-hidden="true"> → </span>
+                    <span className={styles.wordForm__lemma}>{analysis.lemma}</span>
+                  </>
+                )}
+              </p>
+              <div className={styles.formSummary}>
+                {mainPos && <span>{POS_TITLES[mainPos] ?? mainPos}</span>}
+                {analysis.facts.slice(0, 2).map((fact, index) => (
+                  <span key={`${fact.label}:${index}`}>
+                    {fact.label}: {fact.value}
+                  </span>
+                ))}
+                {analysis.facts.length === 0 && <span>{formTitle(analysis.form)}</span>}
               </div>
-            ))}
-          </div>
+            </>
+          ) : (
+            <p className={styles.primaryCard__pending}>Разбираю форму…</p>
+          )}
         </section>
-      )}
+      </div>
 
-      {definition.state === 'ready' && definition.entry.senses.length > 0 && (
-        <section className={styles.section}>
-          <h3 className={styles.section__title}>Толкование</h3>
-          <div className={styles.senses}>
-            {definition.entry.senses.slice(0, 6).map((sense, index) => (
-              <div key={index} className={styles.sense}>
-                <span className={styles.sense__pos}>
-                  {POS_TITLES[sense.pos] ?? sense.pos}
-                </span>
-                <span className={styles.sense__text} lang="en">
-                  {sense.definition}
-                </span>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
+      <WolfyDisclosure
+        label="Подробнее о слове"
+        hint="Грамматика, другие значения и конструкции"
+        duration={duration}
+      >
+        <div className={styles.tags}>
+          {mainPos && (
+            <span className={styles.tag}>
+              в контексте: {POS_TITLES[mainPos] ?? mainPos}
+            </span>
+          )}
+          {analysis?.cefr && <span className={styles.tag}>уровень {analysis.cefr}</span>}
+          {analysis && analysis.zipf > 0 && (
+            <span className={styles.tag} title="Частотность по шкале Zipf: 6 — «the», 4 — обычное книжное слово">
+              Zipf {analysis.zipf.toFixed(1)}
+            </span>
+          )}
+          {analysis && (
+            <span className={styles.tag}>
+              {analysis.surface.length} букв · {syllables(analysis.surface)} слог.
+            </span>
+          )}
+          {analysis && !analysis.known && <span className={styles.tag}>нет в словаре форм</span>}
+        </div>
 
-      {definition.state === 'ready' && definition.entry.translations.length > 1 && (
-        <section className={styles.section}>
-          <h3 className={styles.section__title}>Словарные значения</h3>
-          <p>{definition.entry.translations.join(' · ')}</p>
-        </section>
-      )}
+        <RecallQuiz target={target} existing={existing} />
 
-      {definition.state === 'missing' && (
-        <p className={styles.pending}>
-          Словарной статьи нет. Офлайн-словарь ставится в настройках — с ним
-          толкование и произношение появляются без сети.
-        </p>
-      )}
+        {analysis && analysis.facts.length > 2 && (
+          <section className={styles.section}>
+            <h3 className={styles.section__title}>Полный разбор формы</h3>
+            <div className={styles.facts}>
+              {analysis.facts.map((fact, index) => (
+                <div key={index} className={styles.fact}>
+                  <span className={styles.fact__label}>{fact.label}</span>
+                  <span>{fact.value}</span>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
 
-      <Constructions grammar={grammar} tokens={target.tokens} word={target.surface} />
+        {remainingSenses.length > 0 && (
+          <section className={styles.section}>
+            <h3 className={styles.section__title}>Другие толкования</h3>
+            <div className={styles.senses}>
+              {remainingSenses.map((sense, index) => (
+                <div key={index} className={styles.sense}>
+                  <span className={styles.sense__pos}>{POS_TITLES[sense.pos] ?? sense.pos}</span>
+                  <span className={styles.sense__text} lang="en">{sense.definition}</span>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {definition.state === 'ready' && definition.entry.translations.length > 1 && (
+          <section className={styles.section}>
+            <h3 className={styles.section__title}>Словарные значения</h3>
+            <p>{definition.entry.translations.join(' · ')}</p>
+          </section>
+        )}
+
+        {definition.state === 'missing' && (
+          <p className={styles.pending}>
+            Офлайн-словарь можно установить в настройках — с ним толкование и
+            произношение доступны без сети.
+          </p>
+        )}
+
+        <Constructions grammar={grammar} tokens={target.tokens} word={target.surface} />
+      </WolfyDisclosure>
     </>
   )
 }
@@ -417,26 +490,22 @@ function WordBody({
 /**
  * Умная проверка знакомства.
  *
- * Незнакомое слово показывает перевод сразу: читатель тапнул потому, что не
- * знает, и заставлять его угадывать — издевательство. Уже встречавшееся —
- * то, что лежит в колоде, — спрашивается мини-квизом: верный ответ отмечается
- * похвалой и двигает карточку вперёд, ошибка возвращает её в оборот.
+ * Перевод теперь всегда остаётся в главном блоке. Уже встречавшееся слово —
+ * то, что лежит в колоде, — дополнительно спрашивается мини-квизом внутри
+ * подробностей: верный ответ двигает карточку вперёд, ошибка возвращает её в
+ * оборот.
  *
  * Квиз возможен, только если в колоде есть чужие переводы: придумывать
  * правдоподобно неверный вариант приложению нечем, а «дом / стол / бегать»
  * рядом с «библиотека» не проверяют ничего. Нет вариантов — показываем
  * перевод, как незнакомому.
  */
-function Familiarity({
+function RecallQuiz({
   target,
   existing,
-  translation,
-  analysis,
 }: {
   target: CardTarget
   existing: Card | undefined
-  translation: ReturnType<typeof useTranslation>
-  analysis: WordAnalysis | null
 }) {
   const cards = useSession((state) => state.library.cards)
   const [answered, setAnswered] = useState<number | null>(null)
@@ -462,27 +531,7 @@ function Familiarity({
     return shuffle([answer, ...picked], existing.id + answer)
   }, [cards, existing, answer])
 
-  if (!existing || options.length === 0) {
-    return (
-      <section className={styles.section}>
-        <h3 className={styles.section__title}>Перевод</h3>
-        {translation.state === 'ready' && translation.word ? (
-          <p className={styles.translation}>{translation.word}</p>
-        ) : existing?.translation ? (
-          <p className={styles.translation}>{existing.translation}</p>
-        ) : translation.state === 'failed' ? (
-          <p className={styles.pending}>{translation.message}</p>
-        ) : (
-          <p className={styles.pending}>Перевод едет…</p>
-        )}
-        {analysis && !analysis.known && (
-          <p className={styles.pending}>
-            Слова нет в словаре форм — возможно, это имя собственное.
-          </p>
-        )}
-      </section>
-    )
-  }
+  if (!existing || options.length === 0) return null
 
   const right = answered !== null && options[answered] === answer
 
@@ -612,91 +661,19 @@ function PhraseBody({
   stagger: number
   duration: number
 }) {
-  const [interlinear, setInterlinear] = useState(true)
-
   return (
     <>
-      <PhraseText
-        tokens={target.tokens}
-        markers={grammar?.markers ?? []}
-        offset={target.offset}
-        interlinear={interlinear}
-      />
-
-      <section className={styles.section}>
-        <h3 className={styles.section__title}>
-          Перевод
-          <span className={styles.toggle} style={{ textTransform: 'none', letterSpacing: 0 }}>
-            <button
-              type="button"
-              data-active={interlinear}
-              onClick={() => setInterlinear(true)}
-            >
-              с подстрочником
-            </button>
-            <button
-              type="button"
-              data-active={!interlinear}
-              onClick={() => setInterlinear(false)}
-            >
-              без
-            </button>
-          </span>
-        </h3>
-        {translation.state === 'ready' && translation.sentence ? (
-          <p className={styles.translation}>{translation.sentence}</p>
-        ) : translation.state === 'failed' ? (
-          <p className={styles.pending}>{translation.message}</p>
-        ) : (
-          <p className={styles.pending}>Литературный перевод едет…</p>
-        )}
-      </section>
-
-      {grammar && grammar.findings.length > 0 && (
-        <section className={styles.section}>
-          <h3 className={styles.section__title}>Найденные конструкции</h3>
-          {grammar.findings.map((finding, index) => (
-            <div
-              key={index}
-              className={styles.finding}
-              style={{ background: familyColor(finding.rule) }}
-            >
-              <div className={styles.finding__head}>
-                <span className={styles.family}>
-                  {FAMILY_TITLES[familyOf(finding.rule)]}
-                </span>
-                <span className={styles.finding__title} style={{ color: 'var(--family-ink)' }}>
-                  {finding.title}
-                </span>
-                <span className={styles.finding__formula}>{finding.formula}</span>
-              </div>
-              <p className={styles.finding__explanation}>{finding.explanation}</p>
-              <p className={styles.finding__explanation} style={{ opacity: 0.75 }}>
-                Слова {finding.start + 1}–{finding.end} во фразе
-              </p>
-              <Link
-                to="/grammar/$rule"
-                params={{ rule: finding.rule }}
-                className={styles.finding__link}
-              >
-                Правило целиком
-              </Link>
-            </div>
-          ))}
-        </section>
-      )}
-
-      <section className={styles.section}>
+      <section className={styles.phrasePrimary} data-tone="graph">
         <div className={styles.graphHead}>
-          <h3 className={styles.section__title} style={{ margin: 0 }}>
-            Связи
-          </h3>
-          <div className={styles.toggle}>
+          <h3 className={styles.primaryCard__title}>Граф связей</h3>
+          <div className={styles.toggle} aria-label="Вид синтаксических связей">
             <button
               type="button"
               data-active={graphMode === 'graph'}
               onClick={() => setGraphMode('graph')}
               title="Граф связей"
+              aria-label="Показать граф связей"
+              aria-pressed={graphMode === 'graph'}
             >
               <GraphIcon size={15} />
             </button>
@@ -705,6 +682,8 @@ function PhraseBody({
               data-active={graphMode === 'tree'}
               onClick={() => setGraphMode('tree')}
               title="Дерево зависимостей"
+              aria-label="Показать дерево зависимостей"
+              aria-pressed={graphMode === 'tree'}
             >
               <TreeIcon size={15} />
             </button>
@@ -713,14 +692,157 @@ function PhraseBody({
         <SentenceGraph
           tokens={target.tokens}
           chunks={grammar?.chunks ?? []}
-          offset={target.offset}
           mode={graphMode}
           stagger={stagger}
           duration={duration}
         />
       </section>
+
+      <section className={styles.phrasePrimary} data-tone="parts">
+        <h3 className={styles.primaryCard__title}>Фраза и части речи</h3>
+        <PhraseText
+          tokens={target.tokens}
+          markers={grammar?.markers ?? []}
+          parts={grammar?.parts}
+          interlinear={false}
+          showParts
+        />
+      </section>
+
+      <section className={styles.phrasePrimary} data-tone="translation">
+        <h3 className={styles.primaryCard__title}>Перевод в этом контексте</h3>
+        {translation.state === 'ready' && translation.sentence ? (
+          <p className={styles.primaryCard__value}>{translation.sentence}</p>
+        ) : translation.state === 'failed' ? (
+          <p className={styles.primaryCard__pending}>{translation.message}</p>
+        ) : (
+          <p className={styles.primaryCard__pending}>Перевожу фразу…</p>
+        )}
+      </section>
+
+      <WolfyDisclosure
+        label="Подробнее о фразе"
+        hint="Подстрочник и найденные конструкции"
+        duration={duration}
+      >
+        <section className={styles.section}>
+          <h3 className={styles.section__title}>Подстрочный перевод</h3>
+          <PhraseText
+            tokens={target.tokens}
+            markers={grammar?.markers ?? []}
+            parts={grammar?.parts}
+            interlinear
+          />
+        </section>
+
+        {grammar && grammar.findings.length > 0 && (
+          <section className={styles.section}>
+            <h3 className={styles.section__title}>Найденные конструкции</h3>
+            {grammar.findings.map((finding, index) => (
+              <div
+                key={index}
+                className={styles.finding}
+                style={{ background: familyColor(finding.rule) }}
+              >
+                <div className={styles.finding__head}>
+                  <span className={styles.family}>
+                    {FAMILY_TITLES[familyOf(finding.rule)]}
+                  </span>
+                  <span className={styles.finding__title} style={{ color: 'var(--family-ink)' }}>
+                    {finding.title}
+                  </span>
+                  <span className={styles.finding__formula}>{finding.formula}</span>
+                </div>
+                <p className={styles.finding__explanation}>{finding.explanation}</p>
+                <p className={styles.finding__explanation} style={{ opacity: 0.75 }}>
+                  Слова {finding.start + 1}–{finding.end} во фразе
+                </p>
+                <Link
+                  to="/grammar/$rule"
+                  params={{ rule: finding.rule }}
+                  className={styles.finding__link}
+                >
+                  Правило целиком
+                </Link>
+              </div>
+            ))}
+          </section>
+        )}
+      </WolfyDisclosure>
     </>
   )
+}
+
+function WolfyDisclosure({
+  label,
+  hint,
+  duration,
+  children,
+}: {
+  label: string
+  hint: string
+  duration: number
+  children: React.ReactNode
+}) {
+  const [open, setOpen] = useState(false)
+  const panelId = useId()
+  const transition = { duration: seconds(duration) }
+
+  return (
+    <section className={styles.disclosure} data-open={open}>
+      <button
+        type="button"
+        className={styles.disclosure__button}
+        aria-expanded={open}
+        aria-controls={panelId}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span className={styles.disclosure__copy}>
+          <strong>{open ? 'Скрыть подробности' : label}</strong>
+          <span>{open ? 'Оставить только главное' : hint}</span>
+        </span>
+        <m.span
+          className={styles.disclosure__wolfy}
+          aria-hidden="true"
+          animate={open ? { x: -8, y: 7, rotate: -7 } : { x: 0, y: 0, rotate: 0 }}
+          transition={transition}
+        >
+          <Wolfy mood={open ? 'proud' : 'kind'} size={58} />
+        </m.span>
+        <span className={styles.disclosure__handle} aria-hidden="true" />
+      </button>
+
+      <AnimatePresence initial={false}>
+        {open && (
+          <m.div
+            id={panelId}
+            className={styles.disclosure__reveal}
+            role="region"
+            aria-label={label}
+            initial={{ height: 0, opacity: 0, y: -8 }}
+            animate={{ height: 'auto', opacity: 1, y: 0 }}
+            exit={{ height: 0, opacity: 0, y: -8 }}
+            transition={transition}
+          >
+            <div className={styles.disclosure__content}>{children}</div>
+          </m.div>
+        )}
+      </AnimatePresence>
+    </section>
+  )
+}
+
+function formTitle(form: WordAnalysis['form']): string {
+  switch (form) {
+    case 'lemma':
+      return 'начальная форма'
+    case 'regular':
+      return 'регулярная форма'
+    case 'irregular':
+      return 'неправильная форма'
+    default:
+      return 'форма не определена'
+  }
 }
 
 // --- Мелочи -----------------------------------------------------------------

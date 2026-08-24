@@ -1,5 +1,8 @@
 # Production-деплой Wolfy
 
+Полная пошаговая инструкция для агентов, включая связку OAuth с Читавуком,
+проверки и откат: [`docs/agents/deploy.md`](../docs/agents/deploy.md).
+
 `master` выкладывается GitHub Actions только после успешных тестов Rust, Go и
 React. Workflow собирает один архив, загружает его на VDS и атомарно меняет
 `/opt/wolfy/current`. Если `/healthz` нового процесса не отвечает, скрипт

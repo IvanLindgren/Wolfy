@@ -249,7 +249,7 @@ func (g *Google) validReturn(value, target string) bool {
 	if err != nil || parsed.User != nil || parsed.Fragment != "" || g.webOrigin == "" {
 		return false
 	}
-	return cleanOrigin(parsed.Scheme+"://"+parsed.Host) == g.webOrigin && strings.HasPrefix(parsed.Path, "/auth/return")
+	return cleanOrigin(parsed.Scheme+"://"+parsed.Host) == g.webOrigin && parsed.Path == "/auth/return"
 }
 
 func cleanOrigin(value string) string {

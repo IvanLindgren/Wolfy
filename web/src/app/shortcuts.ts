@@ -44,6 +44,26 @@ export function isTyping(target: EventTarget | null): boolean {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
 }
 
+/** Должен ли Enter остаться нативному интерактивному элементу. */
+export function isInteractive(target: EventTarget | null): boolean {
+  if (isTyping(target)) return true
+  if (!(target instanceof Element)) return false
+  return target.closest([
+    'button',
+    'a[href]',
+    'summary',
+    '[contenteditable]:not([contenteditable="false"])',
+    '[role="button"]',
+    '[role="link"]',
+    '[role="menuitem"]',
+    '[role="option"]',
+    '[role="tab"]',
+    '[role="checkbox"]',
+    '[role="radio"]',
+    '[role="switch"]',
+  ].join(',')) !== null
+}
+
 function matches(shortcut: Shortcut, event: KeyboardEvent): boolean {
   if (shortcut.key.toLowerCase() !== event.key.toLowerCase()) return false
   if (!!shortcut.ctrl !== (event.ctrlKey || event.metaKey)) return false
@@ -62,6 +82,10 @@ export function useShortcuts(shortcuts: Shortcut[], options: Options = {}): void
       // Повторы от зажатой клавиши не превращаем в десять перелистываний:
       // читатель, задержавший стрелку, хочет одну страницу, а не главу.
       if (event.repeat && event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return
+      // Enter на кнопке/ссылке принадлежит сфокусированному контролу. Иначе
+      // глобальное «сохранить слово» закрывало карточку вместо раскрытия
+      // подробностей или переключения графа.
+      if (event.key === 'Enter' && isInteractive(event.target)) return
       if (!inFields && isTyping(event.target)) return
 
       for (const shortcut of shortcuts) {

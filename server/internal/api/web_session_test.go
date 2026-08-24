@@ -27,3 +27,19 @@ func TestSessionCookieIsHttpOnlyAndLax(t *testing.T) {
 		t.Fatalf("небезопасная cookie: %+v", cookie)
 	}
 }
+
+func TestSessionCookieSecureЗаЛокальнымTLSProxy(t *testing.T) {
+	proxied := httptest.NewRequest(http.MethodPost, "/v1/auth/google", nil)
+	proxied.RemoteAddr = "127.0.0.1:43120"
+	proxied.Header.Set("X-Forwarded-Proto", "https")
+	if !sessionCookie(proxied, "ctv_secret").Secure {
+		t.Fatal("production cookie за HTTPS Nginx осталась без Secure")
+	}
+
+	direct := httptest.NewRequest(http.MethodPost, "/v1/auth/google", nil)
+	direct.RemoteAddr = "198.51.100.9:43120"
+	direct.Header.Set("X-Forwarded-Proto", "https")
+	if sessionCookie(direct, "ctv_secret").Secure {
+		t.Fatal("прямой HTTP-клиент подделал X-Forwarded-Proto")
+	}
+}

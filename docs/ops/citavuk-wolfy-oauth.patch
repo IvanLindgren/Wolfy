@@ -1,0 +1,203 @@
+diff --git a/server/internal/api/loopback.go b/server/internal/api/loopback.go
+--- a/server/internal/api/loopback.go
++++ b/server/internal/api/loopback.go
+@@ -10,6 +10,9 @@ import (
+ // errNotLoopback — адрес возврата не ведёт на локальный сокет.
+ var errNotLoopback = errors.New("адрес возврата должен вести на 127.0.0.1")
+ 
++// errNotTrustedWebReturn — HTTPS-адрес не входит в CORS allowlist сервера.
++var errNotTrustedWebReturn = errors.New("адрес возврата не принадлежит доверенному сайту")
++
+ // loopbackHosts — единственные допустимые имена в адресе возврата.
+ //
+ // «localhost» разрешён, потому что его требует часть OAuth-провайдеров, но
+@@ -76,3 +79,39 @@ func parseLoopbackURL(raw string) (string, error) {
+ 	clean := url.URL{Scheme: "http", Host: parsed.Host, Path: parsed.Path}
+ 	return clean.String(), nil
+ }
++
++// parseTrustedWebReturn разрешает completion code только origin из уже
++// существующего CORS allowlist. Путь фиксирован: иначе OAuth start снова стал
++// бы открытым редиректором внутри доверенного сайта.
++func parseTrustedWebReturn(raw string, allowedOrigins []string) (string, error) {
++	parsed, err := url.Parse(strings.TrimSpace(raw))
++	if err != nil || parsed.Scheme != "https" || parsed.Host == "" ||
++		parsed.User != nil || parsed.Fragment != "" || parsed.Path != "/auth/return" {
++		return "", errNotTrustedWebReturn
++	}
++
++	origin := (&url.URL{Scheme: parsed.Scheme, Host: parsed.Host}).String()
++	trusted := false
++	for _, allowed := range allowedOrigins {
++		candidate, parseErr := url.Parse(strings.TrimRight(strings.TrimSpace(allowed), "/"))
++		if parseErr != nil || candidate.User != nil {
++			continue
++		}
++		candidateOrigin := (&url.URL{Scheme: candidate.Scheme, Host: candidate.Host}).String()
++		if candidateOrigin == origin && candidate.Path == "" {
++			trusted = true
++			break
++		}
++	}
++	if !trusted {
++		return "", errNotTrustedWebReturn
++	}
++
++	// code/error принадлежат callback сервера. Остальные параметры (provider,
++	// next) нужны приложению и сохраняются.
++	query := parsed.Query()
++	query.Del("code")
++	query.Del("error")
++	parsed.RawQuery = query.Encode()
++	return parsed.String(), nil
++}
+diff --git a/server/internal/api/oauth_handlers.go b/server/internal/api/oauth_handlers.go
+--- a/server/internal/api/oauth_handlers.go
++++ b/server/internal/api/oauth_handlers.go
+@@ -16,9 +16,9 @@ import (
+ type yandexStartRequest struct {
+ 	ReturnTarget string `json:"returnTarget"`
+ 
+-	// ReturnURL нужен только настольным приложениям: у них нет ни deep link,
+-	// как у Android, ни постоянной страницы, как у сайта. Они поднимают сервер
+-	// на 127.0.0.1 со случайным портом и присылают его адрес сюда.
++	// Desktop передаёт loopback; доверенное соседнее web-приложение — HTTPS
++	// /auth/return на origin из CITAVUK_ALLOWED_ORIGINS. Оба адреса проверяются
++	// до сохранения OAuth state.
+ 	ReturnURL string     `json:"returnUrl"`
+ 	Device    deviceInfo `json:"device"`
+ }
+@@ -47,19 +47,26 @@ func (s *Server) handleYandexStart(w http.ResponseWriter, r *http.Request) {
+ 		return
+ 	}
+ 
+-	// Адрес возврата настольного приложения проверяется здесь, до сохранения:
+-	// после callback провайдера он используется как цель перенаправления вместе
+-	// с одноразовым кодом входа, и непроверенное значение сделало бы из сервера
+-	// открытый редиректор.
++	// Адрес проверяется до сохранения: после callback он получит одноразовый
++	// completion code, поэтому непроверенное значение стало бы открытым редиректом.
+ 	var returnURL string
+-	if req.ReturnTarget == "desktop" {
++	switch {
++	case req.ReturnTarget == "desktop":
+ 		parsed, err := parseLoopbackURL(req.ReturnURL)
+ 		if err != nil {
+ 			writeError(w, http.StatusBadRequest, codeBadRequest,
+ 				"Адрес возврата должен вести на 127.0.0.1.")
+ 			return
+ 		}
+ 		returnURL = parsed
++	case req.ReturnTarget == "web" && strings.TrimSpace(req.ReturnURL) != "":
++		parsed, err := parseTrustedWebReturn(req.ReturnURL, s.cfg.AllowedOrigins)
++		if err != nil {
++			writeError(w, http.StatusBadRequest, codeBadRequest,
++				"Адрес возврата не принадлежит доверенному сайту.")
++			return
++		}
++		returnURL = parsed
+ 	}
+ 
+ 	state, stateHash, err := auth.NewSessionToken()
+@@ -176,6 +188,9 @@ func (s *Server) redirectOAuthResult(
+ 	switch {
+ 	case state.ReturnTarget == "mobile":
+ 		destination = "citavuk://auth/yandex"
++	case state.ReturnTarget == "web" && state.ReturnURL != "":
++		// HTTPS origin и точный путь проверены в handleYandexStart.
++		destination = state.ReturnURL
+ 	case state.ReturnTarget == "desktop" && state.ReturnURL != "":
+ 		// Адрес уже проверен при начале входа, см. handleYandexStart.
+ 		destination = state.ReturnURL
+@@ -182,17 +197,21 @@ func (s *Server) redirectOAuthResult(
+ 	default:
+ 		destination = strings.TrimRight(s.cfg.WebURL, "/") + "/auth/yandex"
+ 	}
+-	values := url.Values{}
++	target, err := url.Parse(destination)
++	if err != nil {
++		writeError(w, http.StatusBadRequest, codeBadRequest,
++			"Не удалось подготовить возврат после входа.")
++		return
++	}
++	values := target.Query()
+ 	if code != "" {
+ 		values.Set("code", code)
+ 	}
+ 	if message != "" {
+ 		values.Set("error", message)
+ 	}
+-	if encoded := values.Encode(); encoded != "" {
+-		destination += "?" + encoded
+-	}
+-	http.Redirect(w, r, destination, http.StatusSeeOther)
++	target.RawQuery = values.Encode()
++	http.Redirect(w, r, target.String(), http.StatusSeeOther)
+ }
+ 
+ func (s *Server) handleYandexComplete(w http.ResponseWriter, r *http.Request) {
+diff --git a/server/internal/api/loopback_test.go b/server/internal/api/loopback_test.go
+--- a/server/internal/api/loopback_test.go
++++ b/server/internal/api/loopback_test.go
+@@ -64,6 +64,31 @@ func TestParseLoopbackURLRejects(t *testing.T) {
+ 	}
+ }
+ 
++func TestParseTrustedWebReturn(t *testing.T) {
++	allowed := []string{"https://citavuk.ru", "https://wolfy.citavuk.ru"}
++	got, err := parseTrustedWebReturn(
++		"https://wolfy.citavuk.ru/auth/return?provider=yandex&next=%2Faccount&code=fake",
++		allowed,
++	)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if got != "https://wolfy.citavuk.ru/auth/return?next=%2Faccount&provider=yandex" {
++		t.Fatalf("параметры возврата разобраны неверно: %q", got)
++	}
++
++	for _, raw := range []string{
++		"https://evil.example/auth/return",
++		"https://wolfy.citavuk.ru/auth/return-evil",
++		"https://wolfy.citavuk.ru/auth/return#fragment",
++		"http://wolfy.citavuk.ru/auth/return",
++	} {
++		if value, err := parseTrustedWebReturn(raw, allowed); err == nil {
++			t.Errorf("небезопасный адрес %q принят как %q", raw, value)
++		}
++	}
++}
++
+ // TestRedirectOAuthResultTargets проверяет, что результат входа уходит именно
+ // тому приложению, которое его начинало.
+ func TestRedirectOAuthResultTargets(t *testing.T) {
+@@ -92,6 +117,14 @@ func TestRedirectOAuthResultTargets(t *testing.T) {
+ 			state: store.OAuthState{ReturnTarget: "web"},
+ 			want:  "https://citavuk.ru/auth/yandex?code=abc",
+ 		},
++		{
++			name: "доверенное web-приложение получает свой callback",
++			state: store.OAuthState{
++				ReturnTarget: "web",
++				ReturnURL:    "https://wolfy.citavuk.ru/auth/return?provider=yandex&next=%2Faccount",
++			},
++			want: "https://wolfy.citavuk.ru/auth/return?code=abc&next=%2Faccount&provider=yandex",
++		},
+ 		{
+ 			// Если адрес почему-то не сохранился, вход обязан завершиться на
+ 			// сайте, а не уйти в никуда.
+diff --git a/.env.example b/.env.example
+--- a/.env.example
++++ b/.env.example
+@@ -134,7 +134,10 @@ CITAVUK_CONTENT_TOKEN=""
+ 
+ # --- Сервер (необязательное; значения по умолчанию в internal/config) ---
+ # CITAVUK_ADDR="127.0.0.1:8090"
+-# CITAVUK_ALLOWED_ORIGINS="https://citavuk.ru,https://www.citavuk.ru"
++# Этот список одновременно разрешает credentialed CORS и OAuth completion
++# returnUrl доверенных web-клиентов. Не добавляйте origin, которым нельзя
++# передавать одноразовый код входа.
++# CITAVUK_ALLOWED_ORIGINS="https://citavuk.ru,https://www.citavuk.ru,https://wolfy.citavuk.ru"
+ # CITAVUK_UPSTREAM="https://ivanessalingren-citavukspace.hf.space"
+ # CITAVUK_SESSION_TTL_DAYS="90"
+ # Аккаунты с доступом к /admin. Роль выдаётся существующему пользователю при

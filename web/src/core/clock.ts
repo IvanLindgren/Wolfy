@@ -61,6 +61,26 @@ export function relativeDay(at: number): string {
   return new Date(at).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })
 }
 
+/** Срок карточки: прошедшие даты и будущие интервалы не смешиваются. */
+export function dueDay(
+  at: number,
+  reference: number = now(),
+  offset: number = offsetMinutes(),
+): string {
+  if (!at) return 'новая'
+  const days = localDay(at, offset) - localDay(reference, offset)
+  if (days < 0) {
+    const ago = -days
+    if (ago === 1) return 'вчера'
+    if (ago < 7) return `${ago} ${plural(ago, 'день', 'дня', 'дней')} назад`
+    return new Date(at).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })
+  }
+  if (days === 0) return 'сегодня'
+  if (days === 1) return 'завтра'
+  if (days < 7) return `через ${days} ${plural(days, 'день', 'дня', 'дней')}`
+  return new Date(at).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })
+}
+
 /** Час и минута местного времени. */
 export function clockTime(at: number): string {
   return new Date(at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })

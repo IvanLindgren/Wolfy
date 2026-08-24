@@ -24,7 +24,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::dictionary::Dictionary;
 use crate::ffi::dto::{
-    BookDto, ChapterDto, ExercisesDto, GrammarDto, ReferenceDto, TextDto, WordDto,
+    BookDto, ChapterDto, ExercisesDto, GrammarDto, PartDto, ReferenceDto, TextDto, WordDto,
 };
 use crate::ffi::session::{Command, Session};
 use crate::lexicon::{analyze, Lexicon};
@@ -89,11 +89,13 @@ pub fn tokenize_text(text: &str) -> Result<String, JsError> {
 pub fn explain(text: &str) -> Result<String, JsError> {
     let tokens = tokenize(text);
     let lexicon = Lexicon::embedded();
+    let parts = crate::tagger::tag(lexicon, &tokens);
     let findings = crate::grammar::analyze(lexicon, &tokens);
     let chunks = crate::grammar::chunks(lexicon, &tokens, &findings);
     let markers = crate::grammar::markers(lexicon, &tokens, &findings);
 
     json(&GrammarDto {
+        parts: parts.iter().map(PartDto::from).collect(),
         findings: findings.iter().map(Into::into).collect(),
         chunks: chunks.iter().map(Into::into).collect(),
         markers: markers.iter().map(Into::into).collect(),

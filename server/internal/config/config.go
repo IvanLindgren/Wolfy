@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -49,10 +50,14 @@ type Config struct {
 	CitavukGoogleURL         string
 	CitavukYandexStartURL    string
 	CitavukYandexCompleteURL string
+	// Старый Читавук всегда возвращает web-flow на citavuk.ru. Флаг можно
+	// включить только после установки companion-патча trusted returnUrl.
+	CitavukYandexWebReturn bool
 
-	// Google OAuth проходит в системном браузере. Секрет остаётся на сервере,
-	// а приложение получает только обычную сессию Читавука через одноразовый
-	// возврат на loopback-адрес.
+	// GoogleWebClientID — публичный client_id Google Identity Services. Секрет
+	// браузерному потоку не нужен: ID token проверяет общий сервер Читавука.
+	GoogleWebClientID string
+	// Code+PKCE-поток ниже остаётся для установленных клиентов.
 	GoogleClientID     string
 	GoogleClientSecret string
 	GoogleCallbackURL  string
@@ -102,6 +107,8 @@ func Load() (Config, error) {
 		CitavukGoogleURL:         envOr("WOLFY_CITAVUK_GOOGLE_URL", "https://api.citavuk.ru/v1/auth/google"),
 		CitavukYandexStartURL:    envOr("WOLFY_CITAVUK_YANDEX_START_URL", "https://api.citavuk.ru/v1/auth/yandex/start"),
 		CitavukYandexCompleteURL: envOr("WOLFY_CITAVUK_YANDEX_COMPLETE_URL", "https://api.citavuk.ru/v1/auth/yandex/complete"),
+		CitavukYandexWebReturn:   envBool("WOLFY_CITAVUK_YANDEX_WEB_RETURN", false),
+		GoogleWebClientID:        strings.TrimSpace(os.Getenv("WOLFY_GOOGLE_WEB_CLIENT_ID")),
 		GoogleClientID:           strings.TrimSpace(os.Getenv("WOLFY_GOOGLE_CLIENT_ID")),
 		GoogleClientSecret:       strings.TrimSpace(os.Getenv("WOLFY_GOOGLE_CLIENT_SECRET")),
 		GoogleCallbackURL:        strings.TrimSpace(os.Getenv("WOLFY_GOOGLE_CALLBACK_URL")),
@@ -178,4 +185,16 @@ func envOr(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func envBool(key string, fallback bool) bool {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }

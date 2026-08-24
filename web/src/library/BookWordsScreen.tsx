@@ -8,14 +8,14 @@
  */
 
 import { useMemo, useState } from 'react'
-import { Link, useParams } from '@tanstack/react-router'
+import { Link, useNavigate, useParams } from '@tanstack/react-router'
 
 import { toast } from '../app/toasts'
 import { session, useSession } from '../core/session'
-import { now, relativeDay } from '../core/clock'
+import { dueDay, now } from '../core/clock'
 import type { Card } from '../core/types'
 import { Appear } from '../widgets/Appear'
-import { Button } from '../widgets/Button'
+import { Button, buttonClassName } from '../widgets/Button'
 import { TrashIcon } from '../widgets/icons'
 import page from '../widgets/Page.module.css'
 import { WolfyCompanion } from '../widgets/Wolfy'
@@ -33,7 +33,9 @@ const FILTERS: { id: Filter; title: string }[] = [
 export function BookWordsScreen() {
   const { bookId } = useParams({ from: '/library/$bookId/words' })
   const book = useSession((state) => state.library.books.find((item) => item.id === bookId))
+  const books = useSession((state) => state.library.books)
   const cards = useSession((state) => state.library.cards)
+  const navigate = useNavigate()
 
   const [filter, setFilter] = useState<Filter>('all')
   const [query, setQuery] = useState('')
@@ -66,9 +68,7 @@ export function BookWordsScreen() {
   if (!book) {
     return (
       <WolfyCompanion mood="kind" title="Книга не найдена">
-        <Link to="/library">
-          <Button variant="primary">К библиотеке</Button>
-        </Link>
+        <Link to="/library" className={buttonClassName({ variant: 'primary' })}>К библиотеке</Link>
       </WolfyCompanion>
     )
   }
@@ -81,11 +81,36 @@ export function BookWordsScreen() {
           <h1 className={page.title}>{book.title}</h1>
         </div>
         <div className={page.headActions}>
-          <Link to="/reader/$bookId" params={{ bookId }}>
-            <Button>Читать дальше</Button>
+          <Link to="/library/words" className={buttonClassName()}>Все слова</Link>
+          <Link
+            to="/reader/$bookId"
+            params={{ bookId }}
+            className={buttonClassName({ variant: 'primary' })}
+          >
+            Читать дальше
           </Link>
         </div>
       </header>
+
+      <label className={styles.bookPicker}>
+        <span>Словарь книги</span>
+        <select
+          className={page.input}
+          value={bookId}
+          onChange={(event) =>
+            void navigate({
+              to: '/library/$bookId/words',
+              params: { bookId: event.target.value },
+            })
+          }
+        >
+          {books
+            .filter((item) => !item.deleted)
+            .map((item) => (
+              <option key={item.id} value={item.id}>{item.title}</option>
+            ))}
+        </select>
+      </label>
 
       {deck.length === 0 ? (
         <WolfyCompanion mood="calm" title="Из этой книги пока ничего не отмечено">
@@ -93,19 +118,24 @@ export function BookWordsScreen() {
             Тапните по слову в тексте — карточка покажет разбор, а кнопка «в
             колоду книги» отправит слово на повторение.
           </p>
-          <Link to="/reader/$bookId" params={{ bookId }}>
-            <Button variant="primary">Открыть книгу</Button>
+          <Link
+            to="/reader/$bookId"
+            params={{ bookId }}
+            className={buttonClassName({ variant: 'primary' })}
+          >
+            Открыть книгу
           </Link>
         </WolfyCompanion>
       ) : (
         <>
-          <div className={styles.filters}>
+          <div className={styles.filters} role="group" aria-label="Фильтр карточек книги">
             {FILTERS.map((item) => (
               <button
                 key={item.id}
                 type="button"
                 className={styles.filter}
                 data-active={filter === item.id}
+                aria-pressed={filter === item.id}
                 onClick={() => setFilter(item.id)}
               >
                 {item.title}
@@ -158,7 +188,7 @@ function WordRow({ card, index }: { card: Card; index: number }) {
         <span title="Прочность карточки: падает при уверенном знании">
           {card.hp <= 0 ? 'выучено' : `${card.hp} HP`}
         </span>
-        <span>{card.dueAt ? relativeDay(card.dueAt) : 'новая'}</span>
+        <span>{dueDay(card.dueAt)}</span>
         <Button
           variant="quiet"
           small
