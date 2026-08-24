@@ -123,9 +123,7 @@
   padding: 0.85rem 0.95rem;
   border: 1px solid color-mix(in srgb, var(--card-tone, var(--accent)) 24%, var(--rule));
   border-radius: calc(var(--radius) + 3px);
-  background:
-    radial-gradient(circle at 100% 0, color-mix(in srgb, var(--card-tone, var(--accent)) 13%, transparent), transparent 44%),
-    color-mix(in srgb, var(--card-tone, var(--accent)) 5%, var(--surface));
+  background: color-mix(in srgb, var(--card-tone, var(--accent)) 6%, var(--surface));
 }
 
 .primaryCard:last-child {
@@ -153,10 +151,8 @@
 .primaryCard__title {
   margin: 0 0 0.45rem;
   font-family: var(--sans), 'Inter Fallback';
-  font-size: 0.6875rem;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  font-size: 0.75rem;
+  font-weight: 650;
   color: color-mix(in srgb, var(--card-tone, var(--accent)) 76%, var(--ink));
 }
 
@@ -231,8 +227,7 @@
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--gold) 35%, var(--rule));
   border-radius: calc(var(--radius) + 4px);
-  background:
-    linear-gradient(120deg, color-mix(in srgb, var(--gold) 10%, var(--surface)), var(--surface));
+  background: color-mix(in srgb, var(--gold) 6%, var(--surface));
   text-align: left;
   transition:
     border-color var(--quick, 180ms) ease,
@@ -355,9 +350,8 @@
   gap: 0.5rem;
   margin-bottom: 0.4rem;
   font-family: var(--sans), 'Inter Fallback';
-  font-size: 0.6875rem;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  font-size: 0.8125rem;
+  font-weight: 550;
   color: var(--ink-muted);
 }
 
@@ -537,9 +531,7 @@
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
-  font-size: 0.6875rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-size: 0.75rem;
   color: var(--family-ink);
   opacity: 0.7;
 }

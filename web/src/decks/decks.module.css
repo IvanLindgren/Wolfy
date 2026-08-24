@@ -223,8 +223,8 @@
 }
 
 .option[data-state='wrong'] {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: var(--wrong);
+  background: color-mix(in srgb, var(--wrong) 12%, transparent);
 }
 
 .option__key {
@@ -351,7 +351,6 @@
   font-family: var(--serif), 'Playfair Fallback';
   font-size: 1.4rem;
   text-align: center;
-  letter-spacing: 0.04em;
 }
 
 /* --- HP -------------------------------------------------------------------- */

@@ -6,7 +6,7 @@
   padding: clamp(1rem, 3vw, 1.6rem);
   border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--rule));
   border-radius: var(--radius-lg);
-  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 7%, var(--surface)), var(--surface));
+  background: var(--surface);
 }
 
 .continueCover {
@@ -20,11 +20,9 @@
 .eyebrow {
   display: inline-block;
   margin-bottom: 0.35rem;
-  color: var(--accent);
-  font-size: 0.7rem;
-  font-weight: 650;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  color: var(--ink-muted);
+  font-size: 0.8125rem;
+  font-weight: 550;
 }
 
 .continueTitle {

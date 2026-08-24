@@ -41,7 +41,7 @@
   padding: 1rem;
   border: 1px solid var(--rule);
   border-radius: var(--radius-lg);
-  background: linear-gradient(145deg, var(--surface), color-mix(in srgb, var(--pos-noun) 4%, var(--surface)));
+  background: var(--surface);
   transition: transform var(--quick, 180ms) var(--paper-curve, ease), border-color var(--quick, 180ms) ease;
 }
 
@@ -60,11 +60,9 @@
 
 .kind,
 .status {
-  color: var(--accent);
-  font-size: 0.68rem;
-  font-weight: 650;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  color: var(--ink-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
 }
 
 .status {

@@ -10,6 +10,11 @@
  * описывать каскадом, чем цепочкой утилитарных классов. Смена темы — это
  * смена шести десятков значений на корне и ни одной перерисовки дерева.
  *
+ * `--accent` — единственная краска интерфейса: кнопки, ссылки, полосы.
+ * Ошибку метит отдельная `--wrong`, и это не одна и та же переменная нарочно:
+ * когда акцент был красным, неверный ответ в тренировке нечем было отличить
+ * от обычной кнопки.
+ *
  * Имена тем совпадают с тем, что хранит ядро в `settings.theme`:
  * `Paper`, `Sepia`, `Dark`, `Oled`. Незнакомое имя разбирает клиент — ядро
  * про краски не знает и знать не должно.
@@ -23,7 +28,8 @@
   --rule: #d9d8d2;
   --surface: #ffffff;
   --surface-sunken: #f2f0ea;
-  --accent: #b83a2a;
+  --accent: #1f5f66;
+  --wrong: #b83a2a;
   --gold: #b08a3c;
   --highlight: #f7e27a;
   --on-accent: #ffffff;
@@ -80,7 +86,8 @@
   --rule: #ded4c2;
   --surface: #fbf7ef;
   --surface-sunken: #ebe3d5;
-  --accent: #a8442c;
+  --accent: #1d5a5d;
+  --wrong: #a8442c;
   --gold: #9c7a2e;
   --highlight: #efd9a0;
   --on-accent: #fbf7ef;
@@ -111,7 +118,8 @@
   --rule: #3a3532;
   --surface: #2c2725;
   --surface-sunken: #1b1817;
-  --accent: #d9694f;
+  --accent: #63b3ac;
+  --wrong: #e07a64;
   --gold: #d4a855;
   --highlight: #5a4a1e;
   --on-accent: #231f20;
@@ -150,7 +158,8 @@
   --rule: #2a2a2a;
   --surface: #0e0e0e;
   --surface-sunken: #050505;
-  --accent: #e0674c;
+  --accent: #6ec4bc;
+  --wrong: #f08a72;
   --gold: #d4a855;
   --highlight: #5c4a12;
   --on-accent: #000000;
@@ -189,7 +198,8 @@
     --rule: #3a3532;
     --surface: #2c2725;
     --surface-sunken: #1b1817;
-    --accent: #d9694f;
+    --accent: #63b3ac;
+    --wrong: #e07a64;
     --gold: #d4a855;
     --highlight: #5a4a1e;
     --on-accent: #231f20;

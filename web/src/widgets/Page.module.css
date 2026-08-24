@@ -40,21 +40,24 @@
 .title {
   font-size: clamp(1.75rem, 4vw, 2.4rem);
   line-height: 1.05;
-  text-shadow: 0 0.08em 0 color-mix(in srgb, var(--accent) 7%, transparent);
 }
 
+/*
+ * Надколонтитул над заголовком раздела.
+ *
+ * Без разрядки и без прописных: «Б И Б Л И О Т Е К А» — приём вывески, а не
+ * книги, и на кегле в одиннадцать пунктов разрядка ломает слово на буквы
+ * раньше, чем глаз успевает прочесть его целиком. Служебность строки здесь
+ * держат кегль и цвет чернил, а не разбивка.
+ */
 .kicker {
-  display: inline-flex;
-  align-items: center;
+  display: block;
   width: fit-content;
-  padding: 0.16rem 0.48rem;
-  border-radius: 999px;
-  font-size: 0.6875rem;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-  margin-bottom: 0.35rem;
+  margin-bottom: 0.2rem;
+  font-family: var(--sans), 'Inter Fallback';
+  font-size: 0.8125rem;
+  font-weight: 550;
+  color: var(--ink-muted);
 }
 
 .subtitle {
@@ -92,7 +95,7 @@
 .sectionRule {
   flex: 1;
   height: 1px;
-  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 38%, var(--rule)), var(--rule));
+  background: var(--rule);
 }
 
 .muted {
@@ -128,9 +131,8 @@
 }
 
 .label {
-  font-size: 0.75rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-size: 0.8125rem;
+  font-weight: 550;
   color: var(--ink-muted);
 }
 

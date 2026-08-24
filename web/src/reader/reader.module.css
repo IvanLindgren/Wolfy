@@ -41,9 +41,7 @@
 }
 
 .bar__chapter {
-  font-size: 0.6875rem;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  font-size: 0.75rem;
   color: var(--ink-muted);
 }
 
@@ -94,10 +92,8 @@
   display: block;
   padding: 0.65rem 0.9rem 0.25rem;
   color: var(--ink-muted);
-  font-size: 0.65rem;
-  font-weight: 650;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  font-size: 0.75rem;
+  font-weight: 600;
 }
 
 .contents__books .contents__label {
