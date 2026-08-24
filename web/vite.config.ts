@@ -69,10 +69,16 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: 'prompt',
+      // Обновление должно активироваться само. Если старый JS падает до
+      // отрисовки кнопки «обновить», prompt-режим оставляет пользователя в
+      // сломанном precache навсегда: новый worker уже скачан, но ждёт клика,
+      // которого интерфейс не способен показать.
+      registerType: 'autoUpdate',
       // Оболочка, шрифты и `.wasm` — в предкэш: повторный запуск обязан быть
       // мгновенным и работать без сети.
       workbox: {
+        skipWaiting: true,
+        clientsClaim: true,
         globPatterns: ['**/*.{js,css,html,woff2,svg,wasm}'],
         // Лексикон и словарь заведомо больше умолчания в 2 МБ.
         maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
