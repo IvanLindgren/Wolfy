@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/wolfy/server/internal/openlibrary"
 	"github.com/wolfy/server/internal/remotebook"
 )
 
@@ -53,6 +54,48 @@ func (s *Server) postRemoteBook(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(download.Bytes)
+}
+
+// getCatalogue ищет книги в Открытой библиотеке.
+//
+// Ответ — короткий список находок со ссылками на скачивание. Сам файл клиент
+// качает через postRemoteBook: там уже стоят проверка адреса при каждом
+// перенаправлении, предел размера и опознание формата по содержимому.
+func (s *Server) getCatalogue(w http.ResponseWriter, r *http.Request) {
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	if query == "" || len([]rune(query)) > 200 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "Введите, что поискать в Открытой библиотеке",
+		})
+		return
+	}
+
+	limit, err := strconv.Atoi(r.URL.Query().Get("limit"))
+	if err != nil || limit <= 0 {
+		limit = 20
+	}
+	if limit > 50 {
+		limit = 50
+	}
+
+	books, err := s.catalogue.Search(r.Context(), query, limit)
+	switch {
+	case err == nil:
+	case strings.Contains(err.Error(), "недоступна"):
+		s.log.Warn("поиск в Открытой библиотеке не удался", "error", err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if books == nil {
+		books = []openlibrary.Book{}
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{"books": books})
 }
 
 func stringInt(value int) string {

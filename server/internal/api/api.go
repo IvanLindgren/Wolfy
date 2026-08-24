@@ -26,6 +26,7 @@ import (
 	"github.com/wolfy/server/internal/discovery"
 	"github.com/wolfy/server/internal/library"
 	"github.com/wolfy/server/internal/ocr"
+	"github.com/wolfy/server/internal/openlibrary"
 	"github.com/wolfy/server/internal/remotebook"
 	"github.com/wolfy/server/internal/social"
 	"github.com/wolfy/server/internal/store"
@@ -45,6 +46,7 @@ type Server struct {
 	discovery         *discovery.Service
 	dictionary        *dictionary.Service
 	remoteBooks       *remotebook.Service
+	catalogue         *openlibrary.Service
 	updates           *updates.Service
 	log               *slog.Logger
 	webOrigin         string
@@ -56,6 +58,8 @@ type Server struct {
 	authLimit *rateLimiter
 	// Загрузка по ссылке расходует внешний трафик и память сервера.
 	bookLimit *rateLimiter
+	// Поиск по каталогу дешёвый, но ходит наружу: щедрее загрузки, сдержаннее перевода.
+	catalogueLimit *rateLimiter
 }
 
 // WithWebOrigin включает credentialed CORS только для одного известного
@@ -88,7 +92,9 @@ func NewServer(
 	return &Server{
 		store: s, verifier: v, translate: t, library: l, ocr: o,
 		account: a, google: g, discovery: d, dictionary: dict,
-		remoteBooks: remotebook.New(30 * time.Second), updates: updater, log: log,
+		remoteBooks: remotebook.New(30 * time.Second),
+		catalogue:   openlibrary.New(10 * time.Second),
+		updates:     updater, log: log,
 		// Двести переводов залпом и один в секунду сверху: страница книги
 		// редко даёт больше двухсот незнакомых слов, а секунда — это дольше,
 		// чем читатель успевает выбрать следующее слово, но много быстрее,
@@ -96,6 +102,7 @@ func NewServer(
 		translateLimit: newRateLimiter(200, 1, 30*time.Minute),
 		authLimit:      newRateLimiter(8, 0.1, 30*time.Minute),
 		bookLimit:      newRateLimiter(8, 0.05, 30*time.Minute),
+		catalogueLimit: newRateLimiter(30, 0.5, 15*time.Minute),
 	}
 }
 
@@ -162,6 +169,11 @@ func (s *Server) Handler() http.Handler {
 	// по ссылке не требует входа. SSRF, размер и формат проверяет remotebook.
 	mux.Handle("POST /v1/library/fetch", s.bookLimit.withRateLimit(
 		http.HandlerFunc(s.postRemoteBook),
+	))
+	// Поиск в Открытой библиотеке — тоже без входа: выбор книги предшествует
+	// чтению, а значит и аккаунту. Сам файл качает тот же /v1/library/fetch.
+	mux.Handle("GET /v1/library/catalogue", s.catalogueLimit.withRateLimit(
+		http.HandlerFunc(s.getCatalogue),
 	))
 	// Манифест и сами пакеты публичны: проверка обновлений начинается до
 	// входа в аккаунт. Целостность пакета клиент отдельно сверяет по SHA-256.
