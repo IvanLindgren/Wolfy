@@ -192,6 +192,11 @@ func (s *Server) Handler() http.Handler {
 	private.HandleFunc("GET /v1/discovery/feed", s.getDiscoveryFeed)
 	private.HandleFunc("POST /v1/discovery/items/{itemId}/like", s.postDiscoveryLike)
 	private.HandleFunc("POST /v1/discovery/items/{itemId}/add", s.postDiscoveryAdd)
+	// Заметки и выделения к книге. Живут отдельно от библиотеки ядра: книга
+	// пользователя — её файл на устройстве, а отметки — то единственное, что
+	// обязано переезжать между устройствами вместе с аккаунтом.
+	private.HandleFunc("GET /v1/books/{bookId}/annotations", s.getBookAnnotations)
+	private.HandleFunc("PUT /v1/books/{bookId}/annotations", s.putBookAnnotations)
 
 	mux.Handle("/v1/", s.verifier.Middleware(private))
 

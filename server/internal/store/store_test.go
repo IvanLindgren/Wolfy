@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wolfy/server/internal/annotations"
 	"github.com/wolfy/server/internal/store"
 )
 
@@ -169,7 +170,59 @@ func createUser(t *testing.T, s *store.Store) string {
 		// таблицы Wolfy.
 		_, _ = s.Pool.Exec(ctx, `DELETE FROM wolfy.cards WHERE user_id = $1`, id)
 		_, _ = s.Pool.Exec(ctx, `DELETE FROM wolfy.books WHERE user_id = $1`, id)
+		_, _ = s.Pool.Exec(ctx, `DELETE FROM wolfy.book_annotations WHERE user_id = $1`, id)
+		_, _ = s.Pool.Exec(ctx, `DELETE FROM wolfy.book_annotations_devices WHERE user_id = $1`, id)
 		_, _ = s.Pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, id)
 	})
 	return id
+}
+
+// Сборка мусора пометок удалений обязана дождаться подтверждения каждого
+// устройства: у держателя старой копии не должны воскресать удалённые
+// заметки.
+func TestСборкаМусораЗаметокЖдётВсехУстройств(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	user := createUser(t, s)
+	book := "11111111-2222-3333-4444-555555555555"
+
+	tombstone := []annotations.Item{{
+		ID: "a", Chapter: 0, Start: 0, End: 1,
+		Rev: 5, Writer: "phone", Deleted: true,
+		CreatedAt: 1, UpdatedAt: 2,
+	}}
+
+	// Телефон удаляет заметку версией 5 и подтверждает, что сохранил её.
+	merged, err := s.SaveBookAnnotations(ctx, user, book, "phone", 5, tombstone)
+	if err != nil {
+		t.Fatalf("первая запись: %v", err)
+	}
+	if len(merged) != 1 || !merged[0].Deleted {
+		t.Fatalf("пометка не сохранилась: %+v", merged)
+	}
+
+	// Ноутбук видел только версию 2: у него ещё лежит живая копия, и
+	// сборщик мусора не имеет права трогать пометку, пока он не догонит.
+	if err := s.ConfirmAnnotationsSeen(ctx, user, book, "laptop", 2); err != nil {
+		t.Fatalf("подтверждение ноутбука: %v", err)
+	}
+	merged, err = s.SaveBookAnnotations(ctx, user, book, "phone", 5, nil)
+	if err != nil {
+		t.Fatalf("вторая запись: %v", err)
+	}
+	if len(merged) != 1 || !merged[0].Deleted {
+		t.Fatalf("пометку стёрли раньше, чем её видели все: %+v", merged)
+	}
+
+	// Ноутбук догнал до версии 5 — теперь пометка никому не нужна.
+	if err := s.ConfirmAnnotationsSeen(ctx, user, book, "laptop", 5); err != nil {
+		t.Fatalf("второе подтверждение ноутбука: %v", err)
+	}
+	merged, err = s.SaveBookAnnotations(ctx, user, book, "phone", 5, nil)
+	if err != nil {
+		t.Fatalf("третья запись: %v", err)
+	}
+	if len(merged) != 0 {
+		t.Fatalf("подтверждённая пометка не собрана: %+v", merged)
+	}
 }
