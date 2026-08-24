@@ -11,6 +11,7 @@ import { Link, useNavigate } from '@tanstack/react-router'
 
 import { session, useSession } from '../core/session'
 import type { LibraryBook } from '../core/types'
+import { SearchField } from '../widgets/SearchField'
 import { buttonClassName } from '../widgets/Button'
 import { Appear } from '../widgets/Appear'
 import page from '../widgets/Page.module.css'
@@ -119,15 +120,18 @@ export function ReaderIndex() {
           <div className={page.sectionHead}>
             <h2 className={page.sectionTitle}>Все книги</h2>
             <span className={page.sectionRule} />
-            <input
-              className={page.input}
-              type="search"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Название или автор"
-              aria-label="Поиск книги"
-            />
           </div>
+          {/*
+            Поиск стоит отдельной строкой, а не внутри заголовка секции: поле
+            в одной строке с антиквой заголовка ломает её ритм и тянет на себя
+            вес, которого у поиска нет.
+          */}
+          <SearchField
+            value={query}
+            onChange={setQuery}
+            label="Поиск книги"
+            placeholder="Название или автор"
+          />
           <div className={styles.bookGrid}>
             {shown.map((book, index) => (
               <Appear key={book.id} index={index}>

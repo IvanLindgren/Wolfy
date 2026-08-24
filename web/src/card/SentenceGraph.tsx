@@ -19,8 +19,14 @@
  * одним главным словом, и главное слово внутри неё выделено. «over the lazy
  * dog» как дополнение объясняет фразу; одно «dog» со стрелкой — нет.
  *
- * Строится **только по тому, что дало ядро**: группы (`Chunk`) с их ролями,
- * границами и цветом. Неоднозначная связь пропускается — неверный разбор хуже
+ * Краски здесь нет вовсе. Цвет частей речи уже работает в самой фразе строкой
+ * выше, и повторять его тут значит сказать одно и то же дважды, разложив по
+ * карточке десять цветных пятен вместо пяти. Разбор различает строки тем, чем
+ * различает их язык: подписью роли, начертанием главного слова и тем, что
+ * сказуемое стоит корнем.
+ *
+ * Строится **только по тому, что дало ядро**: группы (`Chunk`) с их ролями и
+ * границами. Неоднозначная связь пропускается — неверный разбор хуже
  * неполного, потому что читатель, увидевший неверный, перестаёт верить и
  * верному.
  */
@@ -30,7 +36,7 @@ import { motion as m } from 'motion/react'
 
 import type { Chunk, Token } from '../core/types'
 import { curves, seconds } from '../theme/motion'
-import { ROLE_TITLES, posColor } from './grammarColors'
+import { ROLE_TITLES } from './grammarColors'
 import styles from './card.module.css'
 
 interface GraphProps {
@@ -75,7 +81,6 @@ export function SentenceGraph({ tokens, chunks, stagger, duration }: GraphProps)
             key={`${member.chunk.start}-${member.chunk.role}`}
             className={styles.member}
             data-root={root}
-            style={{ ['--member-tone' as string]: posColor(member.chunk.tint) ?? 'var(--ink)' }}
             initial={{ opacity: 0, x: -6 }}
             animate={{ opacity: 1, x: 0 }}
             transition={{

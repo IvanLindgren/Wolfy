@@ -24,14 +24,6 @@ interface LegendProps {
   markers: Marker[]
 }
 
-/** Цвет подложки маркера — тот же, что задан в стилях по `data-kind`. */
-const MARKER_TONES: Record<Marker['kind'], string> = {
-  auxiliary: 'var(--pos-verb)',
-  ending: 'var(--gold)',
-  particle: 'var(--pos-adv)',
-  preposition: 'var(--pos-pron)',
-}
-
 export function ColorLegend({ parts, markers }: LegendProps) {
   const items = useMemo(() => {
     const shown: { key: string; title: string; tone: string; marker: boolean }[] = []
@@ -47,13 +39,21 @@ export function ColorLegend({ parts, markers }: LegendProps) {
       shown.push({ key: tag, title: POS_TITLES[tag] ?? tag, tone, marker: false })
     }
 
+    // Подложка у всех маркеров одна, поэтому и строка в легенде одна: четыре
+    // одинаковых образца с разными подписями объясняли бы разницу, которой на
+    // экране нет. Виды перечислены внутри строки — в том порядке, в каком
+    // встретились во фразе.
+    const kinds: string[] = []
     for (const marker of markers) {
       if (seen.has(marker.kind)) continue
       seen.add(marker.kind)
+      kinds.push(MARKER_TITLES[marker.kind] ?? marker.kind)
+    }
+    if (kinds.length > 0) {
       shown.push({
-        key: `marker:${marker.kind}`,
-        title: MARKER_TITLES[marker.kind] ?? marker.kind,
-        tone: MARKER_TONES[marker.kind],
+        key: 'markers',
+        title: kinds.join(', '),
+        tone: 'var(--ink)',
         marker: true,
       })
     }

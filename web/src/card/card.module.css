@@ -121,31 +121,13 @@
   isolation: isolate;
   overflow: hidden;
   padding: 0.85rem 0.95rem;
-  border: 1px solid color-mix(in srgb, var(--card-tone, var(--accent)) 24%, var(--rule));
+  border: 1px solid var(--rule);
   border-radius: calc(var(--radius) + 3px);
-  background: color-mix(in srgb, var(--card-tone, var(--accent)) 6%, var(--surface));
+  background: var(--surface);
 }
 
 .primaryCard:last-child {
   grid-column: 1 / -1;
-}
-
-.primaryCard[data-tone='translation'],
-.phrasePrimary[data-tone='translation'] {
-  --card-tone: var(--accent);
-}
-
-.primaryCard[data-tone='definition'] {
-  --card-tone: var(--pos-noun);
-}
-
-.primaryCard[data-tone='form'],
-.phrasePrimary[data-tone='parts'] {
-  --card-tone: var(--pos-pron);
-}
-
-.phrasePrimary[data-tone='graph'] {
-  --card-tone: var(--pos-verb);
 }
 
 .primaryCard__title {
@@ -153,7 +135,7 @@
   font-family: var(--sans), 'Inter Fallback';
   font-size: 0.75rem;
   font-weight: 650;
-  color: color-mix(in srgb, var(--card-tone, var(--accent)) 76%, var(--ink));
+  color: var(--ink-muted);
 }
 
 .primaryCard__value {
@@ -180,7 +162,7 @@
 .primaryCard__context {
   margin-top: 0.5rem;
   padding-top: 0.45rem;
-  border-top: 1px solid color-mix(in srgb, var(--card-tone, var(--accent)) 18%, transparent);
+  border-top: 1px solid var(--rule);
   color: var(--ink-muted);
   font-size: 0.82rem;
   line-height: 1.45;
@@ -503,7 +485,11 @@
   padding: 0.6rem 0.75rem;
   margin-bottom: 0.45rem;
   border-radius: var(--radius);
-  border-left: 3px solid transparent;
+  /* Раньше плашка заливалась пастелью семейства правил — шесть красок сверх
+     пяти цветов частей речи. Семейство по-прежнему названо словом в заголовке
+     плашки, и это единственное, что читателю от него нужно. */
+  background: var(--surface-sunken);
+  border-left: 3px solid var(--rule);
 }
 
 .finding__head {
@@ -521,15 +507,14 @@
 .finding__formula {
   font-family: var(--mono);
   font-size: 0.75rem;
-  color: var(--family-ink);
-  opacity: 0.75;
+  color: var(--ink-muted);
 }
 
 .finding__explanation {
   margin-top: 0.25rem;
   font-size: 0.875rem;
   line-height: 1.45;
-  color: var(--family-ink);
+  color: var(--ink);
 }
 
 .finding__link {
@@ -545,8 +530,7 @@
   align-items: center;
   gap: 0.35rem;
   font-size: 0.75rem;
-  color: var(--family-ink);
-  opacity: 0.7;
+  color: var(--ink-muted);
 }
 
 /* --- Фраза ------------------------------------------------------------- */
@@ -609,33 +593,23 @@
  * в пятую долю краски различима на просвет и не спорит ни с подстрочником над
  * словом, ни с подписью части речи под ним.
  *
+ * Тон один на все четыре вида маркера. Разные краски под окончанием,
+ * вспомогательным глаголом, частицей и предлогом добавляли к пяти цветам
+ * частей речи ещё четыре, и строка из шести слов набиралась девятью красками
+ * разом. Какой именно маркер под словом, говорит подсказка и легенда; подложка
+ * отвечает на более простой вопрос — «вот здесь и живёт грамматика».
+ *
  * `box-decoration-break` нужен на переносе: без него подложка обрывается по
  * краю строки прямоугольником, а не скруглением.
  */
 .marker {
-  background: color-mix(in srgb, var(--marker-tone, var(--gold)) 20%, transparent);
+  background: color-mix(in srgb, var(--ink) 12%, transparent);
   color: inherit;
   padding: 0.05em 0.16em;
   margin: 0 -0.06em;
   border-radius: 3px;
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
-}
-
-.marker[data-kind='auxiliary'] {
-  --marker-tone: var(--pos-verb);
-}
-
-.marker[data-kind='ending'] {
-  --marker-tone: var(--gold);
-}
-
-.marker[data-kind='particle'] {
-  --marker-tone: var(--pos-adv);
-}
-
-.marker[data-kind='preposition'] {
-  --marker-tone: var(--pos-pron);
 }
 
 /* --- Разбор по членам предложения --------------------------------------- */
@@ -688,13 +662,14 @@
   left: -0.95rem;
   width: 0.45rem;
   height: 0.45rem;
-  border: 1.5px solid var(--member-tone, var(--ink-muted));
+  border: 1.5px solid var(--ink-muted);
   border-radius: 999px;
   background: var(--surface);
 }
 
 .member[data-root='true']::before {
-  background: var(--member-tone, var(--ink));
+  border-color: var(--ink);
+  background: var(--ink);
 }
 
 .member__role {
@@ -705,7 +680,7 @@
 }
 
 .member[data-root='true'] .member__role {
-  color: var(--member-tone, var(--ink));
+  color: var(--ink);
   font-weight: 600;
 }
 
@@ -713,7 +688,7 @@
   font-family: var(--serif), 'Playfair Fallback';
   font-size: 1.02rem;
   line-height: 1.45;
-  color: var(--member-tone, var(--ink));
+  color: var(--ink);
   text-wrap: pretty;
 }
 
@@ -775,7 +750,7 @@
   width: 1.15rem;
   height: 0.78rem;
   border-radius: 3px;
-  background: color-mix(in srgb, var(--legend-tone, var(--gold)) 20%, transparent);
+  background: color-mix(in srgb, var(--ink) 12%, transparent);
 }
 
 .iconButton {

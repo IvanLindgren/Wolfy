@@ -29,7 +29,6 @@ import styles from './card.module.css'
 import {
   FAMILY_TITLES,
   POS_TITLES,
-  familyColor,
   familyOf,
 } from './grammarColors'
 import { PhraseText } from './PhraseText'
@@ -619,15 +618,9 @@ function Constructions({
         <div
           key={index}
           className={styles.finding}
-          style={{
-            background: familyColor(finding.rule),
-            borderLeftColor: 'color-mix(in srgb, currentColor 25%, transparent)',
-          }}
         >
           <div className={styles.finding__head}>
-            <span className={styles.finding__title} style={{ color: 'var(--family-ink)' }}>
-              {finding.title}
-            </span>
+            <span className={styles.finding__title}>{finding.title}</span>
             <span className={styles.finding__formula}>{finding.formula}</span>
           </div>
           <p className={styles.finding__explanation}>{finding.explanation}</p>
@@ -719,15 +712,12 @@ function PhraseBody({
               <div
                 key={index}
                 className={styles.finding}
-                style={{ background: familyColor(finding.rule) }}
               >
                 <div className={styles.finding__head}>
                   <span className={styles.family}>
                     {FAMILY_TITLES[familyOf(finding.rule)]}
                   </span>
-                  <span className={styles.finding__title} style={{ color: 'var(--family-ink)' }}>
-                    {finding.title}
-                  </span>
+                  <span className={styles.finding__title}>{finding.title}</span>
                   <span className={styles.finding__formula}>{finding.formula}</span>
                 </div>
                 <p className={styles.finding__explanation}>{finding.explanation}</p>
