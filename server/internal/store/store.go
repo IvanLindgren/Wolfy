@@ -20,6 +20,10 @@ var migrations embed.FS
 // Store — пул соединений с базой.
 type Store struct {
 	Pool *pgxpool.Pool
+
+	// TestHookBeforeCursor — зацепка для тестов: пауза после того, как
+	// изменения сформированы, но перед фиксацией. В продакшене всегда nil.
+	TestHookBeforeCursor func()
 }
 
 // Open подключается к базе и применяет миграции.

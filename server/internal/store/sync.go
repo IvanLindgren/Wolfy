@@ -88,6 +88,12 @@ func (s *Store) NextRev(ctx context.Context, tx pgx.Tx, userID string) (int64, e
 // одну книгу на телефоне и на компьютере, верного ответа про «где он на самом
 // деле остановился» не существует, и любая догадка будет одинаково неверной.
 // Последняя отправка хотя бы соответствует тому, что он делал только что.
+//
+// Единственное осознанное исключение — пометка удаления. Старая копия не имеет
+// права снять tombstone только потому, что пришла позже: удаление и «устаревший
+// прогресс», присланный с копии, не знавшей об удалении, — разные вещи, и
+// различает их ревизия, которую устройство видело. Книга возвращается к жизни
+// только когда пришедшая версия подтверждает, что tombstone был виден.
 func (s *Store) SaveBooks(ctx context.Context, tx pgx.Tx, userID string, rev int64, books []Book) error {
 	for _, book := range books {
 		var deletedAt any
@@ -112,10 +118,14 @@ func (s *Store) SaveBooks(ctx context.Context, tx pgx.Tx, userID string, rev int
                 rev = excluded.rev,
                 deleted_at = excluded.deleted_at,
                 updated_at = now()
-            WHERE wolfy.books.user_id = $2`,
+            WHERE wolfy.books.user_id = $2
+              AND NOT (
+                  wolfy.books.deleted_at IS NOT NULL
+                  AND excluded.deleted_at IS NULL
+                  AND $14::bigint < wolfy.books.rev)`,
 			book.ID, userID, book.Title, book.Author, book.Format, book.SourceKey,
 			book.ChapterCount, book.LastChapter, book.LastOffset, book.Shelf,
-			book.Position, rev, deletedAt)
+			book.Position, rev, deletedAt, book.Rev)
 		if err != nil {
 			return fmt.Errorf("запись книги %s: %w", book.ID, err)
 		}
@@ -125,6 +135,9 @@ func (s *Store) SaveBooks(ctx context.Context, tx pgx.Tx, userID string, rev int
 
 // SaveCards записывает карточки. Книги обязаны быть записаны раньше: у карточки
 // внешний ключ на книгу, и порядок здесь не украшение.
+//
+// Защита от воскрешения та же, что у книг: устаревшая живая копия не снимает
+// пометку удаления, если ревизия, которую устройство видело, старше.
 func (s *Store) SaveCards(ctx context.Context, tx pgx.Tx, userID string, rev int64, cards []Card) error {
 	for _, card := range cards {
 		var deletedAt any
@@ -163,11 +176,15 @@ func (s *Store) SaveCards(ctx context.Context, tx pgx.Tx, userID string, rev int
                 rev = excluded.rev,
                 deleted_at = excluded.deleted_at,
                 updated_at = now()
-            WHERE wolfy.cards.user_id = $2`,
+            WHERE wolfy.cards.user_id = $2
+              AND NOT (
+                  wolfy.cards.deleted_at IS NOT NULL
+                  AND excluded.deleted_at IS NULL
+                  AND $18::bigint < wolfy.cards.rev)`,
 			card.ID, userID, bookID, kindOr(card.Kind), card.Surface, card.Lemma,
 			card.Translation, card.Context, card.Pos, card.Cefr,
 			card.HP, card.Streak, card.IntervalDays, due, card.ReviewedAt,
-			rev, deletedAt)
+			rev, deletedAt, card.Rev)
 		if err != nil {
 			return fmt.Errorf("запись карточки %s: %w", card.ID, err)
 		}
@@ -175,18 +192,19 @@ func (s *Store) SaveCards(ctx context.Context, tx pgx.Tx, userID string, rev int
 	return nil
 }
 
-// BooksSince отдаёт книги, изменившиеся после указанной ревизии.
+// booksSinceTx читает книги, изменившиеся после указанной ревизии и до
+// верхней границы — ревизии снимка.
 //
 // Удалённые приходят вместе с живыми и с пометкой: иначе удаление не доедет до
 // второго устройства и книга там воскреснет.
-func (s *Store) BooksSince(ctx context.Context, userID string, since int64) ([]Book, error) {
-	rows, err := s.Pool.Query(ctx, `
+func (s *Store) booksSinceTx(ctx context.Context, tx pgx.Tx, userID string, since, until int64) ([]Book, error) {
+	rows, err := tx.Query(ctx, `
         SELECT id::text, title, author, format, source_key, chapter_count,
                last_chapter, last_offset, shelf, position, rev,
                deleted_at IS NOT NULL
         FROM wolfy.books
-        WHERE user_id = $1 AND rev > $2
-        ORDER BY rev, id`, userID, since)
+        WHERE user_id = $1 AND rev > $2 AND rev <= $3
+        ORDER BY rev, id`, userID, since, until)
 	if err != nil {
 		return nil, fmt.Errorf("чтение книг: %w", err)
 	}
@@ -205,15 +223,15 @@ func (s *Store) BooksSince(ctx context.Context, userID string, since int64) ([]B
 	return books, rows.Err()
 }
 
-// CardsSince отдаёт карточки, изменившиеся после указанной ревизии.
-func (s *Store) CardsSince(ctx context.Context, userID string, since int64) ([]Card, error) {
-	rows, err := s.Pool.Query(ctx, `
+// cardsSinceTx читает карточки, изменившиеся в диапазоне ревизий.
+func (s *Store) cardsSinceTx(ctx context.Context, tx pgx.Tx, userID string, since, until int64) ([]Card, error) {
+	rows, err := tx.Query(ctx, `
         SELECT id::text, COALESCE(book_id::text, ''), kind, surface, lemma,
                translation, context, pos, cefr, hp, streak, interval_days,
                due_at, reviewed_at, rev, deleted_at IS NOT NULL
         FROM wolfy.cards
-        WHERE user_id = $1 AND rev > $2
-        ORDER BY rev, id`, userID, since)
+        WHERE user_id = $1 AND rev > $2 AND rev <= $3
+        ORDER BY rev, id`, userID, since, until)
 	if err != nil {
 		return nil, fmt.Errorf("чтение карточек: %w", err)
 	}
@@ -232,10 +250,10 @@ func (s *Store) CardsSince(ctx context.Context, userID string, since int64) ([]C
 	return cards, rows.Err()
 }
 
-// Reading отдаёт настройки чтения. Пустой ответ — настроек ещё нет.
-func (s *Store) Reading(ctx context.Context, userID string) (json.RawMessage, error) {
+// readingTx отдаёт настройки чтения. Пустой ответ — настроек ещё нет.
+func (s *Store) readingTx(ctx context.Context, tx pgx.Tx, userID string) (json.RawMessage, error) {
 	var raw []byte
-	err := s.Pool.QueryRow(ctx,
+	err := tx.QueryRow(ctx,
 		`SELECT reading FROM wolfy.user_state WHERE user_id = $1`, userID).Scan(&raw)
 	switch {
 	case err == pgx.ErrNoRows:
@@ -244,6 +262,23 @@ func (s *Store) Reading(ctx context.Context, userID string) (json.RawMessage, er
 		return nil, fmt.Errorf("чтение настроек: %w", err)
 	}
 	return raw, nil
+}
+
+// snapshotRevTx — ревизия снимка: значение счётчика в данной транзакции.
+//
+// Это верхняя граница для отдаваемых изменений: всё, что записано позже,
+// обязано получить ревизию больше и приехать следующим синком.
+func (s *Store) snapshotRevTx(ctx context.Context, tx pgx.Tx, userID string) (int64, error) {
+	var rev int64
+	err := tx.QueryRow(ctx,
+		`SELECT sync_rev FROM wolfy.user_state WHERE user_id = $1`, userID).Scan(&rev)
+	switch {
+	case err == pgx.ErrNoRows:
+		return 0, nil
+	case err != nil:
+		return 0, fmt.Errorf("чтение ревизии: %w", err)
+	}
+	return rev, nil
 }
 
 // SaveReading записывает настройки чтения целиком.
@@ -266,19 +301,76 @@ func (s *Store) SaveReading(ctx context.Context, tx pgx.Tx, userID string, readi
 	return nil
 }
 
-// CurrentRev — текущая ревизия пользователя. Ноль, если он ещё ничего не
-// синхронизировал.
-func (s *Store) CurrentRev(ctx context.Context, userID string) (int64, error) {
-	var rev int64
-	err := s.Pool.QueryRow(ctx,
-		`SELECT sync_rev FROM wolfy.user_state WHERE user_id = $1`, userID).Scan(&rev)
-	switch {
-	case err == pgx.ErrNoRows:
-		return 0, nil
-	case err != nil:
-		return 0, fmt.Errorf("чтение ревизии: %w", err)
+// Sync — один согласованный обмен: принимает изменения устройства и отдаёт
+// всё, что новее его курсора.
+//
+// Вся операция — одна транзакция с изоляцией REPEATABLE READ. Это требование,
+// а не прихоть: старая композиция «записать, прочитать книги, потом узнать
+// CurrentRev» теряла изменения. Пока A собрал набор книг, B записывала книгу;
+// A узнавала ревизию уже поверх — и возвращала курсор, за которым изменения
+// не было. Обход по rev > cursor ничего не пропустит только тогда, когда
+// верхняя граница и набор данных взяты из одного снимка.
+//
+// Снимок фиксируется первой командой транзакции. Всё, что записано после
+// снимка, получило ревизию больше: счётчик монотонный, и два изменения не
+// делят номер.
+func (s *Store) Sync(ctx context.Context, userID string, changes Changes) (Changes, error) {
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
+	if err != nil {
+		return Changes{}, fmt.Errorf("начало синхронизации: %w", err)
 	}
-	return rev, nil
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if len(changes.Books) > 0 || len(changes.Cards) > 0 || len(changes.Reading) > 0 {
+		// Ревизия выдаётся внутри снимка: отправка с телефона — одно событие,
+		// и второе устройство не должно увидеть книги без их карточек.
+		rev, err := s.NextRev(ctx, tx, userID)
+		if err != nil {
+			return Changes{}, err
+		}
+		// Книги раньше карточек: у карточки внешний ключ на книгу, и обратный
+		// порядок сорвался бы на первой же новой книге со словами.
+		if err := s.SaveBooks(ctx, tx, userID, rev, changes.Books); err != nil {
+			return Changes{}, err
+		}
+		if err := s.SaveCards(ctx, tx, userID, rev, changes.Cards); err != nil {
+			return Changes{}, err
+		}
+		if err := s.SaveReading(ctx, tx, userID, changes.Reading); err != nil {
+			return Changes{}, err
+		}
+	}
+
+	snapshotRev, err := s.snapshotRevTx(ctx, tx, userID)
+	if err != nil {
+		return Changes{}, err
+	}
+	books, err := s.booksSinceTx(ctx, tx, userID, changes.Cursor, snapshotRev)
+	if err != nil {
+		return Changes{}, err
+	}
+	cards, err := s.cardsSinceTx(ctx, tx, userID, changes.Cursor, snapshotRev)
+	if err != nil {
+		return Changes{}, err
+	}
+	reading, err := s.readingTx(ctx, tx, userID)
+	if err != nil {
+		return Changes{}, err
+	}
+
+	if s.TestHookBeforeCursor != nil {
+		s.TestHookBeforeCursor()
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return Changes{}, fmt.Errorf("фиксация синхронизации: %w", err)
+	}
+	return Changes{
+		Cursor:  snapshotRev,
+		Books:   books,
+		Cards:   cards,
+		Reading: reading,
+	}, nil
 }
 
 // kindOr защищает от пустого вида карточки: колонка не допускает пустоты, а
@@ -288,47 +380,4 @@ func kindOr(kind string) string {
 		return "word"
 	}
 	return kind
-}
-
-// Apply записывает пришедшие изменения одной транзакцией и возвращает
-// присвоенную им ревизию.
-//
-// Транзакция обязательна: отправка с телефона — одно событие, и второе
-// устройство не должно увидеть книги без их карточек. Ревизия выдаётся внутри
-// той же транзакции, иначе две одновременные отправки получили бы один номер.
-//
-// Пустая отправка ревизию не тратит: клиент опрашивает сервер и когда ему
-// нечего сказать, а лишний номер заставил бы все остальные устройства качать
-// пустоту.
-func (s *Store) Apply(ctx context.Context, userID string, changes Changes) (int64, error) {
-	if len(changes.Books) == 0 && len(changes.Cards) == 0 && len(changes.Reading) == 0 {
-		return s.CurrentRev(ctx, userID)
-	}
-
-	tx, err := s.Pool.Begin(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("начало отправки: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	rev, err := s.NextRev(ctx, tx, userID)
-	if err != nil {
-		return 0, err
-	}
-	// Книги раньше карточек: у карточки внешний ключ на книгу, и обратный
-	// порядок сорвался бы на первой же новой книге со словами.
-	if err := s.SaveBooks(ctx, tx, userID, rev, changes.Books); err != nil {
-		return 0, err
-	}
-	if err := s.SaveCards(ctx, tx, userID, rev, changes.Cards); err != nil {
-		return 0, err
-	}
-	if err := s.SaveReading(ctx, tx, userID, changes.Reading); err != nil {
-		return 0, err
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return 0, fmt.Errorf("фиксация отправки: %w", err)
-	}
-	return rev, nil
 }

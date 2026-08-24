@@ -59,41 +59,16 @@ func New(s *store.Store) *Service {
 
 // Sync принимает изменения устройства и возвращает чужие.
 //
-// Порядок именно такой: сначала записываем присланное, потом читаем всё, что
-// новее курсора. Тогда устройство получает назад и свои записи — уже с
-// присвоенными ревизиями, — и ему не нужно гадать, дошли ли они.
+// Весь обмен — одна транзакция на стороне хранилища: и запись присланного, и
+// чтение новее курсора, и фиксация его верхней границы происходят в одном
+// снимке REPEATABLE READ, чтобы набор изменений и курсор никогда не
+// расходились.
 func (s *Service) Sync(ctx context.Context, userID string, incoming store.Changes) (store.Changes, error) {
 	if err := validate(incoming); err != nil {
 		return store.Changes{}, err
 	}
 
-	if _, err := s.store.Apply(ctx, userID, incoming); err != nil {
-		return store.Changes{}, err
-	}
-
-	books, err := s.store.BooksSince(ctx, userID, incoming.Cursor)
-	if err != nil {
-		return store.Changes{}, err
-	}
-	cards, err := s.store.CardsSince(ctx, userID, incoming.Cursor)
-	if err != nil {
-		return store.Changes{}, err
-	}
-	reading, err := s.store.Reading(ctx, userID)
-	if err != nil {
-		return store.Changes{}, err
-	}
-	cursor, err := s.store.CurrentRev(ctx, userID)
-	if err != nil {
-		return store.Changes{}, err
-	}
-
-	return store.Changes{
-		Cursor:  cursor,
-		Books:   books,
-		Cards:   cards,
-		Reading: reading,
-	}, nil
+	return s.store.Sync(ctx, userID, incoming)
 }
 
 func validate(changes store.Changes) error {
