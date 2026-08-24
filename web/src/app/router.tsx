@@ -54,6 +54,12 @@ const bookWordsRoute = createRoute({
   component: screen(() => import('../library/BookWordsScreen'), 'BookWordsScreen'),
 })
 
+const bookNotesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/library/$bookId/notes',
+  component: screen(() => import('../library/BookNotesScreen'), 'BookNotesScreen'),
+})
+
 const readerIndexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/reader',
@@ -64,6 +70,18 @@ const readerRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/reader/$bookId',
   component: screen(() => import('../reader/ReaderScreen'), 'ReaderScreen'),
+  /*
+   * Место в книге приходит адресом, когда читатель пришёл из списка заметок.
+   * Разбирается терпимо: чужая или испорченная ссылка не должна мешать книге
+   * открыться — она просто откроется там, где её закрыли.
+   */
+  validateSearch: (search: Record<string, unknown>) => {
+    const chapter = Number(search.chapter)
+    const token = Number(search.token)
+    return Number.isInteger(chapter) && chapter >= 0 && Number.isInteger(token) && token >= 0
+      ? { chapter, token }
+      : {}
+  },
 })
 
 const decksRoute = createRoute({
@@ -132,6 +150,7 @@ const routeTree = rootRoute.addChildren([
   libraryRoute,
   allWordsRoute,
   bookWordsRoute,
+  bookNotesRoute,
   readerIndexRoute,
   readerRoute,
   decksRoute,

@@ -432,6 +432,16 @@ function BookTile({
               {words} слов
             </Link>
           )}
+          {/* Вход в заметки стоит рядом со словами: оба ведут из библиотеки
+              в список «что я тут наотмечал», только слова и мысли. */}
+          <Link
+            to="/library/$bookId/notes"
+            params={{ bookId: book.id }}
+            className={styles.book__words}
+            title="Заметки и выделения"
+          >
+            заметки
+          </Link>
           <div className={styles.book__actions}>
             <input
               ref={chooser}

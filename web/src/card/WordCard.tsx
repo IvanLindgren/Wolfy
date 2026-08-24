@@ -31,6 +31,8 @@ import {
   POS_TITLES,
   familyOf,
 } from './grammarColors'
+import { useAnnotations, type Tone } from '../reader/annotations'
+import { Highlighter } from './Highlighter'
 import { PhraseText } from './PhraseText'
 import { ColorLegend } from './ColorLegend'
 import { SentenceGraph } from './SentenceGraph'
@@ -52,6 +54,12 @@ export interface CardTarget {
   offset: number
   /** Индекс выбранного слова внутри `tokens`; у карточки фразы его нет. */
   selectedToken?: number
+  /** Глава, из которой взят кусок: заметки и выделения живут по главам. */
+  chapter: number
+  /** Что именно выделено — полуинтервал номеров токенов **главы**. */
+  range: { start: number; end: number }
+  /** Цитата: ровно тот текст, что стоит в книге на этом месте. */
+  quote: string
   /** Откуда стартует полёт слова в колоду. */
   origin: HTMLElement | null
 }
@@ -92,6 +100,74 @@ function Sheet({ target, onClose }: { target: CardTarget; onClose: () => void })
   const settings = useSession((state) => state.settings)
   const timing = motionFor(settings)
   const cards = useSession((state) => state.library.cards)
+
+  /*
+   * Отметка на этом же куске, если она уже есть.
+   *
+   * Совпадение ищется по точным границам: выделение «the lazy dog» и
+   * выделение «lazy dog» — две разные отметки, и склеивать их значило бы
+   * молча стирать одну из них при попытке поставить вторую.
+   */
+  const annotations = useAnnotations((state) => state.annotations)
+  const mark = useMemo(
+    () =>
+      annotations.find(
+        (item) =>
+          !item.deleted &&
+          item.chapter === target.chapter &&
+          item.start === target.range.start &&
+          item.end === target.range.end,
+      ),
+    [annotations, target.chapter, target.range.start, target.range.end],
+  )
+
+  const setTone = async (tone: Tone | null) => {
+    const store = useAnnotations.getState()
+    if (!mark) {
+      if (tone === null) return
+      await store.add({
+        chapter: target.chapter,
+        start: target.range.start,
+        end: target.range.end,
+        tone,
+        quote: target.quote,
+        note: '',
+      })
+      return
+    }
+    // Снятая краска у отметки без текста не оставляет ничего, что стоило бы
+    // хранить: пустая отметка невидима в книге и бессмысленна в списке.
+    if (tone === null && mark.note === '') {
+      await store.remove(mark.id)
+      return
+    }
+    await store.update(mark.id, { tone })
+  }
+
+  const setNote = async (note: string) => {
+    const store = useAnnotations.getState()
+    if (!mark) {
+      if (note === '') return
+      await store.add({
+        chapter: target.chapter,
+        start: target.range.start,
+        end: target.range.end,
+        tone: null,
+        quote: target.quote,
+        note,
+      })
+      return
+    }
+    if (note === '' && mark.tone === null) {
+      await store.remove(mark.id)
+      return
+    }
+    await store.update(mark.id, { note })
+  }
+
+  const dropMark = async () => {
+    if (mark) await useAnnotations.getState().remove(mark.id)
+  }
 
   const [analysis, setAnalysis] = useState<WordAnalysis | null>(null)
   const [grammar, setGrammar] = useState<Grammar | null>(null)
@@ -292,6 +368,14 @@ function Sheet({ target, onClose }: { target: CardTarget; onClose: () => void })
           />
         )}
       </div>
+
+      <Highlighter
+        existing={mark}
+        quote={target.quote}
+        onHighlight={(tone) => void setTone(tone)}
+        onNote={(note) => void setNote(note)}
+        onRemove={() => void dropMark()}
+      />
 
       <footer className={styles.footer}>
         <Button
@@ -680,15 +764,24 @@ function PhraseBody({
         <ColorLegend parts={grammar?.parts ?? []} markers={grammar?.markers ?? []} />
       </section>
 
-      <section className={styles.phrasePrimary} data-tone="graph">
-        <h3 className={styles.primaryCard__title}>Разбор по членам предложения</h3>
+      {/*
+        Разбор по членам спрятан нарочно. Он занимает больше места, чем всё
+        остальное в карточке вместе взятое, а нужен далеко не каждому и далеко
+        не каждый раз: чаще всего фразу выделяют, чтобы понять смысл, и ответ
+        на это стоит выше. Тот, кому интересно устройство, раскроет.
+      */}
+      <WolfyDisclosure
+        label="Разбор по членам предложения"
+        hint="Кто подлежащее, что сказуемое, а остальное к чему"
+        duration={duration}
+      >
         <SentenceGraph
           tokens={target.tokens}
           chunks={grammar?.chunks ?? []}
           stagger={stagger}
           duration={duration}
         />
-      </section>
+      </WolfyDisclosure>
 
       <WolfyDisclosure
         label="Подробнее о фразе"

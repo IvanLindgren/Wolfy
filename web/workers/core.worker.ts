@@ -393,6 +393,30 @@ const api = {
     }
   },
 
+  /**
+   * Названия глав книги, которая сейчас не открыта.
+   *
+   * Экран заметок показывает главу по имени, а не по номеру, но открывать
+   * ради этого книгу в общей сессии нельзя: тот же идентификатор держит
+   * читалка. Здесь книга открывается временно и закрывается сразу же.
+   */
+  async bookChapters(path: string): Promise<(string | null)[]> {
+    await ensure()
+    const bytes = await readBook(path)
+    if (!bytes) return []
+    const extension = path.split('.').pop()?.toLowerCase() ?? ''
+    let book: WolfyBook | null = null
+    try {
+      book = WolfyBook.open(extension, undefined, bytes)
+      const meta = JSON.parse(book.metadata()) as { chapters: { title: string | null }[] }
+      return meta.chapters.map((chapter) => chapter.title)
+    } catch {
+      return []
+    } finally {
+      book?.free()
+    }
+  },
+
   /** Читает главу. Единственная тяжёлая операция — потому и здесь. */
   async chapter(id: string, index: number): Promise<Chapter> {
     const book = opened.get(id)

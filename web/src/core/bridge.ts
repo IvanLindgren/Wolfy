@@ -162,6 +162,10 @@ export function bookText(path: string): Promise<string> {
   return core().bookText(path)
 }
 
+export function bookChapters(path: string): Promise<(string | null)[]> {
+  return core().bookChapters(path)
+}
+
 export function closeBook(id: string): Promise<void> {
   return core().closeBook(id)
 }

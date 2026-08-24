@@ -1,0 +1,110 @@
+/* --- Заметки к книге ------------------------------------------------------ */
+
+.chapter {
+  margin-bottom: 2rem;
+}
+
+.count {
+  font-size: 0.75rem;
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * Заметка.
+ *
+ * Слева — полоса краски маркера во всю высоту. Она заменяет и значок, и
+ * подпись цвета: список из двадцати заметок листают глазами, и цветная кромка
+ * находится быстрее любого слова.
+ */
+.note {
+  display: grid;
+  grid-template-columns: 4px minmax(0, 1fr);
+  gap: 0 0.9rem;
+  padding: 0.85rem 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.note:last-child {
+  border-bottom: none;
+}
+
+.note__tone {
+  border-radius: 2px;
+  background: var(--tone);
+}
+
+.note__body {
+  display: grid;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+/* Цитата набрана книжной антиквой: это кусок книги, а не интерфейса. */
+.note__quote {
+  margin: 0;
+  font-family: var(--serif), 'Playfair Fallback';
+  font-size: 1.02rem;
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.note__text {
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  color: var(--ink);
+  white-space: pre-wrap;
+}
+
+.note__empty {
+  font-size: 0.875rem;
+  color: var(--ink-muted);
+}
+
+.note__input {
+  width: 100%;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-family: var(--sans), 'Inter Fallback';
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.note__input:focus {
+  outline: none;
+  border-color: var(--ink);
+}
+
+.note__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.tones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.tone {
+  width: 1.2rem;
+  height: 1.2rem;
+  border: 1px solid color-mix(in srgb, var(--ink) 18%, transparent);
+  border-radius: 999px;
+  background: var(--tone);
+  transition: transform var(--instant, 90ms) ease;
+}
+
+.tone:hover {
+  transform: scale(1.15);
+}
+
+.tone[data-active='true'] {
+  border-color: var(--ink);
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px var(--ink);
+}

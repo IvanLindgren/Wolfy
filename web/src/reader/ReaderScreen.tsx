@@ -16,7 +16,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion as m } from 'motion/react'
-import { Link, useNavigate, useParams } from '@tanstack/react-router'
+import { Link, useNavigate, useParams, useSearch } from '@tanstack/react-router'
 
 import { useShortcuts } from '../app/shortcuts'
 import { THEMES, applyTheme, motionFor } from '../app/theme'
@@ -30,12 +30,15 @@ import {
   BackIcon,
   CloseIcon,
   ContentsIcon,
+  NoteIcon,
+  NotesIcon,
   DecksIcon,
   ForwardIcon,
   ReaderIcon,
   TuneIcon,
 } from '../widgets/icons'
 import { WolfyCompanion } from '../widgets/Wolfy'
+import { toneColor, useAnnotations } from './annotations'
 import { ChapterView, savedRanges, textOf, type TokenRange } from './ChapterView'
 import { Paginator, type PagerHandle } from './Paginator'
 import { readerFont, readerMeasure, readingMode, setReaderFont, setReaderMeasure, setReadingMode, type ReaderFont, type ReadingMode } from './preferences'
@@ -44,6 +47,9 @@ import { sentenceAt, useChapter } from './useChapter'
 
 /** Как часто записывать место в книге. */
 const PROGRESS_DELAY = 900
+
+/** Сколько горит вспышка на месте, к которому пришли из заметок. */
+const FLASH_MS = 1600
 
 /** Цвет бумаги каждой темы — то, что видно на кружке выбора. */
 const THEME_SWATCH: Record<string, string> = {
@@ -56,6 +62,16 @@ const THEME_SWATCH: Record<string, string> = {
 export function ReaderScreen() {
   const { bookId } = useParams({ from: '/reader/$bookId' })
   const navigate = useNavigate()
+  /*
+   * Место, к которому пришли ссылкой из заметок.
+   *
+   * Держится в ref, а не в зависимости эффектов: ссылка отрабатывается один
+   * раз при загрузке главы, а её «поглощение» (чистка адреса) не должно
+   * перезапускать открытие книги.
+   */
+  const place = useSearch({ from: '/reader/$bookId' })
+  const placeRef = useRef(place)
+  placeRef.current = place
 
   const book = useSession((state) => state.library.books.find((item) => item.id === bookId))
   const libraryBooks = useSession((state) => state.library.books)
@@ -83,6 +99,8 @@ export function ReaderScreen() {
   const pager = useRef<PagerHandle | null>(null)
   const restored = useRef(false)
   const savedAt = useRef(0)
+  // Токен, к которому обязана прокрутиться загруженная глава: из ссылки заметок.
+  const pendingJump = useRef<number | null>(null)
 
   const handlePage = useCallback((current: number, total: number) => {
     setPage((previous) =>
@@ -107,13 +125,26 @@ export function ReaderScreen() {
       )
       return
     }
+    // Заметки читаются рядом с книгой и по той же причине, что и она: до их
+    // появления выделения в тексте просто не нарисуются.
+    void useAnnotations.getState().open(book.id)
+
     let alive = true
     void bridge
       .openBook(book.id, book.path, book.title)
       .then((info) => {
         if (!alive) return
         setChapterTitles(info.chapters.map((item) => item.title))
-        setChapterIndex(Math.min(book.progress.chapter, Math.max(0, info.chapters.length - 1)))
+        // Глава из ссылки сильнее сохранённого прогресса: читатель пришёл к
+        // конкретному месту, а не «продолжить чтение».
+        const wanted = placeRef.current.chapter
+        setChapterIndex(
+          Math.min(
+            wanted !== undefined ? wanted : book.progress.chapter,
+            Math.max(0, info.chapters.length - 1),
+          ),
+        )
+        pendingJump.current = placeRef.current.token ?? null
         setOpenedBookId(book.id)
         // Книга открывается ровно там, где её закрыли, — включая место внутри
         // главы. Оно восстанавливается после того, как глава разложилась.
@@ -197,10 +228,33 @@ export function ReaderScreen() {
 
   const [phraseMark, setPhraseMark] = useState<TokenRange | null>(null)
 
+  /*
+   * Выделения и заметки этой главы.
+   *
+   * Заметка без цитаты (`end === start`) рисуется полоской на поле, поэтому
+   * ей достаточно одного токена ширины — но взять его надо аккуратно: у
+   * последнего токена главы `start + 1` уже за границей.
+   */
+  const annotations = useAnnotations((state) => state.annotations)
+  const annotationMarks = useMemo<TokenRange[]>(
+    () =>
+      annotations
+        .filter((item) => !item.deleted && item.chapter === chapterIndex)
+        .map((item) => ({
+          start: item.start,
+          end: item.end > item.start ? item.end : Math.min(item.start + 1, chapter.tokens.length),
+          kind: item.tone ? ('mark' as const) : ('note' as const),
+          tone: item.tone ? toneColor(item.tone) : undefined,
+          id: item.id,
+        }))
+        .filter((range) => range.end > range.start),
+    [annotations, chapterIndex, chapter.tokens.length],
+  )
+
   const marks = useMemo<TokenRange[]>(() => {
-    const list = savedRanges(chapter.tokens, known)
+    const list = [...savedRanges(chapter.tokens, known), ...annotationMarks]
     return phraseMark ? [...list, phraseMark] : list
-  }, [chapter.tokens, known, phraseMark])
+  }, [chapter.tokens, known, annotationMarks, phraseMark])
 
   // --- Место в книге --------------------------------------------------------
 
@@ -241,9 +295,26 @@ export function ReaderScreen() {
   }, [remember])
 
   // Возврат ровно туда, где закрыли: доля главы превращается обратно в токен.
+  // Если пришла ссылка из заметок, она сильнее сохранённого места — и после
+  // отработки стирается из адреса, чтобы перезагрузка не тянула к заметке
+  // снова, а открывала книгу там, где читатель уже сам остановился.
   useEffect(() => {
     if (!book || restored.current || !chapter.tokens.length) return
     restored.current = true
+
+    const jump = pendingJump.current
+    if (jump !== null) {
+      pendingJump.current = null
+      showToken(Math.min(jump, chapter.tokens.length - 1))
+      flashToken(Math.min(jump, chapter.tokens.length - 1))
+      void navigate({
+        to: '/reader/$bookId',
+        params: { bookId },
+        search: {},
+        replace: true,
+      })
+      return
+    }
 
     const target = Math.round(book.progress.withinChapter * chapter.tokens.length)
     if (target <= 0) return
@@ -263,6 +334,23 @@ export function ReaderScreen() {
     },
     [mode],
   )
+
+  /*
+   * Короткая вспышка на месте, к которому пришли.
+   *
+   * Прокрутка показывает, *где* место, но не *что* это: страница токенов
+   * выглядит одинаково в любую сторону. Полторы секунды подсветки отвечают
+   * на второй вопрос, не трогая первый.
+   */
+  const flashToken = useCallback((token: number) => {
+    if (mode === 'pages') return
+    const host = scroller.current
+    const element = host?.querySelector<HTMLElement>(`[data-t="${token}"]`)
+    const flashClass = styles.flash
+    if (!element || !flashClass) return
+    element.classList.add(flashClass)
+    window.setTimeout(() => element.classList.remove(flashClass), FLASH_MS)
+  }, [mode])
 
   // --- Переходы -------------------------------------------------------------
 
@@ -323,10 +411,13 @@ export function ReaderScreen() {
           : [word],
         offset: sentence?.firstToken ?? token,
         selectedToken: token - (sentence?.firstToken ?? token),
+        chapter: chapterIndex,
+        range: { start: token, end: token + 1 },
+        quote: word.text,
         origin: element,
       })
     },
-    [chapter, book],
+    [chapter, chapterIndex, book],
   )
 
   const openPhrase = useCallback(
@@ -342,11 +433,41 @@ export function ReaderScreen() {
         sentence: text,
         tokens: chapter.tokens.slice(start, end),
         offset: start,
+        chapter: chapterIndex,
+        range: { start, end },
+        quote: text,
         origin: null,
       })
     },
-    [book, chapter.tokens, chapter.text],
+    [book, chapterIndex, chapter.tokens, chapter.text],
   )
+
+  /*
+   * Заметка к месту, без выделенной цитаты.
+   *
+   * Привязывается к первому токену того, что сейчас на экране, — то есть к
+   * «этой странице» в том единственном смысле, в каком страница у книги с
+   * перетекающим текстом вообще существует. Открывается сразу редактором: у
+   * такой заметки нет цитаты, и показывать пустую карточку разбора незачем.
+   */
+  const noteHere = useCallback(() => {
+    if (!book) return
+    const token = currentToken()
+    const word = chapter.tokens[token]
+    setPhraseMark(null)
+    setCard({
+      kind: 'phrase',
+      bookId: book.id,
+      surface: '',
+      sentence: '',
+      tokens: [],
+      offset: token,
+      chapter: chapterIndex,
+      range: { start: token, end: token },
+      quote: word?.text ?? '',
+      origin: null,
+    })
+  }, [book, chapter.tokens, chapterIndex, currentToken])
 
   const closeCard = useCallback(() => {
     setCard(null)
@@ -495,6 +616,26 @@ export function ReaderScreen() {
         </div>
 
         <div className={styles.bar__spacer} />
+
+        <button
+          type="button"
+          className={styles.iconButton}
+          onClick={noteHere}
+          aria-label="Заметка к этому месту"
+          title="Заметка к этому месту"
+        >
+          <NoteIcon />
+        </button>
+
+        <Link
+          to="/library/$bookId/notes"
+          params={{ bookId }}
+          className={styles.iconButton}
+          aria-label="Заметки к книге"
+          title="Заметки к книге"
+        >
+          <NotesIcon />
+        </Link>
 
         <Link
           to="/library/$bookId/words"

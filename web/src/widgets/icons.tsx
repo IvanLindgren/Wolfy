@@ -152,3 +152,17 @@ export const SearchIcon = icon(
     <path d="m15 15 4.5 4.5" />
   </>,
 )
+
+export const NoteIcon = icon(
+  <>
+    <path d="M4 5.5h13M4 10h13M4 14.5h7" />
+    <path d="m14.5 19.5 5.5-5.5-2-2-5.5 5.5-.6 2.6z" />
+  </>,
+)
+
+export const NotesIcon = icon(
+  <>
+    <rect x="4.5" y="3.5" width="15" height="17" rx="2" />
+    <path d="M8.5 8h7M8.5 12h7M8.5 16h4" />
+  </>,
+)

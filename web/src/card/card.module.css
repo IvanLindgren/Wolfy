@@ -786,3 +786,93 @@
     padding: 0.75rem 0.8rem;
   }
 }
+
+/* --- Маркер и заметка ---------------------------------------------------- */
+
+.highlighter {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 0.9rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--rule);
+}
+
+.highlighter__row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.highlighter__label {
+  font-family: var(--sans), 'Inter Fallback';
+  font-size: 0.75rem;
+  font-weight: 650;
+  color: var(--ink-muted);
+}
+
+.tones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+/*
+ * Кружок краски.
+ *
+ * Кромка чернилами появляется у выбранного: десять пастельных кружков подряд
+ * различаются слабо, и «какой из них сейчас стоит» должно быть видно формой,
+ * а не оттенком.
+ */
+.tone {
+  width: 1.35rem;
+  height: 1.35rem;
+  border: 1px solid color-mix(in srgb, var(--ink) 18%, transparent);
+  border-radius: 999px;
+  background: var(--tone);
+  transition: transform var(--instant, 90ms) ease, box-shadow var(--quick, 180ms) ease;
+}
+
+.tone:hover {
+  transform: scale(1.14);
+}
+
+.tone[data-active='true'] {
+  border-color: var(--ink);
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px var(--ink);
+}
+
+.noteEditor {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.noteQuote {
+  margin: 0;
+  padding: 0.5rem 0.7rem;
+  border-left: 3px solid var(--rule);
+  background: var(--surface-sunken);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  font-family: var(--serif), 'Playfair Fallback';
+  font-size: 0.95rem;
+  line-height: 1.45;
+  color: var(--ink-muted);
+}
+
+.noteInput {
+  width: 100%;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-family: var(--sans), 'Inter Fallback';
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  resize: vertical;
+  transition: border-color var(--quick, 180ms) ease;
+}
+
+.noteInput:focus {
+  outline: none;
+  border-color: var(--ink);
+}

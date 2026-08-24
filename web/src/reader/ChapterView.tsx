@@ -26,7 +26,17 @@ export interface TokenRange {
   start: number
   /** Полуинтервал: `end` не входит. */
   end: number
-  kind: 'saved' | 'phrase'
+  kind: 'saved' | 'phrase' | 'mark' | 'note'
+  /**
+   * Краска маркера — `var(--hl-N)` из темы.
+   *
+   * Задаётся значением, а не классом, потому что красок десять, и десять
+   * почти одинаковых правил в файле стилей — это девять шансов разойтись с
+   * тем, что хранится в заметке.
+   */
+  tone?: string
+  /** Чем отличать прямоугольники двух выделений одного цвета подряд. */
+  id?: string
 }
 
 interface ChapterViewProps {
@@ -228,7 +238,15 @@ function MarkLayer({
   marks: TokenRange[]
 }) {
   const [rects, setRects] = useState<
-    { key: string; kind: string; top: number; left: number; width: number; height: number }[]
+    {
+      key: string
+      kind: string
+      tone?: string
+      top: number
+      left: number
+      width: number
+      height: number
+    }[]
   >([])
 
   const recompute = useCallback(() => {
@@ -254,8 +272,9 @@ function MarkLayer({
         // паразитные полоски в ноль пикселей шириной.
         if (box.width < 1 || box.height < 1) return
         next.push({
-          key: `${mark.kind}:${mark.start}:${index}`,
+          key: `${mark.id ?? mark.kind}:${mark.start}:${index}`,
           kind: mark.kind,
+          tone: mark.tone,
           top: box.top - base.top,
           left: box.left - base.left,
           width: box.width,
@@ -293,6 +312,7 @@ function MarkLayer({
             left: rect.left,
             width: rect.width,
             height: rect.height,
+            ...(rect.tone ? { background: rect.tone } : null),
           }}
         />
       ))}

@@ -485,6 +485,91 @@ export async function likeDiscoveryItem(id: string): Promise<void> {
   await request(`/v1/discovery/items/${encodeURIComponent(id)}/like`, { method: 'POST' })
 }
 
+// --- Заметки и выделения к книге --------------------------------------------
+
+export interface AnnotationItem {
+  id: string
+  chapter: number
+  /** Полуинтервал номеров токенов главы. У заметки к месту `end === start`. */
+  start: number
+  end: number
+  tone: number | null
+  quote: string
+  note: string
+  /** Версия правки: номер в счётчике Лампорта писателя. */
+  rev: number
+  /** Стабильный номер устройства, подписавшего правку. */
+  writer: string
+  createdAt: number
+  updatedAt: number
+  /** Пометка удаления: доезжает до других устройств, живая запись — нет. */
+  deleted?: boolean
+}
+
+/** Ответ сервера: слитый список и его наибольшая версия. */
+export interface AnnotationSync {
+  items: AnnotationItem[]
+  topRev: number
+}
+
+/**
+ * Заметки книги с сервера.
+ *
+ * `null` значит «сейчас не доезжает»: не вошёл, нет сети, сервер молчит.
+ * Синхронизация — необязательная часть заметок, они работают и без неё,
+ * поэтому вызывающему возвращается не ошибка, а вежливое «в этот раз никак».
+ *
+ * `device` и `seen` обязательны: первый регистрирует устройство в реестре
+ * сборщика мусора (держатель копии обязан блокировать стирание пометок),
+ * второй подтверждает, какую версию серверного состояния устройство уже
+ * долговечно сохранило.
+ */
+export async function fetchBookAnnotations(
+  bookId: string,
+  device: string,
+  seen: number,
+): Promise<AnnotationSync | null> {
+  try {
+    const payload = await request<{ items?: AnnotationItem[]; topRev?: number }>(
+      `/v1/books/${encodeURIComponent(bookId)}/annotations?` +
+        new URLSearchParams({ device, seen: String(seen) }),
+    )
+    return {
+      items: Array.isArray(payload.items) ? payload.items : [],
+      topRev: payload.topRev ?? 0,
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Отправляет список целиком; сервер сам сливает его с хранимым по (rev,
+ * writer) каждой записи и возвращает слитый результат. Поэтому порядок
+ * отправки между устройствами не важен: у версии больше — та и верна, где
+ * бы её ни правили.
+ */
+export async function pushBookAnnotations(
+  bookId: string,
+  device: string,
+  seen: number,
+  items: AnnotationItem[],
+): Promise<AnnotationSync | null> {
+  try {
+    const payload = await request<{ items?: AnnotationItem[]; topRev?: number }>(
+      `/v1/books/${encodeURIComponent(bookId)}/annotations?` +
+        new URLSearchParams({ device, seen: String(seen) }),
+      { method: 'PUT', body: { items } },
+    )
+    return {
+      items: Array.isArray(payload.items) ? payload.items : [],
+      topRev: payload.topRev ?? 0,
+    }
+  } catch {
+    return null
+  }
+}
+
 /**
  * Скачивает EPUB через прокси сервера.
  *
