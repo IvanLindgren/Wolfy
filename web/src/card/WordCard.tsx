@@ -22,7 +22,7 @@ import { session, useSession } from '../core/session'
 import type { Card, Grammar, PosTag, Token, WordAnalysis } from '../core/types'
 import { seconds } from '../theme/motion'
 import { Button } from '../widgets/Button'
-import { CheckIcon, CloseIcon, GraphIcon, SoundIcon, TreeIcon } from '../widgets/icons'
+import { CheckIcon, CloseIcon, SoundIcon } from '../widgets/icons'
 import { flyToDeck } from '../widgets/Flight'
 import { Wolfy } from '../widgets/Wolfy'
 import styles from './card.module.css'
@@ -33,6 +33,7 @@ import {
   familyOf,
 } from './grammarColors'
 import { PhraseText } from './PhraseText'
+import { ColorLegend } from './ColorLegend'
 import { SentenceGraph } from './SentenceGraph'
 import { contextualPos, otherSenses, primarySense } from './cardEssentials'
 import { canSpeak, onVoicesReady, speak } from './speech'
@@ -95,7 +96,6 @@ function Sheet({ target, onClose }: { target: CardTarget; onClose: () => void })
 
   const [analysis, setAnalysis] = useState<WordAnalysis | null>(null)
   const [grammar, setGrammar] = useState<Grammar | null>(null)
-  const [graphMode, setGraphMode] = useState<'graph' | 'tree'>('graph')
   const [voices, setVoices] = useState(canSpeak())
   const sheet = useRef<HTMLDivElement>(null)
 
@@ -288,8 +288,6 @@ function Sheet({ target, onClose }: { target: CardTarget; onClose: () => void })
             target={target}
             grammar={grammar}
             translation={translation}
-            graphMode={graphMode}
-            setGraphMode={setGraphMode}
             stagger={timing.stagger}
             duration={timing.calm}
           />
@@ -648,54 +646,33 @@ function PhraseBody({
   target,
   grammar,
   translation,
-  graphMode,
-  setGraphMode,
   stagger,
   duration,
 }: {
   target: CardTarget
   grammar: Grammar | null
   translation: ReturnType<typeof useTranslation>
-  graphMode: 'graph' | 'tree'
-  setGraphMode: (mode: 'graph' | 'tree') => void
   stagger: number
   duration: number
 }) {
   return (
     <>
-      <section className={styles.phrasePrimary} data-tone="graph">
-        <div className={styles.graphHead}>
-          <h3 className={styles.primaryCard__title}>Граф связей</h3>
-          <div className={styles.toggle} aria-label="Вид синтаксических связей">
-            <button
-              type="button"
-              data-active={graphMode === 'graph'}
-              onClick={() => setGraphMode('graph')}
-              title="Граф связей"
-              aria-label="Показать граф связей"
-              aria-pressed={graphMode === 'graph'}
-            >
-              <GraphIcon size={15} />
-            </button>
-            <button
-              type="button"
-              data-active={graphMode === 'tree'}
-              onClick={() => setGraphMode('tree')}
-              title="Дерево зависимостей"
-              aria-label="Показать дерево зависимостей"
-              aria-pressed={graphMode === 'tree'}
-            >
-              <TreeIcon size={15} />
-            </button>
-          </div>
-        </div>
-        <SentenceGraph
-          tokens={target.tokens}
-          chunks={grammar?.chunks ?? []}
-          mode={graphMode}
-          stagger={stagger}
-          duration={duration}
-        />
+      {/*
+        Перевод стоит первым, и это не вопрос вкуса. Читатель выделил фразу
+        потому, что не понял её; разбор по членам предложения объясняет, как
+        она устроена, но ответить на «что здесь сказано» может только перевод.
+        Показывать сначала устройство фразы, а смысл — третьим экраном значит
+        заставить искать ответ на свой же вопрос.
+      */}
+      <section className={styles.phrasePrimary} data-tone="translation">
+        <h3 className={styles.primaryCard__title}>Перевод фразы</h3>
+        {translation.state === 'ready' && translation.sentence ? (
+          <p className={styles.phraseTranslation}>{translation.sentence}</p>
+        ) : translation.state === 'failed' ? (
+          <p className={styles.primaryCard__pending}>{translation.message}</p>
+        ) : (
+          <p className={styles.primaryCard__pending}>Перевожу фразу…</p>
+        )}
       </section>
 
       <section className={styles.phrasePrimary} data-tone="parts">
@@ -707,17 +684,17 @@ function PhraseBody({
           interlinear={false}
           showParts
         />
+        <ColorLegend parts={grammar?.parts ?? []} markers={grammar?.markers ?? []} />
       </section>
 
-      <section className={styles.phrasePrimary} data-tone="translation">
-        <h3 className={styles.primaryCard__title}>Перевод в этом контексте</h3>
-        {translation.state === 'ready' && translation.sentence ? (
-          <p className={styles.primaryCard__value}>{translation.sentence}</p>
-        ) : translation.state === 'failed' ? (
-          <p className={styles.primaryCard__pending}>{translation.message}</p>
-        ) : (
-          <p className={styles.primaryCard__pending}>Перевожу фразу…</p>
-        )}
+      <section className={styles.phrasePrimary} data-tone="graph">
+        <h3 className={styles.primaryCard__title}>Разбор по членам предложения</h3>
+        <SentenceGraph
+          tokens={target.tokens}
+          chunks={grammar?.chunks ?? []}
+          stagger={stagger}
+          duration={duration}
+        />
       </section>
 
       <WolfyDisclosure

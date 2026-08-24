@@ -98,15 +98,6 @@ export const ROLE_TITLES: Record<RoleName, string> = {
   connector: 'связка',
 }
 
-export const ROLE_SHORT: Record<RoleName, string> = {
-  subject: 'подл.',
-  predicate: 'сказ.',
-  object: 'доп.',
-  complement: 'часть',
-  adverbial: 'обст.',
-  connector: 'связь',
-}
-
 export const MARKER_TITLES: Record<string, string> = {
   auxiliary: 'вспомогательный глагол',
   ending: 'окончание',
