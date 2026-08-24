@@ -192,6 +192,12 @@ func TestСборкаМусораЗаметокЖдётВсехУстройст�
 		CreatedAt: 1, UpdatedAt: 2,
 	}}
 
+	// Ноутбук читал книгу раньше и видел только версию 2: у него лежит
+	// живая копия, поэтому регистрируется он ещё до удаления.
+	if err := s.ConfirmAnnotationsSeen(ctx, user, book, "laptop", 2); err != nil {
+		t.Fatalf("подтверждение ноутбука: %v", err)
+	}
+
 	// Телефон удаляет заметку версией 5 и подтверждает, что сохранил её.
 	merged, err := s.SaveBookAnnotations(ctx, user, book, "phone", 5, tombstone)
 	if err != nil {
@@ -201,11 +207,8 @@ func TestСборкаМусораЗаметокЖдётВсехУстройст�
 		t.Fatalf("пометка не сохранилась: %+v", merged)
 	}
 
-	// Ноутбук видел только версию 2: у него ещё лежит живая копия, и
-	// сборщик мусора не имеет права трогать пометку, пока он не догонит.
-	if err := s.ConfirmAnnotationsSeen(ctx, user, book, "laptop", 2); err != nil {
-		t.Fatalf("подтверждение ноутбука: %v", err)
-	}
+	// Пока ноутбук не догнал, сборщик мусора не имеет права трогать пометку,
+	// сколько бы телефон ни писал снова.
 	merged, err = s.SaveBookAnnotations(ctx, user, book, "phone", 5, nil)
 	if err != nil {
 		t.Fatalf("вторая запись: %v", err)
