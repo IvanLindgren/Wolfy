@@ -45,7 +45,9 @@ test('навигация связывает библиотеку, общий с�
   await expect(page.getByRole('heading', { name: 'Книги' })).toBeVisible()
 
   await page.goto('/reader')
-  await expect(page.getByRole('heading', { name: /Нечего продолжать|Продолжить/ })).toBeVisible()
+  await expect(
+    page.getByRole('heading', { name: /Нечего продолжать|Продолжить|Читать пока нечего/ }),
+  ).toBeVisible()
   expect(pageErrors).toEqual([])
 })
 
@@ -62,7 +64,7 @@ test('навигационные кнопки остаются одной ссы
   // На пустой библиотеке фильтры не показываются, поэтому добавляем слово
   // через обычный текстовый файл и затем возвращаемся к общему словарю.
   await page.goto('/library')
-  await page.locator('input[type="file"]').setInputFiles({
+  await page.locator('input[type="file"][accept*="epub"]').setInputFiles({
     name: 'Keyboard navigation.txt',
     mimeType: 'text/plain',
     buffer: Buffer.from('Keyboard navigation book.'),
@@ -87,7 +89,7 @@ test('PDF с текстовым слоем импортируется production
   page.on('pageerror', (error) => pageErrors.push(error.message))
 
   await page.goto('/library')
-  await page.locator('input[type="file"]').setInputFiles({
+  await page.locator('input[type="file"][accept*="epub"]').setInputFiles({
     name: 'Wolfy PDF test.pdf',
     mimeType: 'application/pdf',
     buffer: textPdf('Hello Wolfy'),
@@ -104,7 +106,7 @@ test('из оглавления можно переключить две кни�
   page.on('pageerror', (error) => pageErrors.push(error.message))
 
   await page.goto('/library')
-  await page.locator('input[type="file"]').setInputFiles({
+  await page.locator('input[type="file"][accept*="epub"]').setInputFiles({
     name: 'Lifecycle first.pdf',
     mimeType: 'application/pdf',
     buffer: textPdf('First lifecycle book'),
@@ -112,7 +114,7 @@ test('из оглавления можно переключить две кни�
   await expect(page).toHaveURL(/\/reader\/[^/]+$/, { timeout: 20_000 })
 
   await page.goto('/library')
-  await page.locator('input[type="file"]').setInputFiles({
+  await page.locator('input[type="file"][accept*="epub"]').setInputFiles({
     name: 'Lifecycle second.pdf',
     mimeType: 'application/pdf',
     buffer: textPdf('Second lifecycle book'),

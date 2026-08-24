@@ -45,10 +45,11 @@ import { session, useSession } from '../core/session'
 import type { LibraryBook } from '../core/types'
 import { Appear } from '../widgets/Appear'
 import { Button, buttonClassName } from '../widgets/Button'
-import { CameraIcon, DecksIcon, PlusIcon, TrashIcon } from '../widgets/icons'
+import { CameraIcon, DecksIcon, ImageIcon, PlusIcon, TrashIcon } from '../widgets/icons'
 import page from '../widgets/Page.module.css'
 import { WolfyCompanion } from '../widgets/Wolfy'
 import { BookCover, fraction } from './BookCover'
+import { COVER_ACCEPT, removeCover, saveCover, useCoverStamp } from './covers'
 import { droppedFiles, isFileDrag } from './drop'
 import { ACCEPTED, addFile, addURL, type ImportResult } from './import'
 import styles from './library.module.css'
@@ -391,8 +392,22 @@ function BookTile({
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: book.id })
+  const chooser = useRef<HTMLInputElement>(null)
+  const bump = useCoverStamp((state) => state.bump)
 
   const percent = Math.round(fraction(book) * 100)
+
+  // Пустой выбор — это отказ, а не команда снять обложку: снимает её
+  // повторное нажатие с зажатым Alt, о чём написано в подсказке кнопки.
+  const chooseCover = async (file: File) => {
+    const result = await saveCover(book.id, file)
+    if (result.kind === 'refused') {
+      toast(result.message)
+      return
+    }
+    bump(book.id)
+    toast(`Обложка «${book.title}» заменена`)
+  }
 
   return (
     <Appear index={index}>
@@ -418,6 +433,37 @@ function BookTile({
             </Link>
           )}
           <div className={styles.book__actions}>
+            <input
+              ref={chooser}
+              type="file"
+              accept={COVER_ACCEPT}
+              hidden
+              onChange={(event) => {
+                const file = event.target.files?.[0]
+                if (file) void chooseCover(file)
+                // Сброс обязателен: выбор того же файла второй раз иначе не
+                // поднимет событие, и замена обложки молча не сработает.
+                event.target.value = ''
+              }}
+            />
+            <Button
+              variant="quiet"
+              small
+              title="Обложка из PNG, JPEG или WebP. С зажатым Alt — вернуть обложку книги"
+              aria-label={`Обложка книги «${book.title}»`}
+              onClick={(event) => {
+                if (event.altKey) {
+                  void removeCover(book.id).then(() => {
+                    bump(book.id)
+                    toast(`Своя обложка «${book.title}» убрана`)
+                  })
+                  return
+                }
+                chooser.current?.click()
+              }}
+            >
+              <ImageIcon size={15} />
+            </Button>
             <button
               type="button"
               className={styles.book__drag}

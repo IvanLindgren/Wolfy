@@ -138,21 +138,10 @@ export const FlameIcon = icon(
   <path d="M12 3s4.5 3.8 4.5 8a4.5 4.5 0 0 1-9 0c0-1.4.7-2.6 1.5-3.4 0 1.6.9 2.6 1.8 2.6.9 0 1.2-1.1 1.2-2.4 0-2-.5-3.6-1-4.8z" />,
 )
 
-export const GraphIcon = icon(
+export const ImageIcon = icon(
   <>
-    <circle cx="5.5" cy="17.5" r="2.2" />
-    <circle cx="12" cy="6.5" r="2.2" />
-    <circle cx="18.5" cy="17.5" r="2.2" />
-    <path d="M7 15.8 10.7 8.6M13.4 8.7 17 15.7M7.7 17.5h8.6" />
-  </>,
-)
-
-export const TreeIcon = icon(
-  <>
-    <path d="M12 4v4M12 8H6.5v3.5M12 8h5.5v3.5M12 8v3.5" />
-    <rect x="9.5" y="1.8" width="5" height="2.6" rx="0.8" />
-    <rect x="4" y="11.5" width="5" height="2.6" rx="0.8" />
-    <rect x="9.5" y="11.5" width="5" height="2.6" rx="0.8" />
-    <rect x="15" y="11.5" width="5" height="2.6" rx="0.8" />
+    <rect x="3" y="4.5" width="18" height="15" rx="2" />
+    <circle cx="8.5" cy="10" r="1.6" />
+    <path d="m3.5 17 4.8-4.6 3.4 3.2 3.3-3.4L20.5 16" />
   </>,
 )
