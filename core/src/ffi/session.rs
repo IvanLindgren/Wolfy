@@ -85,6 +85,16 @@ pub enum Command {
         #[serde(default)]
         fingerprint: String,
     },
+    /// Снять tombstone с удалённой книги и привязать к ней файл.
+    ///
+    /// Отвечает на AddPlan::Revive: только явное повторное добавление имеет
+    /// право оживить книгу — устаревшая копия так сделать не может.
+    ReviveBook {
+        id: String,
+        path: String,
+        #[serde(default)]
+        fingerprint: String,
+    },
     Describe {
         id: String,
         #[serde(default)]
@@ -351,6 +361,7 @@ impl Session {
                 let (plan, id) = match ops::plan_add(&self.library, &fingerprint) {
                     ops::AddPlan::Known(id) => ("known", Some(id)),
                     ops::AddPlan::Attach(id) => ("attach", Some(id)),
+                    ops::AddPlan::Revive(id) => ("revive", Some(id)),
                     ops::AddPlan::Fresh => ("fresh", None),
                 };
                 Outcome {
@@ -375,6 +386,15 @@ impl Session {
                 fingerprint,
             } => {
                 self.change_library(ops::attach_file(&self.library, &id, &path, &fingerprint));
+                self.book_outcome(&id)
+            }
+
+            Command::ReviveBook {
+                id,
+                path,
+                fingerprint,
+            } => {
+                self.change_library(ops::revive_book(&self.library, &id, &path, &fingerprint));
                 self.book_outcome(&id)
             }
 

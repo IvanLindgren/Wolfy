@@ -112,6 +112,8 @@ async function addPlain(file: File, extension: string): Promise<ImportResult> {
 
   if (plan.plan === 'attach' && plan.bookId) {
     await session.attachFile(plan.bookId, opened.path, fingerprint)
+  } else if (plan.plan === 'revive' && plan.bookId) {
+    await session.reviveBook(plan.bookId, opened.path, fingerprint)
   } else {
     await session.addBook({
       id,
@@ -173,6 +175,8 @@ async function addPdf(file: File): Promise<ImportResult> {
 
   if (plan.plan === 'attach' && plan.bookId) {
     await session.attachFile(plan.bookId, opened.path, fingerprint)
+  } else if (plan.plan === 'revive' && plan.bookId) {
+    await session.reviveBook(plan.bookId, opened.path, fingerprint)
   } else {
     await session.addBook({
       id,
@@ -216,6 +220,8 @@ export async function addDownloaded(
 
   if (plan.plan === 'attach' && plan.bookId) {
     await session.attachFile(plan.bookId, opened.path, sourceKey)
+  } else if (plan.plan === 'revive' && plan.bookId) {
+    await session.reviveBook(plan.bookId, opened.path, sourceKey)
   } else {
     await session.addBook({
       id,

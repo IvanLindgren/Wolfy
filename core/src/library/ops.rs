@@ -49,6 +49,13 @@ pub enum AddPlan {
     Known(String),
     /// Книга есть, но без файла — приехала синхронизацией. Нужен только файл.
     Attach(String),
+    /// Книга была удалена, но читатель добавляет тот же файл заново.
+    ///
+    /// Третье действие, не совпадение с Attach: удаление — отдельное
+    /// пользовательское решение, и устаревшая копия снимать его не должна, но
+    /// явное повторное добавление обязано вернуть книгу к жизни на том же
+    /// номере — с той же колодой, прогрессом и заметками.
+    Revive(String),
     /// Книги нет: копировать файл и заводить запись.
     Fresh,
 }
@@ -66,16 +73,41 @@ pub fn plan_add(state: &LibraryState, fingerprint: &str) -> AddPlan {
     if fingerprint.is_empty() {
         return AddPlan::Fresh;
     }
-    let known = state
-        .books
-        .iter()
-        .find(|book| book.source_key == fingerprint && !book.deleted);
-
-    match known {
+    match state.books.iter().find(|book| book.source_key == fingerprint) {
+        Some(book) if book.deleted => AddPlan::Revive(book.id.clone()),
         Some(book) if book.readable() => AddPlan::Known(book.id.clone()),
         Some(book) => AddPlan::Attach(book.id.clone()),
         None => AddPlan::Fresh,
     }
+}
+
+/// Возвращает удалённую книгу к жизни: тот же номер, та же колода, новый файл.
+///
+/// Отличается от простого копирования записи тем, что долг повторного
+/// добавления снимается осознанно. Отправить «снова живую» книгу может только
+/// этот путь: устаревшая копия, не видевшая удаления, так подделать
+/// воскрешение не может — сервер отвергает её по ревизии.
+pub fn revive_book(state: &LibraryState, id: &str, path: &str, fingerprint: &str) -> LibraryState {
+    let Some(at) = state.books.iter().position(|book| book.id == id && book.deleted) else {
+        return state.clone();
+    };
+    let mut books = state.books.clone();
+    books[at] = LibraryBook {
+        deleted: false,
+        path: path.to_string(),
+        source_key: if fingerprint.is_empty() {
+            books[at].source_key.clone()
+        } else {
+            fingerprint.to_string()
+        },
+        dirty: true,
+        ..books[at].clone()
+    };
+    LibraryState {
+        books,
+        ..state.clone()
+    }
+    .touched()
 }
 
 /// Кладёт в библиотеку готовую запись книги.
@@ -616,6 +648,81 @@ mod tests {
             ..пустая()
         };
         assert_eq!(plan_add(&state, ""), AddPlan::Fresh);
+    }
+
+    #[test]
+    fn удалённая_книга_не_воскресает_от_совпадения_отпечатка() {
+        // Ошибиться здесь — значит дать устаревшему обновлению права снять
+        // tombstone: телефон удалил книгу, ноутбук держит её копию и по
+        // встряске приносят тот же файл. Удаление обязано пережить встречу.
+        let mut удалённая = книга("1", "Гэтсби");
+        удалённая.source_key = "отпечаток".to_string();
+        удалённая.deleted = true;
+        let state = LibraryState {
+            books: vec![удалённая],
+            ..пустая()
+        };
+
+        // plan_add обязан отделить «добавляю заново осознанно» от
+        // «устаревшая копия» — как минимум не вернуть Known/Attach молча.
+        assert_eq!(
+            plan_add(&state, "отпечаток"),
+            AddPlan::Revive("1".to_string()),
+            "план добавления не распознал воскрешение"
+        );
+    }
+
+    #[test]
+    fn воскрешение_сохраняет_номер_и_колоду_и_делает_запись_грязной() {
+        let mut удалённая = книга("1", "Гэтсби");
+        удалённая.source_key = "отпечаток".to_string();
+        удалённая.deleted = true;
+        удалённая.rev = 20;
+        удалённая.dirty = false;
+        удалённая.path = String::new();
+
+        let (state, _) = save_word(
+            &LibraryState {
+                books: vec![удалённая],
+                ..пустая()
+            },
+            "1",
+            "libraries",
+            "library",
+            "библиотека",
+            "",
+            "",
+            "",
+            "c1",
+            NOW,
+        );
+
+        let after = revive_book(&state, "1", "books/gatsby.epub", "отпечаток");
+        let book = &after.books[0];
+        assert!(!book.deleted, "книга осталась удалённой");
+        assert_eq!(book.id, "1", "воскрешение сменило номер — колода осиротела");
+        assert_eq!(
+            book.path, "books/gatsby.epub",
+            "файл не привязался к воскрешённой книге"
+        );
+        assert!(book.dirty, "воскрешение не попало в отправку");
+        // Ревизия — память о tombstone: сервер по равенству принимает
+        // воскрешение, а устаревшая живая версия с меньшим номером — нет.
+        assert_eq!(book.rev, 20, "воскрешение не сохранило память о tombstone");
+        assert!(after.cards[0].book_id.as_str() == "1", "колода потеряла книгу");
+    }
+
+    #[test]
+    fn воскрешение_не_трогает_чужую_или_живую_книгу() {
+        let state = LibraryState {
+            books: vec![книга("1", "Гэтсби")],
+            ..пустая()
+        };
+        let чужая = revive_book(&state, "нет-такой", "books/a.epub", "отпечаток");
+        assert_eq!(чужая, state.clone(), "неизвестная книга сдвинула состояние");
+
+        let живая = revive_book(&state, "1", "books/a.epub", "отпечаток");
+        assert_eq!(живая, state.clone(), "живая книга пережила «воскрешение»");
     }
 
     #[test]

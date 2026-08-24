@@ -73,6 +73,12 @@ pub fn apply_server(
 
         match local {
             Some(at) => {
+                // Ответ старше уже принятого: откатывать состояние назад
+                // запрещено даже для чистых записей. Пока запрос шёл по сети,
+                // приехал более свежий ответ, и старый должен уйти в никуда.
+                if incoming.rev < merged_books[at].rev {
+                    continue;
+                }
                 if merged_books[at].dirty && !(quiet && sent.books.contains(&incoming.id)) {
                     // Местная правка новее ответа: оставляем её ждать отправки.
                     continue;
@@ -83,11 +89,22 @@ pub fn apply_server(
                     ..incoming.clone()
                 };
             }
-            None => merged_books.push(LibraryBook {
-                path: String::new(),
-                dirty: false,
-                ..incoming.clone()
-            }),
+            None => {
+                // Новую запись из старого ответа не добавляем: её ревизия уже
+                // за курсором не повторится, и мёртвый призрак остался бы
+                // навсегда. Вползти сюда может только запись, которой в
+                // текущем снимке нет, — то есть выпавшая из более новой версии.
+                // Нулевая ревизия — это ещё не отправлявшаяся запись, её
+                // сервер не штампует, и отсекать её по курсору нельзя.
+                if incoming.rev >= 1 && incoming.rev <= state.cursor {
+                    continue;
+                }
+                merged_books.push(LibraryBook {
+                    path: String::new(),
+                    dirty: false,
+                    ..incoming.clone()
+                });
+            }
         }
     }
 
@@ -96,6 +113,9 @@ pub fn apply_server(
         let local = merged_cards.iter().position(|card| card.id == incoming.id);
         match local {
             Some(at) => {
+                if incoming.rev < merged_cards[at].rev {
+                    continue;
+                }
                 if merged_cards[at].dirty && !(quiet && sent.cards.contains(&incoming.id)) {
                     continue;
                 }
@@ -104,10 +124,15 @@ pub fn apply_server(
                     ..incoming.clone()
                 };
             }
-            None => merged_cards.push(Card {
-                dirty: false,
-                ..incoming.clone()
-            }),
+            None => {
+                if incoming.rev >= 1 && incoming.rev <= state.cursor {
+                    continue;
+                }
+                merged_cards.push(Card {
+                    dirty: false,
+                    ..incoming.clone()
+                });
+            }
         }
     }
 
@@ -132,7 +157,9 @@ pub fn apply_server(
         books: merged_books,
         cards: merged_cards,
         shelves,
-        cursor,
+        // Курсор не откатывается назад: отклик-старик, приехавший после
+        // свежего, не должен вернуть глаз на ревизию, по которой он ушёл.
+        cursor: state.cursor.max(cursor),
         ..state.clone()
     }
     .touched()
@@ -413,6 +440,96 @@ mod tests {
         let after = apply_server(&state, 9, &[], &[приехала], &Sent::nothing(&state), NOW);
         assert_eq!(after.cards.len(), 1);
         assert!(!after.cards[0].dirty);
+    }
+
+    #[test]
+    fn старый_ответ_после_нового_не_откатывает_состояние() {
+        // Пока запрос A шёл по сети, приехал ответ B с cursor=20 и записью
+        // ревизии 20. Потом приехал запоздалый ответ A с cursor=19. Итог
+        // обязан быть одинаково новым: ни курсор назад, ни запись ревизии
+        // ниже двадцати.
+        let state = состояние(vec![]);
+
+        let свежий = LibraryBook {
+            rev: 20,
+            ..книга(UUID, "Гэтсби", NOW)
+        };
+        let после_b = apply_server(&state, 20, &[свежий], &[], &Sent::nothing(&state), NOW);
+
+        let старый = LibraryBook {
+            title: "Из старого ответа".to_string(),
+            rev: 15,
+            ..книга(UUID, "Гэтсби", NOW)
+        };
+        // Второе применение — другой запрос, с ним ушёл другой снимок отправки.
+        let после_a = apply_server(
+            &после_b,
+            19,
+            &[старый],
+            &[],
+            &Sent::nothing(&после_b),
+            NOW,
+        );
+
+        assert_eq!(
+            после_a.books[0].rev, 20,
+            "старый ответ понизил ревизию записи"
+        );
+        assert_eq!(
+            после_a.books[0].title, "Гэтсби",
+            "старый ответ перезаписал новые данные"
+        );
+        assert_eq!(после_a.cursor, 20, "курсор откатился назад");
+    }
+
+    #[test]
+    fn старый_ответ_после_нового_не_подкидывает_призрачную_запись() {
+        // Позапрошлый ответ A содержал книгу ревизии 8, которой нет в свежем
+        // ответе B: например, она была изменена. Кривой порядок ответов не
+        // должен вставить старую копию: её ревизия уже за курсором.
+        let state = состояние(vec![]);
+
+        let после_b = apply_server(&state, 20, &[], &[], &Sent::nothing(&state), NOW);
+
+        // Ревизия штампованная, иначе это была бы несерверная запись.
+        let призрак = LibraryBook {
+            rev: 8,
+            ..книга("99999999-9999-4999-8999-999999999999", "Призрак", NOW)
+        };
+        let после_a = apply_server(
+            &после_b,
+            19,
+            &[призрак],
+            &[],
+            &Sent::nothing(&после_b),
+            NOW,
+        );
+
+        assert_eq!(после_a.books.len(), 0, "призрак из старого ответа вклеился");
+        assert_eq!(после_a.cursor, 20);
+    }
+
+    #[test]
+    fn порядок_ответов_не_влияет_на_новизну() {
+        // Два запроса ушли с почти одинаковым состоянием; равный финальный
+        // результат обязан быть одинаковым в обоих порядках.
+        let state = состояние(vec![]);
+
+        let record = |rev: i64| LibraryBook {
+            rev,
+            ..книга(UUID, "Гэтсби", NOW)
+        };
+
+        let a_сначала = apply_server(&state, 19, &[record(19)], &[], &Sent::nothing(&state), NOW);
+        let a_сначала = apply_server(&a_сначала, 20, &[record(20)], &[], &Sent::nothing(&a_сначала), NOW);
+
+        let b_сначала = apply_server(&state, 20, &[record(20)], &[], &Sent::nothing(&state), NOW);
+        let b_сначала = apply_server(&b_сначала, 19, &[record(19)], &[], &Sent::nothing(&b_сначала), NOW);
+
+        assert_eq!(a_сначала.books[0].rev, 20);
+        assert_eq!(b_сначала.books[0].rev, 20);
+        assert_eq!(a_сначала.cursor, 20);
+        assert_eq!(b_сначала.cursor, 20);
     }
 
     #[test]

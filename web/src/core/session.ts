@@ -170,6 +170,11 @@ export const session = {
     return run({ op: 'attachFile', id, path, fingerprint })
   },
 
+  /** Явное повторное добавление удалённой книги: снимает tombstone на том же номере. */
+  async reviveBook(id: string, path: string, fingerprint: string): Promise<Outcome> {
+    return run({ op: 'reviveBook', id, path, fingerprint })
+  },
+
   /** Запоминает, что ядро нашло в книге при открытии. */
   async describe(
     id: string,

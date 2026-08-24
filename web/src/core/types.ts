@@ -414,6 +414,7 @@ export type Command =
   | { op: 'planAdd'; fingerprint: string }
   | { op: 'addBook'; book: LibraryBook }
   | { op: 'attachFile'; id: string; path: string; fingerprint: string }
+  | { op: 'reviveBook'; id: string; path: string; fingerprint: string }
   | { op: 'describe'; id: string; title: string; author: string | null; chapters: number }
   | { op: 'rememberProgress'; id: string; chapter: number; withinChapter: number; now: number }
   | {
@@ -477,8 +478,8 @@ export interface Outcome {
   changed: boolean
   libraryChanged: boolean
   settingsChanged: boolean
-  /** Что делать с добавляемой книгой: `known`, `attach` или `fresh`. */
-  plan?: 'known' | 'attach' | 'fresh'
+  /** Что делать с добавляемой книгой: `known`, `attach`, `revive` или `fresh`. */
+  plan?: 'known' | 'attach' | 'revive' | 'fresh'
   bookId?: string
   book?: LibraryBook
   card?: Card

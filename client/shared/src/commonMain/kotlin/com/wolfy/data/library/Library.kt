@@ -84,6 +84,11 @@ class Library(
                 attachFile(id, sourcePath, fileName)
                 return book(id) ?: error("ядро назвало неизвестную книгу")
             }
+            "revive" -> {
+                val id = plan.bookId.orEmpty()
+                reviveBook(id, sourcePath, fileName)
+                return book(id) ?: error("ядро назвало неизвестную книгу")
+            }
         }
 
         return addBook(
@@ -108,7 +113,20 @@ class Library(
         sourceKey: String,
     ): LibraryBook {
         val plan = ask(command("planAdd") { put("fingerprint", sourceKey) })
-        plan.bookId?.let { known -> book(known)?.let { return it } }
+        plan.bookId?.let { known ->
+            if (plan.plan != "revive") book(known)?.let { return it }
+        }
+        if (plan.plan == "revive") {
+            val id = plan.bookId.orEmpty()
+            send(
+                command("reviveBook") {
+                    put("id", id)
+                    put("path", store.writeBook(fileName, bytes))
+                    put("fingerprint", sourceKey)
+                },
+            )
+            return book(id) ?: error("ядро назвало неизвестную книгу")
+        }
 
         return addBook(
             LibraryBook(
@@ -135,6 +153,25 @@ class Library(
         val fingerprint = store.fingerprint(sourcePath)
         send(
             command("attachFile") {
+                put("id", id)
+                put("path", path)
+                put("fingerprint", fingerprint)
+            },
+        )
+    }
+
+    /**
+     * Возвращает удалённую книгу к жизни на том же номере.
+     *
+     * Ядро само решает, когда это осознанное повторное добавление: устаревшая
+     * копия повторить этот путь не может — у неё нет плана Revive, и сервер
+     * отвергает её живое состояние по ревизии.
+     */
+    fun reviveBook(id: String, sourcePath: String, fileName: String) {
+        val path = store.importBook(sourcePath, fileName)
+        val fingerprint = store.fingerprint(sourcePath)
+        send(
+            command("reviveBook") {
                 put("id", id)
                 put("path", path)
                 put("fingerprint", fingerprint)
