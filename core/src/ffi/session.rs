@@ -335,20 +335,57 @@ pub struct Outcome {
 impl Session {
     /// Открывает сессию на сохранённом состоянии.
     ///
-    /// Битую запись ядро не выплёвывает ошибкой, а заменяет пустой: падение
-    /// на старте не оставило бы читателю ничего, а так приложение откроется —
-    /// книги при этом лежат на диске и добавляются заново.
+    /// # Legacy-lenient режим
+    ///
+    /// Битую запись тихо заменяет пустой: так вело себя ядро до P12. Падение
+    /// на старте не оставило бы читателю ничего, а так приложение откроется.
+    /// Для новой инициализации, где повреждение обязано быть видимым, используйте
+    /// [`Session::try_open`] / [`Session::open_strict`]: `None` / пустая строка
+    /// -> `Default`, а непустая битая запись -> `Err`, а не молчаливый
+    /// `Default`. Клиент после `Err` не должен автоматически сохранять пустое
+    /// состояние поверх повреждённого.
     pub fn open(library: Option<&str>, settings: Option<&str>) -> Session {
-        Session {
-            library: library
-                .and_then(|text| serde_json::from_str(text).ok())
-                .unwrap_or_default(),
-            settings: settings
-                .and_then(|text| serde_json::from_str(text).ok())
-                .unwrap_or_default(),
+        Self::try_open(library, settings).unwrap_or_else(|_| Session {
+            library: LibraryState::default(),
+            settings: AppSettings::default(),
             library_dirty: false,
             settings_dirty: false,
             ..Session::default()
+        })
+    }
+
+    /// Строгое открытие: отличает «файла нет» от «файл повреждён».
+    ///
+    /// - `None` / `Some("")` / `Some(whitespace)` => `Default` (файла нет или пуст).
+    /// - `Some(valid json)` => распарсенное состояние.
+    /// - `Some(corrupted)` => `Err` с описанием, какой из двух JSON сломан.
+    pub fn try_open(library: Option<&str>, settings: Option<&str>) -> Result<Session, String> {
+        Self::open_strict(library, settings)
+    }
+
+    /// Строгое открытие (алиас [`try_open`]): corrupted JSON -> Err.
+    pub fn open_strict(library: Option<&str>, settings: Option<&str>) -> Result<Session, String> {
+        let library = Self::parse_optional(library, "library")?;
+        let settings = Self::parse_optional(settings, "settings")?;
+        Ok(Session {
+            library,
+            settings,
+            library_dirty: false,
+            settings_dirty: false,
+            ..Session::default()
+        })
+    }
+
+    fn parse_optional<T>(text: Option<&str>, label: &str) -> Result<T, String>
+    where
+        T: Default,
+        T: for<'de> Deserialize<'de>,
+    {
+        match text {
+            None => Ok(T::default()),
+            Some(raw) if raw.trim().is_empty() => Ok(T::default()),
+            Some(raw) => serde_json::from_str(raw)
+                .map_err(|e| format!("{} corrupted: {e}: {}", label, truncate_snippet(raw))),
         }
     }
 
@@ -533,6 +570,17 @@ impl Session {
                 now,
                 offset_minutes,
             } => {
+                // Неизвестная или удалённая карточка — не тренировка: ни
+                // карточка не меняется, ни календарь не двигается.
+                let exists = self
+                    .library
+                    .cards
+                    .iter()
+                    .any(|card| card.id == card_id && !card.deleted);
+                if !exists {
+                    return Outcome::default();
+                }
+
                 let intensity = self.settings.review_intensity();
                 let ease = self.settings.ease();
                 let next = ops::update_card(&self.library, &card_id, |card| {
@@ -849,6 +897,16 @@ fn exercises() -> &'static [Exercise] {
     EXERCISES.get_or_init(|| crate::grammar::exercises(Lexicon::embedded()))
 }
 
+fn truncate_snippet(raw: &str) -> String {
+    const MAX: usize = 80;
+    let mut snippet: String = raw.chars().take(MAX).collect();
+    if raw.chars().count() > MAX {
+        snippet.push('…');
+    }
+    // Однострочный превью: переносы мешают чтению ошибки.
+    snippet.replace('\n', " ").replace('\r', " ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -867,9 +925,63 @@ mod tests {
     #[test]
     fn битое_состояние_не_мешает_открыть_приложение() {
         // Падение на старте не оставило бы читателю ничего.
+        // Legacy `open` намеренно ленient: сохраняет совместимость.
         let session = Session::open(Some("{это не json"), Some("тоже не json"));
         assert!(session.library.books.is_empty());
         assert_eq!(session.settings, AppSettings::default());
+    }
+
+    #[test]
+    fn strict_открытие_отличает_пустое_от_битого() {
+        // None / empty / whitespace => Ok(Default)
+        assert!(Session::try_open(None, None).is_ok());
+        assert!(Session::try_open(Some(""), Some("   \n\t")).is_ok());
+        assert!(Session::try_open(Some("   "), None).is_ok());
+        // valid json => ok
+        assert!(Session::try_open(Some("{}"), Some("{}")).is_ok());
+        // corrupted => Err containing label
+        let err = Session::try_open(Some("{это не json"), None).unwrap_err();
+        assert!(err.contains("library"), "ожидали library в ошибке: {err}");
+        let err = Session::try_open(None, Some("{bad")).unwrap_err();
+        assert!(err.contains("settings"), "ожидали settings в ошибке: {err}");
+        // legacy open still defaults
+        let legacy = Session::open(Some("{bad"), Some("{bad"));
+        assert!(legacy.library.books.is_empty());
+    }
+
+    #[test]
+    fn corrupted_json_не_перезаписывает_библиотеку_молча() {
+        let corrupted = Some("{ corrupted json ");
+        let result = Session::open_strict(corrupted, Some("{}"));
+        assert!(result.is_err(), "битый JSON должен быть ошибкой, а не Default");
+        let err_msg = result.unwrap_err();
+        assert!(
+            err_msg.contains("library corrupted"),
+            "ошибка должна указывать library: {err_msg}"
+        );
+        // Клиент обязан проверить Err и показать восстановление, а не сохранять Default.
+    }
+
+    #[test]
+    fn пустой_файл_считается_отсутствием_а_не_ошибкой() {
+        for empty in [None, Some(""), Some("   "), Some("\n\t ")] {
+            let session =
+                Session::try_open(empty, empty).expect("пустое должно быть Default");
+            assert!(session.library.books.is_empty());
+            assert_eq!(session.settings, AppSettings::default());
+            assert!(!session.library_dirty);
+            assert!(!session.settings_dirty);
+        }
+    }
+
+    #[test]
+    fn валидный_json_читается_строго() {
+        let lib = r#"{"books":[{"id":"b1","title":"Test","addedAt":1}],"cards":[],"shelves":[],"cursor":0,"revision":1}"#;
+        let settings = r#"{"theme":"Oled"}"#;
+        let session =
+            Session::try_open(Some(lib), Some(settings)).expect("валидный должен читаться");
+        assert_eq!(session.library.books.len(), 1);
+        assert_eq!(session.settings.theme, "Oled");
     }
 
     #[test]
@@ -955,6 +1067,21 @@ mod tests {
         assert_eq!(session.settings.answers, 1);
         assert_eq!(session.settings.right, 1);
         assert!(session.settings_dirty);
+    }
+
+    #[test]
+    fn неизвестная_карточка_не_считается_тренировкой() {
+        let mut session = сессия();
+        // Карточки c1 нет — review обязан быть no-op, а не +1 к streak.
+        let outcome = session.run(команда(
+            r#"{"op":"review","cardId":"nope","right":true,"now":1700000000000,"offsetMinutes":180}"#,
+        ));
+        assert!(!outcome.changed, "неизвестная карточка сдвинула состояние");
+        assert!(!session.library_dirty, "библиотека помечена грязной зря");
+        assert!(!session.settings_dirty, "настройки помечены грязными зря");
+        assert_eq!(session.settings.answers, 0, "ответ засчитан без карточки");
+        assert_eq!(session.settings.streak_days, 0, "серия сдвинулась без карточки");
+        assert_eq!(session.library.cards.len(), 0);
     }
 
     #[test]

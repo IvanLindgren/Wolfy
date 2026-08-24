@@ -55,10 +55,10 @@ import {
   SETTINGS_PATH,
   bookPath,
   readBook,
-  readState,
+  readStateRaw,
   removeFile,
   saveBook,
-  writeFile,
+  writeStateAtomic,
 } from '../src/storage/opfs'
 
 /** Что известно сразу после запуска ядра. */
@@ -96,11 +96,104 @@ async function ensure(): Promise<void> {
   if (!ready) {
     ready = (async () => {
       await init({ module_or_path: wasmUrl })
-      const state = await readState()
-      session = new WolfySession(state.library ?? undefined, state.settings ?? undefined)
+      const raw = await readStateRaw()
+
+      // P12: corrupted JSON must not silently become empty library.
+      // Try strict open with primary first, then fallback to backup combos.
+      // At startup: primary valid -> primary, primary broken + backup valid -> backup,
+      // оба broken -> explicit error/recovery UI, а не молчаливый Default.
+      const candidates: Array<{ lib: string | null; set: string | null }> = [
+        { lib: raw.libraryPrimary, set: raw.settingsPrimary },
+        { lib: raw.libraryBackup, set: raw.settingsPrimary },
+        { lib: raw.libraryPrimary, set: raw.settingsBackup },
+        { lib: raw.libraryBackup, set: raw.settingsBackup },
+      ]
+
+      // Быстрый путь: если primary не битый по JSON-синтаксису, пробуем его сначала.
+      // Остальные кандидаты пойдут при исключении из tryNew.
+      let lastError: unknown = null
+      let opened = false
+      let recoveredFromBackup = false
+      for (const c of candidates) {
+        try {
+          // WolfySession.tryNew отсутствует в старых сборках wasm — падаем в lenient.
+          const tryNew = (WolfySession as unknown as {
+            tryNew?: (lib?: string, set?: string) => WolfySession
+          }).tryNew
+          if (typeof tryNew === 'function') {
+            session = tryNew.call(WolfySession, c.lib ?? undefined, c.set ?? undefined)
+          } else {
+            // Fallback для старой wasm без strict: пробуем lenient только если
+            // primary не был битым по нашей JS-проверке (чтобы не маскировать битый).
+            const isLibCorrupted =
+              c.lib !== null && c.lib.trim() !== '' && !isValidJson(c.lib)
+            const isSetCorrupted =
+              c.set !== null && c.set.trim() !== '' && !isValidJson(c.set)
+            if (isLibCorrupted || isSetCorrupted) continue
+            session = new WolfySession(c.lib ?? undefined, c.set ?? undefined)
+          }
+          if (c.lib !== raw.libraryPrimary || c.set !== raw.settingsPrimary) {
+            console.warn('Session recovered from backup slot', c)
+            recoveredFromBackup = true
+          }
+          opened = true
+          // Heal primary from backup while we have the good data in memory.
+          // Следующий `persist` тоже залечит, но если пользователь не сделает
+          // изменений, primary остался бы битым до следующего запуска.
+          if (recoveredFromBackup && session) {
+            try {
+              const cur = session
+              if (c.lib !== raw.libraryPrimary) {
+                await writeStateAtomic(LIBRARY_PATH, cur.library())
+              }
+              if (c.set !== raw.settingsPrimary) {
+                await writeStateAtomic(SETTINGS_PATH, cur.settings())
+              }
+            } catch (e) {
+              console.warn('Failed to heal primary from backup', e)
+            }
+          }
+          break
+        } catch (e) {
+          lastError = e
+          continue
+        }
+      }
+
+      if (!opened) {
+        const hasAnyData = [
+          raw.libraryPrimary,
+          raw.libraryBackup,
+          raw.settingsPrimary,
+          raw.settingsBackup,
+        ].some((v) => v !== null && v.trim() !== '')
+        if (hasAnyData) {
+          throw new Error(
+            `Состояние библиотеки повреждено и не восстановлено из бэкапа: ${String(lastError)}`,
+          )
+        }
+        // Совсем нет данных — первый запуск, открываем пустую сессию.
+        const tryNew = (WolfySession as unknown as {
+          tryNew?: (lib?: string, set?: string) => WolfySession
+        }).tryNew
+        if (typeof tryNew === 'function') {
+          session = tryNew.call(WolfySession, undefined, undefined)
+        } else {
+          session = new WolfySession(undefined, undefined)
+        }
+      }
     })()
   }
   return ready
+}
+
+function isValidJson(s: string): boolean {
+  try {
+    JSON.parse(s)
+    return true
+  } catch {
+    return false
+  }
 }
 
 function current(): WolfySession {
@@ -109,19 +202,23 @@ function current(): WolfySession {
 }
 
 /**
- * Записывает то, что ядро назвало изменившимся.
+ * Записывает то, что ядро назвало изменившимся — атомарно для маленького состояния.
  *
  * Именно то, а не всё: переписывать настройки при каждой прокрутке страницы и
  * библиотеку при каждой смене темы значит гонять диск впустую. Что изменилось,
  * знает только ядро — повторное сохранение слова, которое уже в колоде, не
  * меняет ничего.
+ * Для library/settings/practice используется двухслотовая схема
+ * (`writeStateAtomic` -> primary + `.bak`): `truncate(0)->write` на OPFS не
+ * crash-атомарна и без неё битый файл молча стал бы пустой библиотекой (P12).
+ * Книги (`books/*`) пишутся обычным `writeFile` — они большие.
  */
 async function persist(outcome: Outcome): Promise<void> {
   if (!outcome.changed) return
   const core = current()
   const writes: Promise<unknown>[] = []
-  if (outcome.libraryChanged) writes.push(writeFile(LIBRARY_PATH, core.library()))
-  if (outcome.settingsChanged) writes.push(writeFile(SETTINGS_PATH, core.settings()))
+  if (outcome.libraryChanged) writes.push(writeStateAtomic(LIBRARY_PATH, core.library()))
+  if (outcome.settingsChanged) writes.push(writeStateAtomic(SETTINGS_PATH, core.settings()))
   await Promise.all(writes)
   core.saved(outcome.libraryChanged, outcome.settingsChanged)
 }

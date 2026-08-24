@@ -60,6 +60,8 @@ const DEFAULT_SETTINGS: AppSettings = {
 export interface SessionState {
   /** Поднялось ли ядро. До этого экраны рисуют скелет, а не спиннер. */
   ready: boolean
+  /** Ошибка старта: повреждённое состояние, которое не восстановлено из бэкапа. */
+  bootError: string | null
   /** Версия ядра — показывается в диагностике настроек. */
   version: string
   /** Готов ли лексикон: без него разбор слова отвечает «не знаю». */
@@ -78,6 +80,7 @@ export interface SessionState {
 
 export const useSession = create<SessionState>((set, get) => ({
   ready: false,
+  bootError: null,
   version: '',
   lexicon: false,
   dictionary: false,
@@ -86,15 +89,17 @@ export const useSession = create<SessionState>((set, get) => ({
 
   async boot() {
     if (get().ready) return
-    const boot = await bridge.boot()
-    set({
-      ready: true,
-      version: boot.version,
-      lexicon: boot.lexicon,
-      dictionary: boot.dictionary,
-      library: boot.library,
-      settings: boot.settings,
-    })
+    try {
+      const boot = await bridge.boot()
+      set({
+        ready: true,
+        bootError: null,
+        version: boot.version,
+        lexicon: boot.lexicon,
+        dictionary: boot.dictionary,
+        library: boot.library,
+        settings: boot.settings,
+      })
 
     // Лексикон догоняет уже открытое приложение: книга читается и без него,
     // а первый тап по слову случится не в первую секунду.
@@ -103,6 +108,14 @@ export const useSession = create<SessionState>((set, get) => ({
     // второй раз незачем.
     if (boot.dictionary) {
       void bridge.restoreDictionary().then((ok) => set({ dictionary: ok }))
+    }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e)
+      set({ bootError: message })
+      // Явно не ставим ready: приложение покажет ошибку восстановления,
+      // а не пустую библиотеку. Клиент не должен после ошибки автоматически
+      // сохранять пустое состояние поверх повреждённого (P12).
+      throw e
     }
   },
 

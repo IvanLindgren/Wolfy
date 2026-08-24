@@ -46,6 +46,7 @@ internal interface CoreLibrary : Library {
     fun wolfy_book_close(handle: Long)
 
     fun wolfy_session_open(library: ByteArray?, settings: ByteArray?): Long
+    fun wolfy_session_open_strict(library: ByteArray?, settings: ByteArray?): Long
     fun wolfy_session_run(handle: Long, command: ByteArray): Pointer?
     fun wolfy_session_library(handle: Long): Pointer?
     fun wolfy_session_settings(handle: Long): Pointer?
@@ -127,6 +128,14 @@ internal class JnaWolfyCore(private val library: CoreLibrary) : WolfyCore {
         val handle = this.library.wolfy_session_open(library?.toUtf8(), settings?.toUtf8())
         if (handle == 0L) {
             throw CoreException(lastError() ?: "сессия не открылась")
+        }
+        return handle
+    }
+
+    override fun openSessionStrict(library: String?, settings: String?): Long {
+        val handle = this.library.wolfy_session_open_strict(library?.toUtf8(), settings?.toUtf8())
+        if (handle == 0L) {
+            throw CoreException(lastError() ?: "сессия не открылась (strict): повреждённый JSON")
         }
         return handle
     }

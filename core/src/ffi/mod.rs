@@ -428,12 +428,15 @@ fn clear_error() {
 
 // --- сессия: библиотека и настройки ---
 
-/// Открывает сессию на сохранённом состоянии.
+/// Открывает сессию на сохранённом состоянии (lenient, legacy).
 ///
 /// Оба аргумента — записи, прочитанные клиентом с диска, или `null`, если их
-/// ещё нет. Битую запись ядро молча заменяет пустой: падение на старте не
-/// оставило бы читателю ничего, а так приложение откроется, и книги, лежащие
-/// на диске, добавляются заново.
+/// ещё нет. Битую запись молча заменяет пустой: падение на старте не оставило
+/// бы читателю ничего, а так приложение откроется. Для нового кода, где
+/// повреждение обязано быть видимым, используйте [`wolfy_session_open_strict`]:
+/// `null`/пустая запись -> Default, а непустая битая -> ошибка и `0`.
+/// Клиент после ошибки не должен автоматически сохранять пустое состояние
+/// поверх повреждённого.
 ///
 /// Возвращает номер сессии или ноль при ошибке.
 ///
@@ -468,6 +471,57 @@ pub unsafe extern "C" fn wolfy_session_open(
         Ok(None) => 0,
         Err(_) => {
             set_error("ядро не смогло открыть сессию");
+            0
+        }
+    }
+}
+
+/// Строгое открытие сессии: отличает «файла нет» от «файл повреждён».
+///
+/// - `null` / пустая строка / whitespace -> `Default` (файла нет, ок)
+/// - валидный JSON -> распарсенное состояние
+/// - непустой битый JSON -> ошибка, возвращает `0` и кладёт описание в
+///   [`wolfy_last_error`] (`library corrupted: ...` или `settings corrupted: ...`).
+/// Клиент после такой ошибки не должен автоматически сохранять пустое
+/// состояние поверх повреждённого; вместо этого показать восстановление
+/// (primary valid -> primary, primary broken + backup valid -> backup,
+/// оба broken -> явная ошибка/recovery UI).
+///
+/// # Safety
+/// `library` и `settings` — либо `null`, либо корректные UTF-8 строки с нулём
+/// на конце.
+#[no_mangle]
+pub unsafe extern "C" fn wolfy_session_open_strict(
+    library: *const c_char,
+    settings: *const c_char,
+) -> i64 {
+    let opened = catch_unwind(AssertUnwindSafe(|| {
+        let library = unsafe { read_optional(library) };
+        let settings = unsafe { read_optional(settings) };
+        let session = match Session::try_open(library.as_deref(), settings.as_deref()) {
+            Ok(s) => s,
+            Err(e) => {
+                set_error(&e);
+                return None;
+            }
+        };
+
+        let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
+        let mut guard = SESSIONS.lock().ok()?;
+        guard
+            .get_or_insert_with(HashMap::new)
+            .insert(handle, session);
+        Some(handle)
+    }));
+
+    match opened {
+        Ok(Some(handle)) => {
+            clear_error();
+            handle
+        }
+        Ok(None) => 0,
+        Err(_) => {
+            set_error("ядро не смогло открыть сессию (strict)");
             0
         }
     }

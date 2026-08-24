@@ -1,9 +1,12 @@
 package com.wolfy.data.library
 
 import java.io.File
-import java.security.MessageDigest
+import java.io.FileOutputStream
+import java.nio.channels.FileChannel
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
+import java.security.MessageDigest
 import java.util.zip.GZIPInputStream
 
 /**
@@ -22,25 +25,85 @@ internal class FileLibraryStore(private val directory: File) : LibraryStore {
         file(name).takeIf { it.isFile }?.readText(Charsets.UTF_8)
 
     /**
-     * Запись через временный файл.
+     * Запись через временный файл с fsync.
      *
      * Прямая запись оставила бы пользователя без библиотеки, если приложение
      * закроют посреди неё: файл уже обрезан, а новое содержимое ещё не
-     * дописано. Переименование же на всех поддерживаемых системах атомарно.
+     * дописано. Переименование же на всех поддерживаемых системах атомарно,
+     * но только после того, как временный файл гарантированно сброшен на диск.
+     * Поэтому временный файл пишется через `FileDescriptor.sync()`, а после
+     * переименования синхронизируется и каталог — иначе перезапись может
+     * потеряться при сбое питания до сброса журнала файловой системы.
      */
     override fun save(name: String, json: String) {
         directory.mkdirs()
         val index = file(name)
         val temporary = File(directory, "$name.json.tmp")
-        temporary.writeText(json, Charsets.UTF_8)
-        if (!temporary.renameTo(index)) {
-            // На Windows переименование поверх существующего файла срывается.
-            // Терять при этом уже записанное нельзя, поэтому копируем.
+        val bytes = json.toByteArray(Charsets.UTF_8)
+        var fos: FileOutputStream? = null
+        try {
+            fos = FileOutputStream(temporary)
+            fos.write(bytes)
+            fos.fd.sync()
+            fos.close()
+            fos = null
+
+            // Попытка атомарной замены — идеальный случай.
+            try {
+                Files.move(
+                    temporary.toPath(),
+                    index.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING,
+                )
+                try {
+                    FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { it.force(true) }
+                } catch (_: Exception) {}
+                return
+            } catch (_: Exception) {
+                // Не все ФС умеют ATOMIC_MOVE (например, разные точки монтирования).
+            }
+
+            // Неатомарная, но всё ещё replace — безопаснее delete+rename.
+            try {
+                Files.move(
+                    temporary.toPath(),
+                    index.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING,
+                )
+                try {
+                    FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { it.force(true) }
+                } catch (_: Exception) {}
+                return
+            } catch (_: Exception) {
+                // Падаем в ручной fallback ниже.
+            }
+
+            // Ручной fallback для Windows, где renameTo не перезаписывает.
             index.delete()
             if (!temporary.renameTo(index)) {
-                index.writeText(json, Charsets.UTF_8)
-                temporary.delete()
+                // Последний шанс — прямая запись с fsync (не атомарно, но лучше потери).
+                FileOutputStream(index).use { out ->
+                    out.write(bytes)
+                    out.fd.sync()
+                }
+                try {
+                    FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { it.force(true) }
+                } catch (_: Exception) {}
+            } else {
+                // renameTo сработал после delete — синхронизируем результат.
+                try {
+                    FileOutputStream(index).use { it.fd.sync() }
+                    FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { it.force(true) }
+                } catch (_: Exception) {}
             }
+        } finally {
+            try {
+                fos?.close()
+            } catch (_: Exception) {}
+            // Временный файл должен исчезнуть в любом случае; если move удался,
+            // его уже нет, иначе подчищаем.
+            temporary.delete()
         }
     }
 

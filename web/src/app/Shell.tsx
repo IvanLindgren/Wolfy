@@ -54,8 +54,54 @@ export function Shell() {
   const path = useRouterState({ select: (state) => state.location.pathname })
   const settings = useSession((state) => state.settings)
   const ready = useSession((state) => state.ready)
+  const bootError = useSession((state) => state.bootError)
   const due = useDueCount()
   const account = useAccount()
+
+  // P12: повреждённое состояние не должно молча становиться пустой библиотекой.
+  // Если и primary, и backup битые — показываем явную ошибку восстановления,
+  // а не пустой экран. Клиент после ошибки не сохраняет пустое состояние
+  // поверх повреждённого.
+  if (bootError) {
+    return (
+      <div className={styles.shell}>
+        <div style={{ padding: 32, maxWidth: 560, margin: '40px auto' }}>
+          <h1 style={{ fontSize: 24, marginBottom: 12 }}>Библиотека повреждена</h1>
+          <p style={{ whiteSpace: 'pre-wrap', marginBottom: 16, opacity: 0.8 }}>
+            Состояние не прочиталось и не восстановилось из бэкапа: {bootError}
+            {'\n\n'}Книги на диске остались, но список и колоды не загрузились.
+            Попробуйте перезагрузить вкладку. Если не помогает — очистите состояние
+            и добавьте книги заново (книги сами не удалятся, удалится только список).
+          </p>
+          <div style={{ display: 'flex', gap: 12 }}>
+            <button
+              type="button"
+              onClick={() => location.reload()}
+              style={{ padding: '8px 16px' }}
+            >
+              Перезагрузить
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                if (!confirm('Очистить список книг, колоды и настройки в этом браузере? Книги-файлы останутся, но их придётся добавить заново.')) return
+                const { clearEverything } = await import('../storage/opfs')
+                const { clearAssets } = await import('../storage/assets')
+                const { clearCaches } = await import('../storage/idb')
+                await clearEverything()
+                await clearAssets()
+                await clearCaches()
+                location.reload()
+              }}
+              style={{ padding: '8px 16px', background: '#d32', color: '#fff', border: 'none' }}
+            >
+              Очистить состояние
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   const [cheatSheet, setCheatSheet] = useState(false)
   const [dropping, setDropping] = useState(false)

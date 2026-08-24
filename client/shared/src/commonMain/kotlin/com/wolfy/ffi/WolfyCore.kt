@@ -93,6 +93,19 @@ interface WolfyCore {
     fun openSession(library: String?, settings: String?): Long
 
     /**
+     * Строгое открытие: отличает «файла нет» от «файл повреждён».
+     *
+     * - `null` / empty / whitespace -> Default (файла нет, ок)
+     * - валидный JSON -> состояние
+     * - непустой битый JSON -> бросает [CoreException] (`library corrupted: ...`)
+     * Клиент после такой ошибки не должен автоматически сохранять пустое
+     * состояние поверх повреждённого; вместо этого показать восстановление:
+     * primary valid -> primary, primary broken + backup valid -> backup,
+     * оба broken -> явная ошибка/recovery UI.
+     */
+    fun openSessionStrict(library: String?, settings: String?): Long
+
+    /**
      * Выполняет команду над библиотекой или настройками.
      *
      * Одна функция вместо двадцати намеренно: каждая функция границы

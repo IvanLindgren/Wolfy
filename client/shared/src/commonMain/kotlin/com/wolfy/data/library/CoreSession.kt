@@ -41,10 +41,33 @@ class CoreSession(
     private val core: WolfyCore,
     private val store: LibraryStore,
 ) {
-    private val handle: Long = core.openSession(
-        library = store.load(LIBRARY),
-        settings = store.load(SETTINGS),
-    )
+    // Строгое открытие: `null`/empty -> Default, а непустой битый JSON -> ошибка,
+    // а не молчаливый Default. После ошибки клиент не должен автоматически
+    // сохранять пустое состояние поверх повреждённого (P12). Нативный atomic
+    // save (temp -> fsync -> rename) уже гарантирует, что обрыв записи не
+    // оставит обрезанный файл, а strict гарантирует, что бит rot не станет
+    // пустой библиотекой.
+    private val handle: Long = try {
+        core.openSessionStrict(
+            library = store.load(LIBRARY),
+            settings = store.load(SETTINGS),
+        )
+    } catch (e: Exception) {
+        // Совместимость: если strict недоступен (старое ядро) — падаем в lenient.
+        // Но если strict бросил из-за повреждённого JSON, не маскируем ошибку
+        // пустым состоянием: пробрасываем её наверх, чтобы WolfyApplication
+        // показал explicit error, а не перезаписал файл пустым.
+        val msg = e.message.orEmpty()
+        if (msg.contains("corrupted") || msg.contains("corrupted") || msg.contains("поврежд")) {
+            throw e
+        }
+        // Fallback для ядер без strict (например, в тестах с моком).
+        try {
+            core.openSession(store.load(LIBRARY), store.load(SETTINGS))
+        } catch (_: Exception) {
+            throw e
+        }
+    }
 
     private val _library = MutableStateFlow(readLibrary())
     val library: StateFlow<LibraryState> = _library.asStateFlow()

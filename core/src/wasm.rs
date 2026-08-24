@@ -185,16 +185,40 @@ pub struct WolfySession {
 
 #[wasm_bindgen]
 impl WolfySession {
-    /// Открывает сессию на сохранённом состоянии.
+    /// Открывает сессию на сохранённом состоянии (lenient, legacy).
     ///
-    /// Битую запись ядро молча заменяет пустой: падение на старте не оставило
-    /// бы читателю ничего, а так приложение откроется, и книги, лежащие в
-    /// хранилище браузера, добавятся заново.
+    /// Битую запись молча заменяет пустой: падение на старте не оставило бы
+    /// читателю ничего, а так приложение откроется. Для нового кода, где
+    /// повреждение обязано быть видимым, используйте `tryNew`/`openStrict`:
+    /// `None`/пустая запись -> Default, а непустая битая -> Err. Клиент после
+    /// Err не должен автоматически сохранять пустое состояние поверх повреждённого.
     #[wasm_bindgen(constructor)]
     pub fn new(library: Option<String>, settings: Option<String>) -> WolfySession {
         WolfySession {
             inner: Session::open(library.as_deref(), settings.as_deref()),
         }
+    }
+
+    /// Строгое открытие: отличает «файла нет» от «файл повреждён».
+    ///
+    /// - `None` / `Some("")` / whitespace -> `Ok(Default)`
+    /// - валидный JSON -> `Ok(Session)`
+    /// - непустой битый JSON -> `Err("library corrupted: ...")` или
+    ///   `Err("settings corrupted: ...")`.
+    /// Используется на старте с двух-слотовой/журнальной схемой: primary valid
+    /// -> primary, primary broken + backup valid -> backup, оба broken -> явная
+    /// ошибка/recovery UI, а не молчаливый Default.
+    #[wasm_bindgen(js_name = tryNew)]
+    pub fn try_new(library: Option<String>, settings: Option<String>) -> Result<WolfySession, JsError> {
+        let inner = Session::try_open(library.as_deref(), settings.as_deref())
+            .map_err(|e| JsError::new(&e))?;
+        Ok(WolfySession { inner })
+    }
+
+    /// Алиас [`try_new`]: strict open.
+    #[wasm_bindgen(js_name = openStrict)]
+    pub fn open_strict(library: Option<String>, settings: Option<String>) -> Result<WolfySession, JsError> {
+        Self::try_new(library, settings)
     }
 
     /// Выполняет команду. Та же команда, что уходит в `wolfy_session_run`.

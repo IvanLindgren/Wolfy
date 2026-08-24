@@ -162,16 +162,116 @@ export async function readBook(path: string): Promise<Uint8Array | null> {
 
 export const LIBRARY_PATH = `${STATE}/library.json`
 export const SETTINGS_PATH = `${STATE}/settings.json`
+export const LIBRARY_BACKUP = `${LIBRARY_PATH}.bak`
+export const SETTINGS_BACKUP = `${SETTINGS_PATH}.bak`
+
+/**
+ * Атомарная запись маленького состояния (library/settings/practice).
+ *
+ * OPFS `truncate(0) -> write` не является crash-атомарной: если вкладку
+ * убить между усечением и записью, файл останется пустым/оборванным и
+ * следующее открытие получило бы пустую библиотеку. Для многомегабайтных
+ * книг такой трюк не нужен, а для килобайтных JSON делаем двухслотовую
+ * схему: пишем primary, затем `.bak` с тем же содержимым. При чтении
+ * primary valid -> primary, primary broken + backup valid -> backup,
+ * оба broken -> явная ошибка, а не молчаливый Default (P12).
+ * Книги (`books/*`) пишутся обычным `writeFile` — они большие и не
+ * относятся к atomic state persistence.
+ */
+export async function writeStateAtomic(path: string, data: string): Promise<void> {
+  await writeFile(path, data)
+  const backup = `${path}.bak`
+  try {
+    await writeFile(backup, data)
+  } catch (e) {
+    // Backup — best-effort: primary уже на диске, а потеря бэкапа не
+    // означает потерю данных, лишь потерю страховки на следующий сбой.
+    console.warn(`Failed to write backup for ${path}`, e)
+  }
+}
+
+function isEmptyText(s: string | null): boolean {
+  return s === null || s.trim() === ''
+}
+
+function isValidJsonText(s: string | null): boolean {
+  if (isEmptyText(s)) return true // пустое трактуется как Default, а не битое
+  try {
+    JSON.parse(s!)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Читает сырые primary + backup для восстановления.
+ *
+ * Возвращает все четыре строки; выбор лучшего делает вызывающий через
+ * strict-открытие Rust (чтобы проверка была канонической, а не дублированной
+ * в JS). Для быстрой предпроверки можно использовать `isValidJsonText`.
+ */
+export async function readStateRaw(): Promise<{
+  libraryPrimary: string | null
+  libraryBackup: string | null
+  settingsPrimary: string | null
+  settingsBackup: string | null
+}> {
+  const [libraryPrimary, libraryBackup, settingsPrimary, settingsBackup] =
+    await Promise.all([
+      readText(LIBRARY_PATH),
+      readText(LIBRARY_BACKUP),
+      readText(SETTINGS_PATH),
+      readText(SETTINGS_BACKUP),
+    ])
+  return { libraryPrimary, libraryBackup, settingsPrimary, settingsBackup }
+}
+
+/**
+ * Читает состояние с восстановлением из бэкапа на уровне JS-валидации.
+ *
+ * Пытается primary, при битой JSON-синтаксисе падает в backup. Окончательная
+ * проверка (serde) всё равно делается в Rust strict, но 99% синтаксических
+ * повреждений ловятся уже здесь без вызова WASM.
+ */
+export async function readStateWithRecovery(): Promise<{
+  library: string | null
+  settings: string | null
+  recoveredFromBackup: boolean
+  backupUsedFor: ('library' | 'settings')[]
+}> {
+  const raw = await readStateRaw()
+  let library = raw.libraryPrimary
+  let settings = raw.settingsPrimary
+  const backupUsedFor: ('library' | 'settings')[] = []
+
+  if (!isValidJsonText(library) && isValidJsonText(raw.libraryBackup)) {
+    library = raw.libraryBackup
+    backupUsedFor.push('library')
+  } else if (!isValidJsonText(library) && !isValidJsonText(raw.libraryBackup) && !isEmptyText(library)) {
+    // обе битые — оставляем primary, чтобы Rust вернул явную ошибку
+  }
+
+  if (!isValidJsonText(settings) && isValidJsonText(raw.settingsBackup)) {
+    settings = raw.settingsBackup
+    backupUsedFor.push('settings')
+  }
+
+  return {
+    library,
+    settings,
+    recoveredFromBackup: backupUsedFor.length > 0,
+    backupUsedFor,
+  }
+}
 
 export async function readState(): Promise<{
   library: string | null
   settings: string | null
 }> {
-  const [library, settings] = await Promise.all([
-    readText(LIBRARY_PATH),
-    readText(SETTINGS_PATH),
-  ])
-  return { library, settings }
+  // Для совместимости: старый readState теперь делает recovery.
+  const recovered = await readStateWithRecovery()
+  return { library: recovered.library, settings: recovered.settings }
 }
 
 // --- Место -----------------------------------------------------------------
