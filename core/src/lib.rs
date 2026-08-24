@@ -29,6 +29,7 @@ pub mod grammar;
 pub mod lexicon;
 pub mod library;
 pub mod parser;
+pub mod practice;
 pub mod settings;
 pub mod srs;
 pub mod tagger;

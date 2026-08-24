@@ -71,6 +71,10 @@ pub struct AppSettings {
     /// День, а не момент: серия считается по календарю читателя. Позанимался
     /// в полночь и в час ночи — это два дня подряд, и спорить с его
     /// календарём приложению не с руки.
+    ///
+    /// Deprecated по §6: тренировка вынесена в `PracticeState` (CRDT).
+    /// Поле оставлено для чтения старых файлов и миграции, новые записи
+    /// пишутся через `PracticeState`. LWW-слияние его игнорирует.
     #[serde(default)]
     pub trained_on: i64,
     #[serde(default)]
@@ -80,6 +84,8 @@ pub struct AppSettings {
     /// Хранится отдельно и никогда не уменьшается: пропущенный день обнуляет
     /// текущую серию, но не отменяет того, что три недели подряд
     /// действительно были.
+    ///
+    /// Deprecated по §6: см. `trained_on`.
     #[serde(default)]
     pub best_streak: i32,
     /// Сколько ответов дано всего и сколько из них верных.
@@ -87,6 +93,8 @@ pub struct AppSettings {
     /// Два числа вместо истории ответов: расписание спрашивает у них только
     /// долю верных ([`scheduler::ease`]), а история в тысячу записей ездила
     /// бы между устройствами каждую синхронизацию ради одного дробного числа.
+    ///
+    /// Deprecated по §6: см. `trained_on`.
     #[serde(default)]
     pub answers: i32,
     #[serde(default)]
@@ -140,10 +148,40 @@ impl AppSettings {
     ///
     /// Признак «клали ли демо-книгу» при этом остаётся местным: он про то,
     /// что происходило на *этом* устройстве, и приезжать ему неоткуда.
+    /// То же и с тренировкой по §6: она живёт в `PracticeState` как CRDT,
+    /// а не LWW. Старые поля `trained_on`/`streak_days`/`best_streak`/
+    /// `answers`/`right` нельзя накатывать поверх локальных — иначе
+    /// `answers 100 -> 80` и сегодняшняя тренировка исчезает.
     pub fn replaced_by(&self, incoming: &AppSettings) -> AppSettings {
         AppSettings {
             demo_added: self.demo_added,
+            trained_on: self.trained_on,
+            streak_days: self.streak_days,
+            best_streak: self.best_streak,
+            answers: self.answers,
+            right: self.right,
             ..incoming.clone()
+        }
+    }
+
+    /// Есть ли legacy-тренировка, которую нужно мигрировать в `PracticeState`.
+    pub fn has_legacy_training(&self) -> bool {
+        self.trained_on != 0
+            || self.streak_days != 0
+            || self.best_streak != 0
+            || self.answers != 0
+            || self.right != 0
+    }
+
+    /// Возвращает копию с обнулёнными legacy-полями тренировки (§6).
+    pub fn cleared_legacy(&self) -> AppSettings {
+        AppSettings {
+            trained_on: 0,
+            streak_days: 0,
+            best_streak: 0,
+            answers: 0,
+            right: 0,
+            ..self.clone()
         }
     }
 

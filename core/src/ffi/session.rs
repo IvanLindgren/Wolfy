@@ -30,6 +30,7 @@ use crate::grammar::Exercise;
 use crate::lexicon::Lexicon;
 use crate::library::book::{LibraryBook, LibraryState, Shelf};
 use crate::library::{merge, ops};
+use crate::practice::PracticeState;
 use crate::settings::AppSettings;
 use crate::srs::drill::Drill;
 use crate::srs::{chunks, drill, scheduler, training, Card};
@@ -39,6 +40,7 @@ use crate::srs::{chunks, drill, scheduler, training, Card};
 pub struct Session {
     pub library: LibraryState,
     pub settings: AppSettings,
+    pub practice: PracticeState,
     /// Менялось ли с последней записи на диск.
     ///
     /// Считает ядро, а не клиент: только оно знает, изменила ли команда хоть
@@ -46,6 +48,7 @@ pub struct Session {
     /// не меняет — и записывать библиотеку заново из-за него незачем.
     pub library_dirty: bool,
     pub settings_dirty: bool,
+    pub practice_dirty: bool,
     /// Скачанный словарь держится открытым между тапами. Путь хранится рядом,
     /// чтобы новый файл после обновления можно было открыть без перезапуска
     /// приложения.
@@ -164,12 +167,17 @@ pub enum Command {
     /// Одной командой, а не двумя, потому что это одно событие. Двумя оно
     /// разъезжалось бы: ответ засчитан в серию, а карточка не пересчитана —
     /// и наоборот.
+    /// `device_id` — постоянный ID устройства/реплики, приходит снаружи.
+    /// Пустой `device_id` трактуется как `"legacy"` для совместимости
+    /// со старыми клиентами/тестами.
     Review {
         card_id: String,
         right: bool,
         now: i64,
         #[serde(default)]
         offset_minutes: i32,
+        #[serde(default)]
+        device_id: String,
     },
 
     /// Карточки, которым пора.
@@ -261,6 +269,18 @@ pub enum Command {
     Migrate {
         fresh_ids: Vec<String>,
     },
+
+    /// Тренировка как отдельный CRDT (§6): получить текущее состояние.
+    GetPractice,
+
+    /// Слить чужое practice-состояние (CRDT merge: set union + max counters).
+    ///
+    /// Используется во время синхронизации: сервер хранит per-device blobs
+    /// и отдаёт их клиенту пачкой, клиент скармливает их сюда по одному.
+    /// Идемпотентно, коммутативно, ассоциативно.
+    MergePractice {
+        practice: Box<PracticeState>,
+    },
 }
 
 /// Снимок отправки в том виде, в каком его держит клиент.
@@ -288,6 +308,7 @@ pub struct Outcome {
     /// прокрутке страницы и библиотеку при каждой смене темы.
     pub library_changed: bool,
     pub settings_changed: bool,
+    pub practice_changed: bool,
     /// Что делать с добавляемой книгой: `known`, `attach` или `fresh`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plan: Option<String>,
@@ -330,6 +351,9 @@ pub struct Outcome {
     /// причины, и только во втором случае клиенту нужен сетевой fallback.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dictionary_available: Option<bool>,
+    /// Текущая тренировка (§6) — для `GetPractice`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub practice: Option<PracticeState>,
 }
 
 impl Session {
@@ -348,8 +372,27 @@ impl Session {
         Self::try_open(library, settings).unwrap_or_else(|_| Session {
             library: LibraryState::default(),
             settings: AppSettings::default(),
+            practice: PracticeState::default(),
             library_dirty: false,
             settings_dirty: false,
+            practice_dirty: false,
+            ..Session::default()
+        })
+    }
+
+    /// Открывает сессию с явным practice (для нового кода с отдельным файлом).
+    pub fn open_with_practice(
+        library: Option<&str>,
+        settings: Option<&str>,
+        practice: Option<&str>,
+    ) -> Session {
+        Self::try_open_with_practice(library, settings, practice).unwrap_or_else(|_| Session {
+            library: LibraryState::default(),
+            settings: AppSettings::default(),
+            practice: PracticeState::default(),
+            library_dirty: false,
+            settings_dirty: false,
+            practice_dirty: false,
             ..Session::default()
         })
     }
@@ -363,15 +406,61 @@ impl Session {
         Self::open_strict(library, settings)
     }
 
+    /// Строгое открытие с practice.
+    pub fn try_open_with_practice(
+        library: Option<&str>,
+        settings: Option<&str>,
+        practice: Option<&str>,
+    ) -> Result<Session, String> {
+        Self::open_strict_with_practice(library, settings, practice)
+    }
+
     /// Строгое открытие (алиас [`try_open`]): corrupted JSON -> Err.
     pub fn open_strict(library: Option<&str>, settings: Option<&str>) -> Result<Session, String> {
+        Self::open_strict_with_practice(library, settings, None)
+    }
+
+    /// Строгое открытие с practice.
+    pub fn open_strict_with_practice(
+        library: Option<&str>,
+        settings: Option<&str>,
+        practice: Option<&str>,
+    ) -> Result<Session, String> {
         let library = Self::parse_optional(library, "library")?;
-        let settings = Self::parse_optional(settings, "settings")?;
+        let settings: AppSettings = Self::parse_optional(settings, "settings")?;
+        let mut practice: PracticeState = Self::parse_optional(practice, "practice")?;
+        // §6 migration: старые поля settings -> practice (идемпотентно).
+        // Если practice пустая и в settings есть legacy — мигрируем.
+        // Даже если practice непустая, merge legacy через max не удвоит.
+        let needs_migration = practice.needs_migration(&settings) || practice.is_empty() && settings.has_legacy_training();
+        if needs_migration {
+            practice.migrate_from_legacy(&settings);
+            // Помечаем practice как dirty, чтобы новый клиент записал practice.json.
+            // settings намеренно НЕ трогаем (не cleared_legacy) в переходный период:
+            // старый клиент, который ещё не умеет писать practice.json, должен
+            // сохранить данные в settings.json, откуда они снова мигрируются
+            // при следующем запуске, если practice.json отсутствует.
+            // Очистка legacy произойдёт позже отдельной миграцией, когда
+            // practice.json гарантированно на диске (явный Migrate).
+            practice.normalize();
+            return Ok(Session {
+                library,
+                settings,
+                practice,
+                library_dirty: false,
+                settings_dirty: false,
+                practice_dirty: true,
+                ..Session::default()
+            });
+        }
+        practice.normalize();
         Ok(Session {
             library,
             settings,
+            practice,
             library_dirty: false,
             settings_dirty: false,
+            practice_dirty: false,
             ..Session::default()
         })
     }
@@ -569,6 +658,7 @@ impl Session {
                 right,
                 now,
                 offset_minutes,
+                device_id,
             } => {
                 // Неизвестная или удалённая карточка — не тренировка: ни
                 // карточка не меняется, ни календарь не двигается.
@@ -582,15 +672,35 @@ impl Session {
                 }
 
                 let intensity = self.settings.review_intensity();
-                let ease = self.settings.ease();
+                // §6: поправка берётся из PracticeState totals (CRDT), а не LWW settings.
+                let ease = self.practice.ease();
                 let next = ops::update_card(&self.library, &card_id, |card| {
                     scheduler::review(card, right, intensity, ease, now)
                 });
                 self.change_library(next);
 
                 // Серия дней двигается тем же событием: ответ засчитан один
-                // раз и в карточку, и в календарь.
-                self.settings = self.settings.with_answer(right, now, offset_minutes);
+                // раз и в карточку, и в календарь (§6 CRDT).
+                self.practice
+                    .record_answer(&device_id, right, now, offset_minutes);
+                self.practice_dirty = true;
+                // Dual-write для переходного периода: старый клиент читает
+                // streak/answers из settings.json, и пока он не обновлён,
+                // данные должны оставаться там же.
+                self.settings.answers =
+                    self.practice.total_answers().min(i32::MAX as u64) as i32;
+                self.settings.right =
+                    self.practice.total_right().min(i32::MAX as u64) as i32;
+                self.settings.best_streak = self.practice.best_streak() as i32;
+                self.settings.trained_on = self
+                    .practice
+                    .days
+                    .iter()
+                    .next_back()
+                    .copied()
+                    .unwrap_or(0);
+                self.settings.streak_days =
+                    self.practice.current_streak(now, offset_minutes) as i32;
                 self.settings_dirty = true;
 
                 let card = self
@@ -599,9 +709,10 @@ impl Session {
                     .iter()
                     .find(|card| card.id == card_id)
                     .cloned();
+                let streak = self.practice.current_streak(now, offset_minutes) as i32;
                 self.done(Outcome {
                     card,
-                    streak: Some(self.settings.streak_days),
+                    streak: Some(streak),
                     ..Outcome::default()
                 })
             }
@@ -778,7 +889,46 @@ impl Session {
             Command::Migrate { fresh_ids } => {
                 let mut ids = fresh_ids.into_iter();
                 self.change_library(merge::migrate(&self.library, &mut ids));
+                // §6: также мигрируем legacy practice если вдруг ещё не (идемпотентно)
+                let before = self.practice.clone();
+                self.practice.migrate_from_legacy(&self.settings);
+                if self.practice != before {
+                    self.practice_dirty = true;
+                }
+                if self.settings.has_legacy_training() {
+                    self.settings = self.settings.cleared_legacy();
+                    self.settings_dirty = true;
+                }
                 self.done(Outcome::default())
+            }
+
+            Command::GetPractice => Outcome {
+                practice: Some(self.practice.clone()),
+                ..self.done(Outcome::default())
+            },
+
+            Command::MergePractice { practice } => {
+                let before = self.practice.clone();
+                self.practice.merge_inplace(&practice);
+                self.practice.normalize();
+                if self.practice != before {
+                    self.practice_dirty = true;
+                    // Dual-write для старого клиента
+                    self.settings.answers =
+                        self.practice.total_answers().min(i32::MAX as u64) as i32;
+                    self.settings.right =
+                        self.practice.total_right().min(i32::MAX as u64) as i32;
+                    self.settings.best_streak = self.practice.best_streak() as i32;
+                    self.settings.trained_on =
+                        self.practice.days.iter().next_back().copied().unwrap_or(0);
+                    // без now нельзя точно посчитать current_streak, берём longest_run как аппроксимацию
+                    self.settings.streak_days = self.practice.longest_run() as i32;
+                    self.settings_dirty = true;
+                }
+                self.done(Outcome {
+                    practice: Some(self.practice.clone()),
+                    ..Outcome::default()
+                })
             }
         }
     }
@@ -873,9 +1023,10 @@ impl Session {
     /// Отмечает в ответе, что состояние изменилось.
     fn done(&self, outcome: Outcome) -> Outcome {
         Outcome {
-            changed: self.library_dirty || self.settings_dirty,
+            changed: self.library_dirty || self.settings_dirty || self.practice_dirty,
             library_changed: self.library_dirty,
             settings_changed: self.settings_dirty,
+            practice_changed: self.practice_dirty,
             ..outcome
         }
     }
@@ -969,8 +1120,10 @@ mod tests {
                 Session::try_open(empty, empty).expect("пустое должно быть Default");
             assert!(session.library.books.is_empty());
             assert_eq!(session.settings, AppSettings::default());
+            assert!(session.practice.is_empty());
             assert!(!session.library_dirty);
             assert!(!session.settings_dirty);
+            assert!(!session.practice_dirty);
         }
     }
 
@@ -1056,17 +1209,31 @@ mod tests {
         ));
 
         let outcome = session.run(команда(
-            r#"{"op":"review","cardId":"c1","right":true,"now":1700000000000,"offsetMinutes":180}"#,
+            r#"{"op":"review","cardId":"c1","right":true,"now":1700000000000,"offsetMinutes":180,"deviceId":"phone1"}"#,
         ));
 
         let card = outcome.card.expect("карточки нет");
         assert_eq!(card.streak, 1, "серия карточки не сдвинулась");
         assert!(card.due_at > NOW, "срок не назначен");
-        // Одно событие — один ответ и в карточку, и в календарь.
+        // Одно событие — один ответ и в карточку, и в календарь (§6 CRDT).
         assert_eq!(outcome.streak, Some(1));
-        assert_eq!(session.settings.answers, 1);
-        assert_eq!(session.settings.right, 1);
+        assert_eq!(session.practice.total_answers(), 1);
+        assert_eq!(session.practice.total_right(), 1);
+        assert!(session.practice_dirty);
+        // Dual-write: для переходного периода legacy settings тоже обновляются,
+        // чтобы старый клиент, который ещё не пишет practice.json, не потерял данные.
         assert!(session.settings_dirty);
+        assert_eq!(session.settings.answers, 1);
+        // device_id без указания — legacy fallback (проверим совместимость)
+        session.run(команда(
+            r#"{"op":"saveWord","bookId":"b1","surface":"dusk","lemma":"dusk","id":"c2","now":1700000000000}"#,
+        ));
+        let outcome2 = session.run(команда(
+            r#"{"op":"review","cardId":"c2","right":false,"now":1700000000000,"offsetMinutes":180}"#,
+        ));
+        assert_eq!(outcome2.streak, Some(1)); // тот же день, серия не растёт
+        assert_eq!(session.practice.total_answers(), 2);
+        assert_eq!(session.practice.total_right(), 1);
     }
 
     #[test]
@@ -1079,8 +1246,13 @@ mod tests {
         assert!(!outcome.changed, "неизвестная карточка сдвинула состояние");
         assert!(!session.library_dirty, "библиотека помечена грязной зря");
         assert!(!session.settings_dirty, "настройки помечены грязными зря");
-        assert_eq!(session.settings.answers, 0, "ответ засчитан без карточки");
-        assert_eq!(session.settings.streak_days, 0, "серия сдвинулась без карточки");
+        assert!(!session.practice_dirty, "практика помечена грязной зря");
+        assert_eq!(session.practice.total_answers(), 0, "ответ засчитан без карточки");
+        assert_eq!(
+            session.practice.current_streak(1700000000000, 180),
+            0,
+            "серия сдвинулась без карточки"
+        );
         assert_eq!(session.library.cards.len(), 0);
     }
 
@@ -1218,9 +1390,12 @@ mod tests {
             r#"{"op":"ruleDrill","rule":"present-perfect","cardId":"c3"}"#,
             r#"{"op":"sameText","assembled":"she left","expected":"She left."}"#,
             r#"{"op":"review","cardId":"c1","right":true,"now":1,"offsetMinutes":180}"#,
+            r#"{"op":"review","cardId":"c1","right":true,"now":1,"offsetMinutes":180,"deviceId":"phone"}"#,
             r#"{"op":"reminderAt","now":1,"offsetMinutes":180}"#,
             r#"{"op":"due","now":1}"#,
             r#"{"op":"appendedPage","before":"Первая","page":"Вторая"}"#,
+            r#"{"op":"getPractice"}"#,
+            r#"{"op":"mergePractice","practice":{"days":[20000],"counters":{"phone":{"answers":5,"right":3}},"bestFloor":2}}"#,
         ];
 
         let mut session = сессия();
@@ -1259,5 +1434,145 @@ mod tests {
             .is_err(),
             "ядро принимает оба написания — значит, правило не действует"
         );
+    }
+
+    #[test]
+    fn legacy_migration_restore_practice() {
+        // Старый settings с тренировкой -> practice после open
+        let legacy = r#"{"theme":"Paper","trainedOn":20000,"streakDays":7,"bestStreak":21,"answers":300,"right":270}"#;
+        let session = Session::try_open_with_practice(None, Some(legacy), None)
+            .expect("migration");
+        assert_eq!(session.practice.days.len(), 7);
+        assert!(session.practice.days.contains(&20000));
+        assert!(session.practice.days.contains(&19994));
+        assert_eq!(session.practice.best_floor, 21);
+        assert_eq!(session.practice.total_answers(), 300);
+        assert_eq!(session.practice.total_right(), 270);
+        assert!(session.practice_dirty, "migrated practice must be marked dirty");
+        // settings пока остаётся с legacy для переходного периода (dual-write)
+        assert_eq!(session.settings.trained_on, 20000);
+        // повторная миграция идемпотентна
+        let practice_json = serde_json::to_string(&session.practice).unwrap();
+        let session2 = Session::try_open_with_practice(None, Some(legacy), Some(&practice_json))
+            .expect("second open");
+        assert_eq!(session2.practice, session.practice);
+        assert_eq!(session2.practice.total_answers(), 300);
+    }
+
+    #[test]
+    fn legacy_migration_idempotent_no_double_count() {
+        let legacy = r#"{"answers":100,"right":80}"#;
+        let s1 = Session::try_open_with_practice(None, Some(legacy), None).unwrap();
+        assert_eq!(s1.practice.total_answers(), 100);
+        // второй раз открываем с теми же settings и уже мигрированным practice
+        let pj = serde_json::to_string(&s1.practice).unwrap();
+        let s2 = Session::try_open_with_practice(None, Some(legacy), Some(&pj)).unwrap();
+        assert_eq!(s2.practice.total_answers(), 100, "double count on re-migration");
+        // третий раз с пустым practice но тем же legacy — всё равно 100, не 200
+        let s3 = Session::try_open_with_practice(None, Some(legacy), None).unwrap();
+        assert_eq!(s3.practice.total_answers(), 100);
+    }
+
+    #[test]
+    fn practice_merge_not_lww() {
+        // Симуляция бага §6: старый ноутбук settings 80 приезжает последним и перетирает 100
+        let mut phone = сессия();
+        phone.run(команда(
+            r#"{"op":"saveWord","bookId":"b1","surface":"library","lemma":"library","id":"c1","now":1}"#,
+        ));
+        for i in 0..100 {
+            phone.practice.record_answer("phone", true, NOW + i, 0);
+        }
+        phone.practice_dirty = true;
+        assert_eq!(phone.practice.total_answers(), 100);
+
+        let mut laptop = сессия();
+        for i in 0..80 {
+            laptop.practice.record_answer("laptop", true, NOW + i, 0);
+        }
+        // laptop приезжает как MergePractice (CRDT), а не ReplaceSettings
+        let laptop_json = serde_json::to_string(&laptop.practice).unwrap();
+        let laptop_practice: crate::practice::PracticeState =
+            serde_json::from_str(&laptop_json).unwrap();
+        let outcome = phone.run(Command::MergePractice {
+            practice: Box::new(laptop_practice),
+        });
+        // totals = 180, а не 80
+        assert_eq!(phone.practice.total_answers(), 180);
+        assert!(outcome.practice_changed);
+        // коммутативно
+        let mut laptop2 = сессия();
+        laptop2.practice = phone.practice.clone();
+        // reverse merge
+        let phone_json = serde_json::to_string(&phone.practice).unwrap();
+        let phone_practice: crate::practice::PracticeState =
+            serde_json::from_str(&phone_json).unwrap();
+        let mut other = сессия();
+        other.practice = laptop.practice.clone();
+        other.run(Command::MergePractice {
+            practice: Box::new(phone_practice),
+        });
+        assert_eq!(other.practice.total_answers(), 180);
+    }
+
+    #[test]
+    fn today_training_not_disappears_after_merge() {
+        // Сегодня позанимались на телефоне, старый ноутбук без сегодня не должен удалить сегодня
+        let today = crate::clock::local_day(NOW, 0);
+        let mut phone = сессия();
+        phone.practice.days.insert(today);
+        phone.practice.days.insert(today - 1);
+        let mut laptop = сессия();
+        laptop.practice.days.insert(today - 1);
+        laptop.practice.days.insert(today - 2);
+        // сливаем laptop в phone
+        let lp = laptop.practice.clone();
+        phone.run(Command::MergePractice {
+            practice: Box::new(lp),
+        });
+        assert!(phone.practice.days.contains(&today), "today disappeared");
+        assert_eq!(phone.practice.current_streak(NOW, 0), 3);
+    }
+
+    #[test]
+    fn replace_settings_does_not_overwrite_practice() {
+        let mut session = сессия();
+        // накапаем practice 100
+        for i in 0..100 {
+            session.practice.record_answer("phone", true, NOW + i, 0);
+        }
+        session.practice_dirty = true;
+        session.settings.answers = 100; // legacy mirror
+
+        // приехавшие старые настройки с answers 80 не должны откатить
+        session.run(команда(
+            r#"{"op":"replaceSettings","settings":{"theme":"Sepia","answers":80,"right":60}}"#,
+        ));
+        // practice остался 100
+        assert_eq!(session.practice.total_answers(), 100);
+        // settings legacy остался 100 (preserve via replaced_by)
+        assert_eq!(session.settings.answers, 100);
+        assert_eq!(session.settings.theme, "Sepia");
+    }
+
+    #[test]
+    fn merge_practice_commutative_associative_idempotent() {
+        let mut a = crate::practice::PracticeState::default();
+        a.record_answer("phone", true, NOW, 0);
+        a.record_answer("phone", true, NOW + crate::clock::DAY_MS, 0);
+        a.best_floor = 5;
+        let mut b = crate::practice::PracticeState::default();
+        b.record_answer("laptop", true, NOW, 0);
+        b.best_floor = 7;
+        let mut c = crate::practice::PracticeState::default();
+        c.record_answer("tablet", false, NOW, 0);
+        c.best_floor = 3;
+
+        assert_eq!(a.merge(&b), b.merge(&a), "commutative");
+        assert_eq!(a.merge(&a), a, "idempotent");
+        let ab_c = a.merge(&b).merge(&c);
+        let a_bc = a.merge(&b.merge(&c));
+        assert_eq!(ab_c, a_bc, "associative");
+        assert_eq!(ab_c.best_streak(), a_bc.best_streak());
     }
 }

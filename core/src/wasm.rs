@@ -192,10 +192,20 @@ impl WolfySession {
     /// повреждение обязано быть видимым, используйте `tryNew`/`openStrict`:
     /// `None`/пустая запись -> Default, а непустая битая -> Err. Клиент после
     /// Err не должен автоматически сохранять пустое состояние поверх повреждённого.
+    /// `practice` — отдельный JSON (§6), может быть `undefined` на старых установках
+    /// (тогда мигрирует из `settings`).
     #[wasm_bindgen(constructor)]
-    pub fn new(library: Option<String>, settings: Option<String>) -> WolfySession {
+    pub fn new(
+        library: Option<String>,
+        settings: Option<String>,
+        practice: Option<String>,
+    ) -> WolfySession {
         WolfySession {
-            inner: Session::open(library.as_deref(), settings.as_deref()),
+            inner: Session::open_with_practice(
+                library.as_deref(),
+                settings.as_deref(),
+                practice.as_deref(),
+            ),
         }
     }
 
@@ -204,21 +214,33 @@ impl WolfySession {
     /// - `None` / `Some("")` / whitespace -> `Ok(Default)`
     /// - валидный JSON -> `Ok(Session)`
     /// - непустой битый JSON -> `Err("library corrupted: ...")` или
-    ///   `Err("settings corrupted: ...")`.
+    ///   `Err("settings corrupted: ...")` или `Err("practice corrupted: ...")`.
     /// Используется на старте с двух-слотовой/журнальной схемой: primary valid
     /// -> primary, primary broken + backup valid -> backup, оба broken -> явная
     /// ошибка/recovery UI, а не молчаливый Default.
     #[wasm_bindgen(js_name = tryNew)]
-    pub fn try_new(library: Option<String>, settings: Option<String>) -> Result<WolfySession, JsError> {
-        let inner = Session::try_open(library.as_deref(), settings.as_deref())
-            .map_err(|e| JsError::new(&e))?;
+    pub fn try_new(
+        library: Option<String>,
+        settings: Option<String>,
+        practice: Option<String>,
+    ) -> Result<WolfySession, JsError> {
+        let inner = Session::try_open_with_practice(
+            library.as_deref(),
+            settings.as_deref(),
+            practice.as_deref(),
+        )
+        .map_err(|e| JsError::new(&e))?;
         Ok(WolfySession { inner })
     }
 
     /// Алиас [`try_new`]: strict open.
     #[wasm_bindgen(js_name = openStrict)]
-    pub fn open_strict(library: Option<String>, settings: Option<String>) -> Result<WolfySession, JsError> {
-        Self::try_new(library, settings)
+    pub fn open_strict(
+        library: Option<String>,
+        settings: Option<String>,
+        practice: Option<String>,
+    ) -> Result<WolfySession, JsError> {
+        Self::try_new(library, settings, practice)
     }
 
     /// Выполняет команду. Та же команда, что уходит в `wolfy_session_run`.
@@ -240,12 +262,18 @@ impl WolfySession {
         json(&self.inner.settings)
     }
 
+    /// Практика целиком (§6) — отдельный файл `practice.json`.
+    pub fn practice(&self) -> Result<String, JsError> {
+        json(&self.inner.practice)
+    }
+
     /// Что изменилось с последней записи. Считает ядро: только оно знает,
     /// изменила ли команда хоть что-нибудь.
     pub fn dirty(&self) -> Result<String, JsError> {
         json(&serde_json::json!({
             "library": self.inner.library_dirty,
             "settings": self.inner.settings_dirty,
+            "practice": self.inner.practice_dirty,
         }))
     }
 
@@ -256,6 +284,20 @@ impl WolfySession {
         }
         if settings {
             self.inner.settings_dirty = false;
+        }
+    }
+
+    /// Подтверждает запись, включая practice по §6.
+    #[wasm_bindgen(js_name = savedWithPractice)]
+    pub fn saved_with_practice(&mut self, library: bool, settings: bool, practice: bool) {
+        if library {
+            self.inner.library_dirty = false;
+        }
+        if settings {
+            self.inner.settings_dirty = false;
+        }
+        if practice {
+            self.inner.practice_dirty = false;
         }
     }
 

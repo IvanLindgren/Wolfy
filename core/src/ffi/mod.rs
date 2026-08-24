@@ -615,7 +615,7 @@ pub extern "C" fn wolfy_session_settings(handle: i64) -> *mut c_char {
 
 /// Что изменилось с последней записи на диск.
 ///
-/// Отвечает `{"library":bool,"settings":bool}`. Считает ядро, а не клиент:
+/// Отвечает `{"library":bool,"settings":bool,"practice":bool}`. Считает ядро, а не клиент:
 /// только оно знает, изменила ли команда хоть что-нибудь, — повторное
 /// сохранение слова, которое уже в колоде, не меняет ничего.
 ///
@@ -628,6 +628,7 @@ pub extern "C" fn wolfy_session_dirty(handle: i64) -> *mut c_char {
             to_json(&serde_json::json!({
                 "library": session.library_dirty,
                 "settings": session.settings_dirty,
+                "practice": session.practice_dirty,
             }))
         })?
     })
@@ -653,6 +654,132 @@ pub extern "C" fn wolfy_session_saved(handle: i64, library: bool, settings: bool
             }
         });
     }));
+}
+
+/// Отмечает, что состояние записано на диск, включая practice (§6).
+///
+/// Новый клиент должен звать эту функцию (3 флага), а не `wolfy_session_saved`.
+/// Старая `wolfy_session_saved` оставлена для совместимости.
+///
+/// # Safety
+/// `handle` — номер, выданный [`wolfy_session_open`] и ещё не закрытый.
+#[no_mangle]
+pub extern "C" fn wolfy_session_saved_with_practice(
+    handle: i64,
+    library: bool,
+    settings: bool,
+    practice: bool,
+) {
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        with_session(handle, |session| {
+            if library {
+                session.library_dirty = false;
+            }
+            if settings {
+                session.settings_dirty = false;
+            }
+            if practice {
+                session.practice_dirty = false;
+            }
+        });
+    }));
+}
+
+/// Практика целиком — то, что клиент пишет на диск как `practice.json`.
+///
+/// # Safety
+/// `handle` — номер, выданный [`wolfy_session_open`] и ещё не закрытый.
+#[no_mangle]
+pub extern "C" fn wolfy_session_practice(handle: i64) -> *mut c_char {
+    guard(|| with_session(handle, |session| to_json(&session.practice))?)
+}
+
+/// Открывает сессию с явным practice (для нового хранения с отдельным файлом).
+///
+/// Третий аргумент — JSON `practice.json` или `null` если его ещё нет.
+/// Ленient: битая запись заменяется пустой.
+/// # Safety
+/// `library`, `settings`, `practice` — либо `null`, либо корректные UTF-8 строки.
+#[no_mangle]
+pub unsafe extern "C" fn wolfy_session_open_with_practice(
+    library: *const c_char,
+    settings: *const c_char,
+    practice: *const c_char,
+) -> i64 {
+    let opened = catch_unwind(AssertUnwindSafe(|| {
+        let library = unsafe { read_optional(library) };
+        let settings = unsafe { read_optional(settings) };
+        let practice = unsafe { read_optional(practice) };
+        let session = Session::open_with_practice(
+            library.as_deref(),
+            settings.as_deref(),
+            practice.as_deref(),
+        );
+        let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
+        let mut guard = match SESSIONS.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.insert(handle, Arc::new(Mutex::new(session)));
+        Some(handle)
+    }));
+    match opened {
+        Ok(Some(handle)) => {
+            clear_error();
+            handle
+        }
+        Ok(None) => 0,
+        Err(_) => {
+            set_error("ядро не смогло открыть сессию");
+            0
+        }
+    }
+}
+
+/// Строгое открытие с practice.
+///
+/// # Safety
+/// `library`, `settings`, `practice` — либо `null`, либо корректные UTF-8 строки.
+#[no_mangle]
+pub unsafe extern "C" fn wolfy_session_open_strict_with_practice(
+    library: *const c_char,
+    settings: *const c_char,
+    practice: *const c_char,
+) -> i64 {
+    let opened = catch_unwind(AssertUnwindSafe(|| {
+        let library = unsafe { read_optional(library) };
+        let settings = unsafe { read_optional(settings) };
+        let practice = unsafe { read_optional(practice) };
+        let session = match Session::try_open_with_practice(
+            library.as_deref(),
+            settings.as_deref(),
+            practice.as_deref(),
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                set_error(&e);
+                return None;
+            }
+        };
+        let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
+        let mut guard = match SESSIONS.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.insert(handle, Arc::new(Mutex::new(session)));
+        Some(handle)
+    }));
+    match opened {
+        Ok(Some(handle)) => {
+            clear_error();
+            handle
+        }
+        Ok(None) => 0,
+        Err(_) => {
+            set_error("ядро не смогло открыть сессию (strict)");
+            0
+        }
+    }
 }
 
 /// Закрывает сессию.
