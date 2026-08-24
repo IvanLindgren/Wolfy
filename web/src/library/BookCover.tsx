@@ -20,7 +20,7 @@ export function BookCover({ book }: { book: LibraryBook }) {
   return (
     <div className={styles.cover}>
       {cover ? (
-        <img src={cover} alt="" />
+        <img src={cover} alt="" loading="lazy" decoding="async" />
       ) : (
         <>
           <div className={styles.cover__rule} />

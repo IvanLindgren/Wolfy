@@ -154,7 +154,6 @@ export function Shell() {
       <header className={styles.masthead}>
         <Link to="/library" className={styles.wordmark}>
           <span className={styles.wordmark__name}>Wolfy</span>
-          <span className={styles.wordmark__kicker}>Тихий урок в каждой книге</span>
         </Link>
         <div className={styles.spacer} />
         <div className={styles.mastheadActions}>

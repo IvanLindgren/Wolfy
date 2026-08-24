@@ -10,6 +10,7 @@
   max-width: 64rem;
   margin: 0 auto;
   padding: clamp(1.25rem, 4vw, 2.25rem) var(--gutter) 4rem;
+  animation: page-arrive var(--calm, 280ms) var(--paper-curve, ease) both;
 }
 
 .page--wide {
@@ -17,25 +18,42 @@
 }
 
 .head {
+  position: relative;
   display: flex;
   align-items: flex-end;
   gap: 1rem;
   flex-wrap: wrap;
-  padding-bottom: 0.7rem;
+  padding-bottom: 1rem;
   margin-bottom: 1.35rem;
-  border-bottom: 2px solid var(--ink);
+}
+
+.head::after {
+  content: '';
+  position: absolute;
+  inset: auto 0 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--accent) 0 4.5rem, var(--ink) 4.5rem 45%, var(--rule) 45%);
+  transform-origin: left;
+  animation: rule-arrive var(--calm, 280ms) var(--paper-curve, ease) both;
 }
 
 .title {
   font-size: clamp(1.75rem, 4vw, 2.4rem);
   line-height: 1.05;
+  text-shadow: 0 0.08em 0 color-mix(in srgb, var(--accent) 7%, transparent);
 }
 
 .kicker {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 0.16rem 0.48rem;
+  border-radius: 999px;
   font-size: 0.6875rem;
   letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: var(--ink-muted);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
   margin-bottom: 0.35rem;
 }
 
@@ -43,6 +61,9 @@
   color: var(--ink-muted);
   font-size: 0.9375rem;
   max-width: 44ch;
+  margin-top: 0.5rem;
+  padding-left: 0.7rem;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 55%, var(--rule));
 }
 
 .headActions {
@@ -65,18 +86,24 @@
 
 .sectionTitle {
   font-size: 1.15rem;
+  color: color-mix(in srgb, var(--ink) 86%, var(--accent));
 }
 
 .sectionRule {
   flex: 1;
   height: 1px;
-  background: var(--rule);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 38%, var(--rule)), var(--rule));
 }
 
 .muted {
   color: var(--ink-muted);
   font-size: 0.9375rem;
   line-height: 1.5;
+}
+
+.muted strong {
+  color: var(--accent);
+  font-weight: 650;
 }
 
 .notice {
@@ -126,4 +153,14 @@
   align-items: center;
   gap: 0.6rem;
   flex-wrap: wrap;
+}
+
+@keyframes page-arrive {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes rule-arrive {
+  from { transform: scaleX(0); opacity: 0; }
+  to { transform: scaleX(1); opacity: 1; }
 }

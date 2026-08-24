@@ -55,9 +55,8 @@ export function DecksScreen() {
       {total === 0 && ready ? (
         <WolfyCompanion mood="calm" title="Колода пока пуста">
           <p className={page.muted} style={{ maxWidth: '32rem' }}>
-            Отмечайте слова в книге — они прилетают сюда сами. Колода
-            грамматики наполнится по мере чтения: правила добавляются по
-            пять в день, чтобы не завалить вас шестью десятками сразу.
+            Отмечайте слова при чтении — они сами появятся здесь.
+            Грамматика добавляется <strong>небольшими порциями</strong>.
           </p>
           <Link to="/library">
             <Button variant="primary">К книгам</Button>

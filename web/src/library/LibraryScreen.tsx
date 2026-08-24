@@ -173,8 +173,8 @@ export function LibraryScreen() {
       {ready && visible.length === 0 ? (
         <WolfyCompanion mood="calm" title="Здесь пока пусто">
           <p className={page.muted} style={{ maxWidth: '34rem' }}>
-            Перетащите книгу прямо в окно или выберите файл. EPUB, TXT и PDF.
-            Книга останется на этом устройстве — на сервер она не уедет.
+            <strong>EPUB · TXT · PDF</strong> — перетащите файл сюда. Книга
+            останется только на этом устройстве.
           </p>
           <Button variant="primary" onClick={() => chooser.current?.click()}>
             Выбрать файл

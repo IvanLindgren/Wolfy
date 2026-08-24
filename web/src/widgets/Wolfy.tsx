@@ -1,7 +1,9 @@
-import calmSticker from '../../../client/assets/wolfy_stickers/vulfie_sticker_04_scroll.png'
-import gladSticker from '../../../client/assets/wolfy_stickers/vulfie_sticker_07_happywave.png'
-import kindSticker from '../../../client/assets/wolfy_stickers/vulfie_sticker_03_thinking.png'
-import proudSticker from '../../../client/assets/wolfy_stickers/vulfie_sticker_10_celebrate.png'
+import calmSticker from '../assets/wolfy/calm.webp'
+import gladSticker from '../assets/wolfy/glad.webp'
+import kindSticker from '../assets/wolfy/kind.webp'
+import proudSticker from '../assets/wolfy/proud.webp'
+
+import styles from './Wolfy.module.css'
 
 export type WolfyMood = 'calm' | 'glad' | 'kind' | 'proud'
 
@@ -22,15 +24,18 @@ interface WolfyProps {
 
 /** Готовый Вульфи из общего набора ассетов Android, Windows и веб-клиента. */
 export function Wolfy({ mood = 'calm', size = 120, className, label }: WolfyProps) {
+  const classes = [styles.wolfy, className ?? ''].filter(Boolean).join(' ')
+
   return (
     <img
-      className={className}
+      className={classes}
       src={STICKERS[mood]}
       width={size}
       height={size}
       alt={label ?? ''}
       aria-hidden={label ? undefined : true}
       draggable={false}
+      decoding="async"
       style={{ objectFit: 'contain' }}
     />
   )
@@ -49,19 +54,14 @@ export function WolfyCompanion({
   size?: number
 }) {
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        gap: '1rem',
-        textAlign: 'center',
-        padding: '2.5rem 1rem',
-      }}
-    >
-      <Wolfy mood={mood} size={size} />
-      <h2 style={{ fontSize: '1.35rem' }}>{title}</h2>
-      {children}
+    <div className={styles.companion}>
+      <div className={styles.companion__art}>
+        <Wolfy mood={mood} size={size} />
+      </div>
+      <div className={styles.companion__body}>
+        <h2 className={styles.companion__title}>{title}</h2>
+        {children}
+      </div>
     </div>
   )
 }

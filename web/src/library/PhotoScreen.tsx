@@ -125,8 +125,8 @@ export function PhotoScreen() {
     return (
       <WolfyCompanion mood="kind" title="Для распознавания нужен вход">
         <p className={page.muted} style={{ maxWidth: '32rem' }}>
-          Снимок уходит на сервер, и сервер должен знать, чей он. Всё остальное
-          — чтение, разбор, колоды — работает без аккаунта.
+          Вход нужен только для отправки снимка. <strong>Чтение и колоды</strong>
+          работают без аккаунта.
         </p>
         <Button variant="primary" onClick={() => void navigate({ to: '/account' })}>
           Войти

@@ -50,8 +50,7 @@ export function ReaderIndex() {
     return (
       <WolfyCompanion mood="calm" title="Читать пока нечего">
         <p className={page.muted} style={{ maxWidth: '32rem' }}>
-          Добавьте книгу — перетащите файл в окно или выберите его в
-          библиотеке. Дальше всё работает без сети.
+          Добавьте <strong>EPUB, TXT или PDF</strong>. Дальше всё работает без сети.
         </p>
         <Link to="/library">
           <Button variant="primary">В библиотеку</Button>

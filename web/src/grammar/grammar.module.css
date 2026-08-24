@@ -1,9 +1,16 @@
 .catalog { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: 1rem; }
-.topic { border: 1px solid var(--rule); border-radius: var(--radius-lg); background: var(--surface); padding: 1rem; }
-.topicTitle { font-size: 1.25rem; margin-bottom: .75rem; }
-.articleLink { display: block; padding: .65rem 0; border-top: 1px solid var(--rule); text-decoration: none; }
+.topic { --topic-tone: var(--accent); border: 1px solid color-mix(in srgb, var(--topic-tone) 28%, var(--rule)); border-top: 3px solid var(--topic-tone); border-radius: var(--radius-lg); background: linear-gradient(160deg, color-mix(in srgb, var(--topic-tone) 10%, var(--surface)), var(--surface) 45%); padding: 1rem; transition: transform var(--quick, 180ms) var(--paper-curve, ease), box-shadow var(--quick, 180ms) ease; }
+.topic:nth-child(2) { --topic-tone: var(--pos-noun); }
+.topic:nth-child(3) { --topic-tone: var(--pos-pron); }
+.topic:nth-child(4) { --topic-tone: var(--pos-adj); }
+.topic:nth-child(5) { --topic-tone: var(--pos-adv); }
+.topic:nth-child(6) { --topic-tone: var(--gold); }
+.topic:hover { transform: translateY(-3px); box-shadow: 0 1rem 2rem rgb(17 17 17 / 8%); }
+.topicTitle { font-size: 1.25rem; margin-bottom: .75rem; color: color-mix(in srgb, var(--topic-tone) 74%, var(--ink)); }
+.articleLink { display: block; padding: .65rem 0; border-top: 1px solid var(--rule); text-decoration: none; transition: color var(--quick, 180ms) ease, transform var(--quick, 180ms) var(--paper-curve, ease); }
+.articleLink:hover { color: var(--topic-tone); transform: translateX(4px); }
 .articleLink:first-of-type { border-top: 0; }
-.articleLink span { display: block; color: var(--ink-muted); font-size: .78rem; font-family: var(--mono); margin-top: .15rem; }
+.articleLink span { display: block; color: color-mix(in srgb, var(--topic-tone) 55%, var(--ink-muted)); font-size: .78rem; font-family: var(--mono); margin-top: .15rem; }
 .article { max-width: 48rem; }
 .formula { padding: .8rem 1rem; background: var(--inverse); color: var(--on-inverse); border-radius: var(--radius); font-family: var(--mono); margin: 1rem 0; }
 .prose { font-family: var(--serif), 'Playfair Fallback'; font-size: 1.08rem; line-height: 1.7; }

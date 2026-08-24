@@ -24,7 +24,13 @@
     transform var(--instant, 90ms) ease,
     background var(--quick, 180ms) ease,
     border-color var(--quick, 180ms) ease,
-    color var(--quick, 180ms) ease;
+    color var(--quick, 180ms) ease,
+    box-shadow var(--quick, 180ms) ease;
+}
+
+.button:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 0.45rem 1rem rgb(17 17 17 / 10%);
 }
 
 .button:active:not(:disabled) {

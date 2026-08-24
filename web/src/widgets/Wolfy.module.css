@@ -1,0 +1,110 @@
+.wolfy {
+  transform-origin: 50% 92%;
+  filter: drop-shadow(0 0.65rem 0.7rem rgb(17 17 17 / 10%));
+  animation:
+    wolfy-arrive var(--calm, 280ms) var(--paper-curve, ease) both,
+    wolfy-breathe 4.8s 600ms ease-in-out infinite;
+  transition:
+    transform var(--quick, 180ms) var(--paper-curve, ease),
+    filter var(--quick, 180ms) ease;
+}
+
+.wolfy:hover {
+  transform: translateY(-4px) rotate(-1.5deg) scale(1.035);
+  filter: drop-shadow(0 0.9rem 0.9rem rgb(17 17 17 / 15%));
+}
+
+.companion {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  justify-items: center;
+  gap: 0.8rem;
+  width: min(39rem, calc(100% - 1rem));
+  margin: clamp(1rem, 4vh, 3rem) auto;
+  padding: clamp(1.5rem, 4vw, 2.5rem);
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--rule));
+  border-radius: calc(var(--radius-lg) * 1.25);
+  background:
+    radial-gradient(circle at 50% 15%, color-mix(in srgb, var(--highlight) 34%, transparent), transparent 38%),
+    linear-gradient(145deg, var(--surface), color-mix(in srgb, var(--accent) 4%, var(--surface)));
+  text-align: center;
+  animation: companion-arrive var(--calm, 280ms) var(--paper-curve, ease) both;
+}
+
+.companion::before,
+.companion::after {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.companion::before {
+  width: 11rem;
+  height: 11rem;
+  left: -5rem;
+  top: -6rem;
+}
+
+.companion::after {
+  width: 8rem;
+  height: 8rem;
+  right: -3rem;
+  bottom: -4rem;
+  background: color-mix(in srgb, var(--gold) 10%, transparent);
+}
+
+.companion__art {
+  min-height: 5.5rem;
+  display: grid;
+  place-items: end center;
+}
+
+.companion__body {
+  display: grid;
+  justify-items: center;
+  gap: 0.85rem;
+}
+
+.companion__body p {
+  max-width: 42ch;
+}
+
+.companion__title {
+  font-size: clamp(1.35rem, 3vw, 1.65rem);
+}
+
+@keyframes wolfy-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes wolfy-breathe {
+  0%,
+  100% {
+    translate: 0 0;
+  }
+  50% {
+    translate: 0 -3px;
+  }
+}
+
+@keyframes companion-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}

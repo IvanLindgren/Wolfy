@@ -11,9 +11,10 @@
 .message { padding: .7rem .8rem; border-left: 3px solid var(--accent); background: var(--surface-sunken); border-radius: var(--radius); font-size: .88rem; line-height: 1.45; }
 .accountCard { display: grid; grid-template-columns: auto 1fr auto; gap: 1rem; align-items: center; padding: 1rem; border: 1px solid var(--rule); border-radius: var(--radius-lg); background: var(--surface); }
 .avatar { width: 3rem; height: 3rem; display: grid; place-items: center; border-radius: 50%; background: var(--inverse); color: var(--on-inverse); font-family: var(--serif); font-size: 1.3rem; }
-.settings { display: grid; gap: 1.4rem; }
-.setting { display: grid; grid-template-columns: minmax(12rem, 1fr) minmax(15rem, 1fr); gap: 1rem; align-items: center; padding-bottom: 1rem; border-bottom: 1px solid var(--rule); }
-.settingTitle { font-weight: 600; }
+.settings { display: grid; gap: .75rem; }
+.setting { display: grid; grid-template-columns: minmax(12rem, 1fr) minmax(15rem, 1fr); gap: 1rem; align-items: center; padding: 1rem; border: 1px solid var(--rule); border-radius: var(--radius-lg); background: linear-gradient(145deg, var(--surface), color-mix(in srgb, var(--accent) 3%, var(--surface))); transition: border-color var(--quick, 180ms) ease, transform var(--quick, 180ms) var(--paper-curve, ease); }
+.setting:hover { border-color: color-mix(in srgb, var(--accent) 40%, var(--rule)); transform: translateY(-2px); }
+.settingTitle { font-weight: 650; color: color-mix(in srgb, var(--ink) 82%, var(--accent)); }
 .settingHint { color: var(--ink-muted); font-size: .8rem; line-height: 1.4; margin-top: .15rem; }
 .choices { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .4rem; }
 .choice { padding: .45rem .7rem; border: 1px solid var(--rule); border-radius: 999px; color: var(--ink-muted); }
@@ -30,13 +31,14 @@
 .demo { padding: 1.3rem; border: 1px solid var(--rule); border-radius: var(--radius-lg); background: var(--surface); font-family: var(--serif); font-size: 1.12rem; line-height: 1.7; }
 .token { border-bottom: 2px solid var(--highlight); cursor: pointer; }
 .feed { display: grid; gap: 1rem; }
-.feedCard { display: grid; grid-template-columns: 8rem 1fr; gap: 1.2rem; padding: 1rem; border: 1px solid var(--rule); border-radius: var(--radius-lg); background: var(--surface); }
+.feedCard { display: grid; grid-template-columns: 8rem 1fr; gap: 1.2rem; padding: 1rem; border: 1px solid var(--rule); border-radius: var(--radius-lg); background: linear-gradient(145deg, var(--surface), color-mix(in srgb, var(--accent) 3%, var(--surface))); transition: transform var(--quick, 180ms) var(--paper-curve, ease), border-color var(--quick, 180ms) ease, box-shadow var(--quick, 180ms) ease; }
+.feedCard:hover { transform: translateY(-3px); border-color: color-mix(in srgb, var(--accent) 45%, var(--rule)); box-shadow: 0 1rem 2rem rgb(17 17 17 / 8%); }
 .cover { aspect-ratio: 2 / 3; border-radius: var(--radius); object-fit: cover; background: var(--surface-sunken); }
 .coverFallback { aspect-ratio: 2 / 3; display: grid; place-items: center; padding: .7rem; text-align: center; border-radius: var(--radius); color: var(--on-inverse); background: var(--inverse); font-family: var(--serif); }
 .feedTitle { font-size: 1.45rem; }
-.meta { color: var(--ink-muted); font-size: .82rem; }
-.summary { margin: .7rem 0; line-height: 1.55; }
+.meta { color: var(--accent); font-size: .78rem; font-weight: 600; letter-spacing: .035em; }
+.summary { margin: .7rem 0; line-height: 1.55; color: var(--ink-muted); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .chips { display: flex; flex-wrap: wrap; gap: .35rem; margin: .5rem 0; }
-.chip { padding: .2rem .5rem; border: 1px solid var(--rule); border-radius: 999px; color: var(--ink-muted); font-size: .72rem; }
+.chip { padding: .2rem .5rem; border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--rule)); border-radius: 999px; color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); font-size: .72rem; }
 .feedActions { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: auto; }
 @media (max-width: 680px) { .onboarding { grid-template-columns: 1fr; align-content: center; } .setting { grid-template-columns: 1fr; } .choices, .switch { justify-content: flex-start; } .feedCard { grid-template-columns: 5.5rem 1fr; } .summary { grid-column: 1 / -1; } }
