@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-import { THEMES } from '../app/theme'
+import { ACCENTS, accent, applyAccent, onDarkPaper, THEMES, type AccentName } from '../app/theme'
 import * as bridge from '../core/bridge'
 import { session, useSession } from '../core/session'
 import type { IntensityName, ThemeName } from '../core/types'
@@ -33,6 +33,8 @@ export function SettingsScreen() {
   const [download, setDownload] = useState<{ loaded: number; total: number } | null>(null)
   const [message, setMessage] = useState('')
   const [notify, setNotify] = useState(notificationPermission)
+  const [tone, setTone] = useState<AccentName>(accent)
+  const darkPaper = onDarkPaper(settings.theme)
   useEffect(() => { void storageUsage().then(setUsage) }, [dictionary])
 
   const installDictionary = async () => {
@@ -47,6 +49,7 @@ export function SettingsScreen() {
 
   return <div className={page.page}><header className={page.head}><div><div className={page.kicker}>Личная типографика</div><h1 className={page.title}>Настройки</h1></div></header><div className={styles.settings}>
     <Setting title="Тема" hint="Синхронизируется между устройствами"><div className={styles.choices}>{THEMES.map((theme) => <button key={theme.name} className={styles.choice} data-active={settings.theme === theme.name} onClick={() => void session.setTheme(theme.name as ThemeName)}>{theme.title}</button>)}</div></Setting>
+    <Setting title="Цвет акцента" hint="Настройка только этого устройства: в настройках ядра поля для неё нет"><div className={styles.swatches}>{ACCENTS.map((item) => <button key={item.name} type="button" className={styles.swatch} data-active={tone === item.name} style={{ ['--swatch-tone' as string]: darkPaper ? item.dark : item.light }} title={item.title} aria-label={`Акцент «${item.title}»`} aria-pressed={tone === item.name} onClick={() => { setTone(item.name); applyAccent(item.name) }}><span /></button>)}</div></Setting>
     <Setting title="Кегль" hint={`${Math.round(settings.fontScale * 100)}%`}><input type="range" min="0.8" max="1.45" step="0.05" value={settings.fontScale} onChange={(event) => void session.setFontScale(Number(event.target.value))} aria-label="Кегль" /></Setting>
     <Setting title="Межстрочный интервал" hint={`${Math.round(settings.lineScale * 100)}%`}><input type="range" min="0.85" max="1.35" step="0.05" value={settings.lineScale} onChange={(event) => void session.setLineScale(Number(event.target.value))} aria-label="Межстрочный интервал" /></Setting>
     <Setting title="Режим чтения" hint="Настройка только этого устройства"><div className={styles.choices}>{(['pages', 'scroll'] as ReadingMode[]).map((value) => <button key={value} className={styles.choice} data-active={mode === value} onClick={() => { setMode(value); setReadingMode(value) }}>{value === 'pages' ? 'Страницы' : 'Лента'}</button>)}</div></Setting>

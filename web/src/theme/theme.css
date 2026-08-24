@@ -10,6 +10,11 @@
  * описывать каскадом, чем цепочкой утилитарных классов. Смена темы — это
  * смена шести десятков значений на корне и ни одной перерисовки дерева.
  *
+ * Акцент выбирается читателем и живёт двумя значениями — для светлой бумаги
+ * и для тёмной. Тема выбирает из этой пары, палитра задаёт саму пару, и они
+ * не спорят: иначе каждая новая краска требовала бы четырёх правок вместо
+ * двух, по одной на тему.
+ *
  * `--accent` — единственная краска интерфейса: кнопки, ссылки, полосы.
  * Ошибку метит отдельная `--wrong`, и это не одна и та же переменная нарочно:
  * когда акцент был красным, неверный ответ в тренировке нечем было отличить
@@ -28,7 +33,7 @@
   --rule: #d9d8d2;
   --surface: #ffffff;
   --surface-sunken: #f2f0ea;
-  --accent: #1f5f66;
+  --accent: var(--accent-light);
   --wrong: #b83a2a;
   --gold: #b08a3c;
   --highlight: #f7e27a;
@@ -41,21 +46,21 @@
   /* Части речи. Пять цветов, а не десять: раскрасить все части речи можно,
      но страница превратится в светофор. Цвет получают знаменательные части
      речи и местоимения; предлоги, артикли и союзы остаются цветом чернил. */
-  --pos-noun: #2c5aa0;
-  --pos-verb: #b83a2a;
-  --pos-adj: #3f7a3f;
-  --pos-adv: #8a6a24;
-  --pos-pron: #6b4f97;
+  --pos-noun: #4a6d8c;
+  --pos-verb: #9c6250;
+  --pos-adj: #57795a;
+  --pos-adv: #8a7340;
+  --pos-pron: #75648f;
 
   /* Семейства правил. Шесть — столько оттенков глаз ещё различает на
      странице текста; правил больше двадцати, и цвет на каждое превратил бы
      главу в шум. */
-  --family-tense: #ffd9d2;
-  --family-voice: #dce8fa;
-  --family-mood: #e8ddf6;
-  --family-condition: #ffe4b8;
-  --family-comparison: #d9ebd8;
-  --family-reference: #e5e2d9;
+  --family-tense: #f6e4de;
+  --family-voice: #e1e8f2;
+  --family-mood: #e8e2f0;
+  --family-condition: #f4e7d2;
+  --family-comparison: #e1eade;
+  --family-reference: #e8e5dd;
   --family-ink: #241f1c;
 
   /* Набор. Кегль и интерлиньяж домножаются на множители из настроек — они
@@ -86,7 +91,7 @@
   --rule: #ded4c2;
   --surface: #fbf7ef;
   --surface-sunken: #ebe3d5;
-  --accent: #1d5a5d;
+  --accent: var(--accent-light);
   --wrong: #a8442c;
   --gold: #9c7a2e;
   --highlight: #efd9a0;
@@ -95,17 +100,17 @@
   --on-inverse: #f4efe6;
   --shadow: 0 1.5rem 3rem rgb(44 36 25 / 16%);
   --scrim: rgb(44 36 25 / 34%);
-  --pos-noun: #275390;
-  --pos-verb: #a8442c;
-  --pos-adj: #3a6f38;
-  --pos-adv: #806020;
-  --pos-pron: #614790;
-  --family-tense: #f6d8cb;
-  --family-voice: #d7e2f0;
-  --family-mood: #e2d7ef;
-  --family-condition: #f5dfb4;
-  --family-comparison: #d5e5d2;
-  --family-reference: #e4ddcd;
+  --pos-noun: #4a6d8c;
+  --pos-verb: #9c6250;
+  --pos-adj: #57795a;
+  --pos-adv: #8a7340;
+  --pos-pron: #75648f;
+  --family-tense: #f6e4de;
+  --family-voice: #e1e8f2;
+  --family-mood: #e8e2f0;
+  --family-condition: #f4e7d2;
+  --family-comparison: #e1eade;
+  --family-reference: #e8e5dd;
   --family-ink: #2c2419;
   color-scheme: light;
 }
@@ -118,7 +123,7 @@
   --rule: #3a3532;
   --surface: #2c2725;
   --surface-sunken: #1b1817;
-  --accent: #63b3ac;
+  --accent: var(--accent-dark);
   --wrong: #e07a64;
   --gold: #d4a855;
   --highlight: #5a4a1e;
@@ -129,17 +134,17 @@
   --scrim: rgb(0 0 0 / 56%);
   /* На тёмной бумаге те же цвета выглядят грязными: тон сохранён, светлота
      поднята. */
-  --pos-noun: #7fa6dc;
-  --pos-verb: #e07a64;
-  --pos-adj: #87be87;
-  --pos-adv: #d9b871;
-  --pos-pron: #b79bdb;
-  --family-tense: #63382f;
-  --family-voice: #304a6c;
-  --family-mood: #4b3b63;
-  --family-condition: #65502c;
-  --family-comparison: #36563a;
-  --family-reference: #46443e;
+  --pos-noun: #93b0cb;
+  --pos-verb: #cf9484;
+  --pos-adj: #9dbb9d;
+  --pos-adv: #c9b184;
+  --pos-pron: #b0a3c9;
+  --family-tense: #4d3630;
+  --family-voice: #334458;
+  --family-mood: #453a55;
+  --family-condition: #544730;
+  --family-comparison: #374a39;
+  --family-reference: #42403a;
   --family-ink: #f0ebe0;
   color-scheme: dark;
 }
@@ -158,7 +163,7 @@
   --rule: #2a2a2a;
   --surface: #0e0e0e;
   --surface-sunken: #050505;
-  --accent: #6ec4bc;
+  --accent: var(--accent-dark);
   --wrong: #f08a72;
   --gold: #d4a855;
   --highlight: #5c4a12;
@@ -170,17 +175,17 @@
   --on-inverse: #ffffff;
   --shadow: 0 1.5rem 3rem rgb(0 0 0 / 80%);
   --scrim: rgb(0 0 0 / 70%);
-  --pos-noun: #8fb4e8;
-  --pos-verb: #f08a72;
-  --pos-adj: #96cc96;
-  --pos-adv: #e5c47d;
-  --pos-pron: #c5a9e8;
-  --family-tense: #63382f;
-  --family-voice: #304a6c;
-  --family-mood: #4b3b63;
-  --family-condition: #65502c;
-  --family-comparison: #36563a;
-  --family-reference: #46443e;
+  --pos-noun: #93b0cb;
+  --pos-verb: #cf9484;
+  --pos-adj: #9dbb9d;
+  --pos-adv: #c9b184;
+  --pos-pron: #b0a3c9;
+  --family-tense: #4d3630;
+  --family-voice: #334458;
+  --family-mood: #453a55;
+  --family-condition: #544730;
+  --family-comparison: #374a39;
+  --family-reference: #42403a;
   --family-ink: #ffffff;
   color-scheme: dark;
 }
@@ -198,7 +203,7 @@
     --rule: #3a3532;
     --surface: #2c2725;
     --surface-sunken: #1b1817;
-    --accent: #63b3ac;
+    --accent: var(--accent-dark);
     --wrong: #e07a64;
     --gold: #d4a855;
     --highlight: #5a4a1e;
@@ -207,18 +212,66 @@
     --on-inverse: #e6e1d5;
     --shadow: 0 1.5rem 3rem rgb(0 0 0 / 52%);
     --scrim: rgb(0 0 0 / 56%);
-    --pos-noun: #7fa6dc;
-    --pos-verb: #e07a64;
-    --pos-adj: #87be87;
-    --pos-adv: #d9b871;
-    --pos-pron: #b79bdb;
-    --family-tense: #63382f;
-    --family-voice: #304a6c;
-    --family-mood: #4b3b63;
-    --family-condition: #65502c;
-    --family-comparison: #36563a;
-    --family-reference: #46443e;
+    --pos-noun: #93b0cb;
+    --pos-verb: #cf9484;
+    --pos-adj: #9dbb9d;
+    --pos-adv: #c9b184;
+    --pos-pron: #b0a3c9;
+    --family-tense: #4d3630;
+    --family-voice: #334458;
+    --family-mood: #453a55;
+    --family-condition: #544730;
+    --family-comparison: #374a39;
+    --family-reference: #42403a;
     --family-ink: #f0ebe0;
     color-scheme: dark;
   }
+}
+
+
+/*
+ * Палитры акцента.
+ *
+ * Каждая задаёт пару: краску для светлой бумаги и краску для тёмной. Пара, а
+ * не одно значение, потому что цвет, читаемый на кремовом листе, на угольном
+ * фоне выглядит грязным пятном, и наоборот. Тема берёт из пары нужную сторону
+ * сама, поэтому смена палитры не зависит от того, какая тема включена.
+ *
+ * Светлая половина обязана держать белый текст, тёмная — тёмный: обе стоят
+ * фоном кнопки, и кнопка с нечитаемой подписью хуже некрасивой.
+ *
+ * Выбор живёт на устройстве (`reader/preferences.ts`): в `AppSettings` ядра
+ * поля для него нет, а заводить его ради веба значило бы завести вторую
+ * модель данных.
+ */
+:root,
+:root[data-accent='teal'] {
+  --accent-light: #1f5f66;
+  --accent-dark: #63b3ac;
+}
+
+:root[data-accent='indigo'] {
+  --accent-light: #3d4f8c;
+  --accent-dark: #93a3e0;
+}
+
+:root[data-accent='plum'] {
+  --accent-light: #6d3f6b;
+  --accent-dark: #c294c0;
+}
+
+:root[data-accent='forest'] {
+  --accent-light: #3a6b4a;
+  --accent-dark: #7fb894;
+}
+
+:root[data-accent='clay'] {
+  --accent-light: #9a4f38;
+  --accent-dark: #dc9078;
+}
+
+/* Без цвета вовсе: акцентом работает густой графит. */
+:root[data-accent='ink'] {
+  --accent-light: #3b3b38;
+  --accent-dark: #b9b3a6;
 }

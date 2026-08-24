@@ -19,6 +19,12 @@
 .choices { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .4rem; }
 .choice { padding: .45rem .7rem; border: 1px solid var(--rule); border-radius: 999px; color: var(--ink-muted); }
 .choice[data-active='true'] { background: var(--inverse); color: var(--on-inverse); border-color: var(--inverse); }
+/* Образец краски: кружок самого цвета — единственная подпись, которая тут не врёт. */
+.swatches { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .45rem; }
+.swatch { display: grid; place-items: center; width: 2rem; height: 2rem; border: 1px solid var(--rule); border-radius: 999px; background: var(--surface); transition: border-color var(--quick, 180ms) ease, transform var(--instant, 90ms) ease; }
+.swatch span { display: block; width: 1.15rem; height: 1.15rem; border-radius: 999px; background: var(--swatch-tone); }
+.swatch:hover { transform: scale(1.06); }
+.swatch[data-active='true'] { border-color: var(--ink); border-width: 2px; }
 .switch { display: flex; justify-content: flex-end; align-items: center; gap: .6rem; }
 .progress { height: 4px; border-radius: 2px; background: var(--rule); overflow: hidden; margin-top: .6rem; }
 .progress span { display: block; height: 100%; background: var(--accent); }
@@ -29,7 +35,7 @@
 .step { width: 2rem; height: 3px; background: var(--rule); }
 .step[data-on='true'] { background: var(--accent); }
 .demo { padding: 1.3rem; border: 1px solid var(--rule); border-radius: var(--radius-lg); background: var(--surface); font-family: var(--serif); font-size: 1.12rem; line-height: 1.7; }
-.token { border-bottom: 2px solid var(--highlight); cursor: pointer; }
+.token { background: color-mix(in srgb, var(--highlight) 55%, transparent); border-radius: 3px; padding: 0 .1em; cursor: pointer; }
 .feed { display: grid; gap: 1rem; }
 .feedCard { display: grid; grid-template-columns: 8rem 1fr; gap: 1.2rem; padding: 1rem; border: 1px solid var(--rule); border-radius: var(--radius-lg); background: var(--surface); transition: transform var(--quick, 180ms) var(--paper-curve, ease), border-color var(--quick, 180ms) ease, box-shadow var(--quick, 180ms) ease; }
 .feedCard:hover { transform: translateY(-3px); border-color: color-mix(in srgb, var(--accent) 45%, var(--rule)); box-shadow: 0 1rem 2rem rgb(17 17 17 / 8%); }

@@ -16,6 +16,7 @@ import { motion, noMotion, systemPrefersReducedMotion, type Motion } from '../th
 
 const THEME_KEY = 'wolfy.theme'
 const SCALE_KEY = 'wolfy.scale'
+const ACCENT_KEY = 'wolfy.accent'
 
 export const THEMES: { name: ThemeName; title: string; hint: string }[] = [
   { name: 'Paper', title: 'Газета', hint: 'Белизна бумаги и густые чернила' },
@@ -23,6 +24,66 @@ export const THEMES: { name: ThemeName; title: string; hint: string }[] = [
   { name: 'Dark', title: 'Угольная', hint: 'Глубокие чернила без тепла' },
   { name: 'Oled', title: 'OLED', hint: 'Чёрный без остатка' },
 ]
+
+/**
+ * Палитры акцента.
+ *
+ * Тема отвечает за бумагу и чернила, палитра — за единственную краску поверх
+ * них. Разделены они потому, что это два разных вопроса: «светло или темно
+ * глазам» и «какого цвета кнопка». Связать их значило бы отнять у читателя
+ * тёмную тему с тёплым акцентом — сочетание, которое многие и выбирают.
+ *
+ * Выбор хранится **на устройстве**, а не в настройках ядра: поля для него в
+ * `AppSettings` нет, и заводить его ради веба значило бы завести вторую
+ * модель данных — то, что задание прямо запрещает. Тема при этом продолжает
+ * ездить в синхронизацию, как и ездила.
+ */
+export const ACCENTS: { name: AccentName; title: string; light: string; dark: string }[] = [
+  { name: 'teal', title: 'Морская волна', light: '#1f5f66', dark: '#63b3ac' },
+  { name: 'indigo', title: 'Индиго', light: '#3d4f8c', dark: '#93a3e0' },
+  { name: 'plum', title: 'Слива', light: '#6d3f6b', dark: '#c294c0' },
+  { name: 'forest', title: 'Хвоя', light: '#3a6b4a', dark: '#7fb894' },
+  { name: 'clay', title: 'Терракота', light: '#9a4f38', dark: '#dc9078' },
+  { name: 'ink', title: 'Графит', light: '#3b3b38', dark: '#b9b3a6' },
+]
+
+/**
+ * Тёмная ли сейчас бумага.
+ *
+ * Образец краски в настройках обязан показывать ту половину пары, которую
+ * читатель увидит на кнопках: показать светлую половину поверх угольной темы
+ * значит соврать про каждый из шести кружков.
+ */
+export function onDarkPaper(theme: string): boolean {
+  if (theme === 'Dark' || theme === 'Oled') return true
+  if (theme === 'Paper' || theme === 'Sepia') return false
+  return typeof matchMedia === 'function' && matchMedia('(prefers-color-scheme: dark)').matches
+}
+
+export type AccentName = 'teal' | 'indigo' | 'plum' | 'forest' | 'clay' | 'ink'
+
+function isAccent(value: string | null): value is AccentName {
+  return ACCENTS.some((accent) => accent.name === value)
+}
+
+/** Выбранная палитра. По умолчанию — та, что стоит в `:root`. */
+export function accent(): AccentName {
+  try {
+    const stored = localStorage.getItem(ACCENT_KEY)
+    return isAccent(stored) ? stored : 'teal'
+  } catch {
+    return 'teal'
+  }
+}
+
+export function applyAccent(name: AccentName): void {
+  document.documentElement.setAttribute('data-accent', name)
+  try {
+    localStorage.setItem(ACCENT_KEY, name)
+  } catch {
+    // Приватный режим: палитра вернётся к морской волне после перезагрузки.
+  }
+}
 
 /** Цвет системных панелей: он же фон темы. */
 const THEME_COLOR: Record<ThemeName, string> = {
@@ -41,6 +102,8 @@ export function applyStoredTheme(): void {
   try {
     const stored = localStorage.getItem(THEME_KEY)
     if (isTheme(stored)) applyTheme(stored)
+
+    applyAccent(accent())
 
     const scale = localStorage.getItem(SCALE_KEY)
     if (scale) {
