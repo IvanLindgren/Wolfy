@@ -15,7 +15,7 @@
 import { useEffect, useMemo, useState } from 'react'
 
 import * as bridge from '../core/bridge'
-import type { Block, Chapter, Sentence, Token } from '../core/types'
+import type { Block, PreparedChapter, Sentence, Token } from '../core/types'
 
 /** Абзац с уже нарезанными токенами. */
 export interface TokenizedBlock {
@@ -54,7 +54,7 @@ export interface ChapterLoad {
 }
 
 export function useChapter(bookId: string, index: number, opened: boolean): ChapterLoad {
-  const [raw, setRaw] = useState<{ key: string; chapter: Chapter } | null>(null)
+  const [prepared, setPrepared] = useState<{ key: string; data: PreparedChapter } | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [tokenized, setTokenized] = useState<{ key: string; loaded: LoadedChapter } | null>(
@@ -69,15 +69,38 @@ export function useChapter(bookId: string, index: number, opened: boolean): Chap
     setLoading(true)
     setError(null)
 
+    // §15: один тяжёлый переход вместо chapter + tokenize
     void bridge
-      .chapter(bookId, index)
-      .then((chapter) => {
-        if (alive) setRaw({ key, chapter })
+      .preparedChapter(bookId, index)
+      .then((data) => {
+        if (alive) setPrepared({ key, data })
       })
-      .catch((problem: unknown) => {
-        if (!alive) return
-        setError(problem instanceof Error ? problem.message : 'Главу не удалось прочитать')
-        setLoading(false)
+      .catch(async (_problem: unknown) => {
+        // Fallback для старой WASM без нового API
+        try {
+          const chapter = await bridge.chapter(bookId, index)
+          const text = chapter.blocks
+            .filter((b) => b.text)
+            .map((b) => b.text)
+            .join('\n\n')
+          const parsed = await bridge.tokenize(text)
+          const fallback: PreparedChapter = {
+            title: chapter.title,
+            blocks: chapter.blocks,
+            tokens: parsed.tokens.map((t) => ({ kind: t.kind, start: t.start, end: t.end })),
+            sentences: parsed.sentences.map((s) => ({
+              start: s.start,
+              end: s.end,
+              firstToken: s.firstToken,
+              lastToken: s.lastToken,
+            })),
+          }
+          if (alive) setPrepared({ key, data: fallback })
+        } catch (e: unknown) {
+          if (!alive) return
+          setError(e instanceof Error ? e.message : 'Главу не удалось прочитать')
+          setLoading(false)
+        }
       })
 
     return () => {
@@ -86,34 +109,48 @@ export function useChapter(bookId: string, index: number, opened: boolean): Chap
   }, [bookId, index, key, opened])
 
   useEffect(() => {
-    if (!raw || raw.key !== key) return
+    if (!prepared || prepared.key !== key) return
     let alive = true
 
-    const texts = raw.chapter.blocks.map((block) => block.text ?? '')
-    const text = raw.chapter.blocks
+    const data = prepared.data
+    const texts = data.blocks.map((block) => block.text ?? '')
+    const text = data.blocks
       .filter((block) => block.text)
       .map((block) => block.text)
       .join('\n\n')
 
-    void bridge.tokenize(text).then((parsed) => {
-      if (!alive) return
-      setTokenized({
-        key,
-        loaded: {
-          title: raw.chapter.title,
-          blocks: assign(raw.chapter.blocks, texts, parsed.tokens),
-          tokens: parsed.tokens,
-          sentences: parsed.sentences,
-          text,
-        },
-      })
+    // Восстанавливаем текст токенов нарезанием строки главы (UTF-16)
+    const tokens: Token[] = data.tokens.map((t) => ({
+      kind: t.kind,
+      start: t.start,
+      end: t.end,
+      text: text.slice(t.start, t.end),
+    }))
+    const sentences: Sentence[] = data.sentences.map((s) => ({
+      start: s.start,
+      end: s.end,
+      firstToken: s.firstToken,
+      lastToken: s.lastToken,
+      text: text.slice(s.start, s.end),
+    }))
+
+    // assign остаётся идентичным — проверка регрессии token indexes
+    const loaded: LoadedChapter = {
+      title: data.title,
+      blocks: assign(data.blocks, texts, tokens),
+      tokens,
+      sentences,
+      text,
+    }
+    if (alive) {
+      setTokenized({ key, loaded })
       setLoading(false)
-    })
+    }
 
     return () => {
       alive = false
     }
-  }, [raw, key])
+  }, [prepared, key])
 
   const chapter = tokenized?.key === key ? tokenized.loaded : EMPTY
   return useMemo(() => ({ chapter, loading, error }), [chapter, loading, error])

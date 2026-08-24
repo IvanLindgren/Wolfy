@@ -283,6 +283,49 @@ pub extern "C" fn wolfy_book_chapter(handle: i64, index: usize) -> *mut c_char {
     })
 }
 
+/// Читает главу вместе с токенами и предложениями — один тяжёлый переход.
+///
+/// Смещения токенов — в единицах UTF-16, текст токенов не дублируется.
+/// Клиент режет строку главы по смещениям.
+///
+/// # Safety
+/// `handle` — номер, выданный [`wolfy_book_open`] и ещё не закрытый.
+#[no_mangle]
+pub extern "C" fn wolfy_book_prepared_chapter(handle: i64, index: usize) -> *mut c_char {
+    guard(|| {
+        with_book(handle, |book| match book.chapter(index) {
+            Ok(chapter) => {
+                let prepared = crate::prepared::prepare(&chapter);
+                to_json(&prepared)
+            }
+            Err(err) => {
+                set_error(&err.describe());
+                None
+            }
+        })?
+    })
+}
+
+/// Всё локальное для карточки за один вызов.
+///
+/// На вход: выбранное слово и предложение вокруг него. Возвращает анализ слова,
+/// токены предложения, грамматику, маркеры и граф.
+///
+/// # Safety
+/// `word` и `sentence` — непустые указатели на UTF-8 строки с нулём на конце.
+#[no_mangle]
+pub unsafe extern "C" fn wolfy_inspect_word(
+    word: *const c_char,
+    sentence: *const c_char,
+) -> *mut c_char {
+    guard(|| {
+        let word = unsafe { read_string(word) }?;
+        let sentence = unsafe { read_string(sentence) }?;
+        let inspected = crate::inspect::inspect_word(&word, &sentence);
+        to_json(&inspected)
+    })
+}
+
 /// Закрывает книгу и отпускает её файл.
 ///
 /// Удаляет handle из реестра даже если пер-объектный мьютекс poisoned:

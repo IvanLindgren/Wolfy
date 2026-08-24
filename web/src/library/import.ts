@@ -21,6 +21,23 @@ import { extractPdfPages } from './pdf'
 /** Что умеет читать ядро. Остальное отвергается с внятным объяснением. */
 export const ACCEPTED = '.epub,.txt,.pdf,application/epub+zip,application/pdf,text/plain'
 
+/**
+ * Лимиты — те же, что в Rust `parser/limits.rs`.
+ * Проверка file.size до arrayBuffer(), чтобы не аллоцировать 80 МБ впустую.
+ */
+const MAX_SOURCE_BYTES = 80 * 1024 * 1024
+const MAX_TXT_BYTES = 10 * 1024 * 1024
+const TOO_LARGE_MSG = 'Книга слишком велика для безопасной обработки'
+
+function checkSourceSize(size: number, detail?: string): string | null {
+  if (size > MAX_SOURCE_BYTES) return `${TOO_LARGE_MSG}: ${detail ?? `${size} байт`} превышает ${MAX_SOURCE_BYTES} байт`
+  return null
+}
+function checkTxtSize(size: number): string | null {
+  if (size > MAX_TXT_BYTES) return `${TOO_LARGE_MSG}: TXT ${size} байт превышает ${MAX_TXT_BYTES} байт`
+  return checkSourceSize(size, `TXT ${size} байт`)
+}
+
 export type ImportResult =
   | { kind: 'added'; book: LibraryBook }
   /** Такая книга уже есть — открываем её, а не заводим вторую. */
@@ -57,6 +74,12 @@ export async function addFile(file: File): Promise<ImportResult> {
       kind: 'refused',
       message: `Формат «${extension || 'без расширения'}» пока не поддерживается. Wolfy читает EPUB, TXT и PDF.`,
     }
+  }
+  // §27: проверяем file.size до arrayBuffer() — не аллоцируем гигабайт
+  const size = (file as unknown as { size?: number }).size ?? 0
+  if (size > 0) {
+    const sourceErr = extension === 'txt' ? checkTxtSize(size) : checkSourceSize(size, `${size} байт`)
+    if (sourceErr) return { kind: 'refused', message: sourceErr }
   }
 
   try {
@@ -96,7 +119,16 @@ export async function addURL(address: string): Promise<ImportResult> {
 }
 
 async function addPlain(file: File, extension: string): Promise<ImportResult> {
+  // Повторная проверка на случай addPlain вызванного напрямую
+  if (file.size > 0) {
+    const err = extension === 'txt' ? checkTxtSize(file.size) : checkSourceSize(file.size, `${file.size} байт`)
+    if (err) throw new Error(err)
+  }
   const bytes = await file.arrayBuffer()
+  // Защита на случай расхождения size vs реального буфера (sparse file)
+  const txtErr = extension === 'txt' ? checkTxtSize(bytes.byteLength) : null
+  const srcErr = txtErr ?? checkSourceSize(bytes.byteLength, `${bytes.byteLength} байт`)
+  if (srcErr) throw new Error(srcErr)
   // Отпечаток считается здесь, до передачи в воркер: буфер уходит `transfer`
   // и после этого на главном потоке пуст.
   const fingerprint = await fingerprintOf(bytes)
@@ -151,7 +183,13 @@ async function addPlain(file: File, extension: string): Promise<ImportResult> {
  * после первой же иллюстрации.
  */
 async function addPdf(file: File): Promise<ImportResult> {
+  if (file.size > 0) {
+    const err = checkSourceSize(file.size, `${file.size} байт`)
+    if (err) throw new Error(err)
+  }
   const bytes = await file.arrayBuffer()
+  const srcErr = checkSourceSize(bytes.byteLength, `${bytes.byteLength} байт`)
+  if (srcErr) throw new Error(srcErr)
   const fingerprint = await fingerprintOf(bytes)
 
   const plan = await session.planAdd(fingerprint)
@@ -209,6 +247,8 @@ export async function addDownloaded(
   author: string,
   sourceKey: string,
 ): Promise<ImportResult> {
+  const srcErr = checkSourceSize(bytes.byteLength, `${bytes.byteLength} байт`)
+  if (srcErr) return { kind: 'refused', message: srcErr }
   const plan = await session.planAdd(sourceKey)
   if (plan.bookId) {
     const known = session.book(plan.bookId)

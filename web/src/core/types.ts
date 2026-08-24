@@ -98,6 +98,52 @@ export interface TokenizedText {
   sentences: Sentence[]
 }
 
+/** Компактный токен — без дублирования текста, только смещения UTF-16. */
+export interface CompactToken {
+  kind: TokenKind
+  start: number
+  end: number
+}
+
+export interface CompactSentence {
+  start: number
+  end: number
+  firstToken: number
+  lastToken: number
+}
+
+/** Глава с компактными токенами — один тяжёлый переход (§15). */
+export interface PreparedChapter {
+  title: string | null
+  blocks: Block[]
+  tokens: CompactToken[]
+  sentences: CompactSentence[]
+}
+
+/** Граф предложения (из Rust, §16). */
+export interface GraphWord {
+  text: string
+  tag: string | null
+}
+
+export interface GraphLink {
+  from: number
+  to: number
+  label: string
+}
+
+export interface InspectResult {
+  word: WordAnalysis
+  tokens: CompactToken[]
+  sentences: CompactSentence[]
+  findings: Finding[]
+  chunks: Chunk[]
+  markers: Marker[]
+  parts: ContextPart[]
+  graphWords: GraphWord[]
+  graphLinks: GraphLink[]
+}
+
 // --- Разбор предложения -----------------------------------------------------
 
 export interface Finding {

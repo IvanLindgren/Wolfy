@@ -23,6 +23,7 @@ import init, {
   explain as wasmExplain,
   grammarExercises as wasmGrammarExercises,
   grammarReference as wasmGrammarReference,
+  inspectWord as wasmInspectWord,
   installLexicon,
   lexiconReady,
   tokenizeText as wasmTokenize,
@@ -37,8 +38,10 @@ import type {
   DictionaryEntry,
   Exercises,
   Grammar,
+  InspectResult,
   LibraryState,
   Outcome,
+  PreparedChapter,
   Reference,
   TokenizedText,
   WordAnalysis,
@@ -346,6 +349,11 @@ const api = {
     return JSON.parse(wasmExplain(sentence)) as Grammar
   },
 
+  async inspectWord(word: string, sentence: string): Promise<InspectResult> {
+    await ensure()
+    return JSON.parse(wasmInspectWord(word, sentence)) as InspectResult
+  },
+
   async grammarReference(): Promise<Reference> {
     await ensure()
     return JSON.parse(wasmGrammarReference()) as Reference
@@ -519,6 +527,35 @@ const api = {
     const book = opened.get(id)
     if (!book) throw new Error('книга не открыта')
     return JSON.parse(book.chapter(index)) as Chapter
+  },
+
+  /** Читает главу вместе с токенами — один тяжёлый переход (§15). */
+  async preparedChapter(id: string, index: number): Promise<PreparedChapter> {
+    const book = opened.get(id)
+    if (!book) throw new Error('книга не открыта')
+    // Предпочитаем новый API, фолбэк на старый если WASM без него
+    const maybe = (book as unknown as { preparedChapter?: (i: number) => string })
+    if (typeof maybe.preparedChapter === 'function') {
+      return JSON.parse(maybe.preparedChapter(index)) as PreparedChapter
+    }
+    // Fallback: собрать из старой главы + токенизации
+    const raw = JSON.parse(book.chapter(index)) as Chapter
+    const text = raw.blocks
+      .filter((b) => b.text)
+      .map((b) => b.text)
+      .join('\n\n')
+    const parsed = JSON.parse(wasmTokenize(text)) as TokenizedText
+    return {
+      title: raw.title,
+      blocks: raw.blocks,
+      tokens: parsed.tokens.map((t) => ({ kind: t.kind, start: t.start, end: t.end })),
+      sentences: parsed.sentences.map((s) => ({
+        start: s.start,
+        end: s.end,
+        firstToken: s.firstToken,
+        lastToken: s.lastToken,
+      })),
+    }
   },
 
   /** Иллюстрация из книги — отдаётся байтами, без копии. */

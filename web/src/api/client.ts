@@ -602,8 +602,10 @@ export async function downloadDiscoveryItem(id: string): Promise<{
   const disposition = response.headers.get('content-disposition') ?? ''
   const named = /filename\*=UTF-8''([^;]+)/.exec(disposition)?.[1]
 
+  const b = await response.arrayBuffer()
+  if (b.byteLength > 80 * 1024 * 1024) throw new ApiError(413, 'Книга слишком велика для безопасной обработки')
   return {
-    bytes: await response.arrayBuffer(),
+    bytes: b,
     fileName: named ? decodeURIComponent(named) : `${id}.epub`,
     title: header('X-Wolfy-Title'),
     author: header('X-Wolfy-Author'),
@@ -656,8 +658,12 @@ export async function downloadBookURL(address: string): Promise<{
     }
   }
 
+  const bytes = await response.arrayBuffer()
+  if (bytes.byteLength > 80 * 1024 * 1024) {
+    throw new ApiError(413, 'Книга слишком велика для безопасной обработки')
+  }
   return {
-    bytes: await response.arrayBuffer(),
+    bytes,
     fileName,
     contentType: response.headers.get('content-type') ?? 'application/octet-stream',
   }

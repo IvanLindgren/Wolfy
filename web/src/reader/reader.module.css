@@ -316,6 +316,31 @@
   color: var(--ink-muted);
 }
 
+.image__placeholder {
+  display: block;
+  min-height: 80px;
+  border: 1px dashed var(--rule);
+  border-radius: 2px;
+  background: var(--surface-sunken);
+}
+
+/* --- Блоки — виртуализация для ленты ---------------------------------------- */
+
+/*
+ * В scroll режиме длинные главы держат сотни абзацев. Браузерная
+ * content-visibility экономит layout вне экрана без собственного windowing.
+ * В режиме страниц её включать нельзя: колонная пагинация требует точных
+ * размеров offscreen контента.
+ */
+.block {
+  /* класс-маркер для data-first/last-token, сам по себе нейтрален */
+}
+
+.scroller .block {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 320px;
+}
+
 /* --- Токены ---------------------------------------------------------------- */
 
 /*

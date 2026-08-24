@@ -174,15 +174,38 @@ function Sheet({ target, onClose }: { target: CardTarget; onClose: () => void })
   const [voices, setVoices] = useState(canSpeak())
   const sheet = useRef<HTMLDivElement>(null)
 
-  // Разбор и грамматика — локальные, и потому приезжают почти мгновенно.
+  // §16: один вызов inspectWord вместо четырёх. Карточка уже видна (shell),
+  // разбор догоняет в фоне через воркер и не задерживает анимацию.
   useEffect(() => {
     let alive = true
+    // Сброс при смене цели — иначе прошлый результат моргнёт
+    setAnalysis(null)
+    setGrammar(null)
     if (target.kind === 'word' && target.surface) {
-      void bridge.analyzeWord(target.surface).then((found) => {
-        if (alive) setAnalysis(found)
-      })
-    }
-    if (target.sentence) {
+      void bridge
+        .inspectWord(target.surface, target.sentence)
+        .then((res) => {
+          if (!alive) return
+          setAnalysis(res.word)
+          setGrammar({
+            findings: res.findings,
+            chunks: res.chunks,
+            markers: res.markers,
+            parts: res.parts,
+          } as Grammar)
+        })
+        .catch(() => {
+          // Fallback для старой WASM без inspectWord
+          void bridge.analyzeWord(target.surface).then((found) => {
+            if (alive) setAnalysis(found)
+          })
+          if (target.sentence) {
+            void bridge.explain(target.sentence).then((found) => {
+              if (alive) setGrammar(found)
+            })
+          }
+        })
+    } else if (target.sentence) {
       void bridge.explain(target.sentence).then((found) => {
         if (alive) setGrammar(found)
       })

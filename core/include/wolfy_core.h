@@ -100,6 +100,22 @@ char *wolfy_book_chapter(int64_t handle, size_t index);
 /* Закрывает книгу и отпускает её файл. Неизвестный номер безопасен. */
 void wolfy_book_close(int64_t handle);
 
+/*
+ * Читает главу вместе с токенами и предложениями — один тяжёлый переход.
+ *
+ * Смещения токенов — в единицах UTF-16, текст токенов не дублируется.
+ * Ответ: {"title":"...","blocks":[...],"tokens":[{"kind":"word","start":0,"end":3},...],"sentences":[...]}
+ */
+char *wolfy_book_prepared_chapter(int64_t handle, size_t index);
+
+/*
+ * Всё локальное для карточки за один вызов.
+ *
+ * На вход — слово как в тексте и предложение вокруг него.
+ * Ответ: {"word":{...},"tokens":[...],"sentences":[...],"findings":[...],"chunks":[...],"markers":[...],"parts":[...],"graphWords":[...],"graphLinks":[...]}
+ */
+char *wolfy_inspect_word(const char *word, const char *sentence);
+
 /* --- Сессия: библиотека и настройки читателя --- */
 
 /*

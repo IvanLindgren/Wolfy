@@ -452,6 +452,100 @@ impl From<&Block> for BlockDto {
     }
 }
 
+/// Компактный токен — без дублирования текста.
+///
+/// Текст принадлежит блоку/главе один раз, токен несёт только смещения в
+/// единицах UTF-16, совместимых с Kotlin/JS.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompactTokenDto {
+    /// `word` | `number` | `punctuation` | `space`.
+    pub kind: &'static str,
+    pub start: usize,
+    pub end: usize,
+}
+
+impl From<&Token> for CompactTokenDto {
+    fn from(token: &Token) -> Self {
+        CompactTokenDto {
+            kind: match token.kind {
+                TokenKind::Word => "word",
+                TokenKind::Number => "number",
+                TokenKind::Punctuation => "punctuation",
+                TokenKind::Space => "space",
+            },
+            start: token.range.start,
+            end: token.range.end,
+        }
+    }
+}
+
+/// Компактное предложение — без дублирования текста.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompactSentenceDto {
+    pub start: usize,
+    pub end: usize,
+    pub first_token: usize,
+    pub last_token: usize,
+}
+
+impl From<&Sentence> for CompactSentenceDto {
+    fn from(sentence: &Sentence) -> Self {
+        CompactSentenceDto {
+            start: sentence.range.start,
+            end: sentence.range.end,
+            first_token: sentence.tokens.start,
+            last_token: sentence.tokens.end,
+        }
+    }
+}
+
+/// Подготовленная глава — один тяжёлый переход.
+///
+/// Содержит блоки и компактные токены/предложения над `plain_text` главы.
+/// Текст токенов не дублируется: клиент режет строку по смещениям.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedChapterDto {
+    pub title: Option<String>,
+    pub blocks: Vec<BlockDto>,
+    pub tokens: Vec<CompactTokenDto>,
+    pub sentences: Vec<CompactSentenceDto>,
+}
+
+/// Слово в графе предложения.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphWordDto {
+    pub text: String,
+    pub tag: Option<&'static str>,
+}
+
+/// Связь слов в графе.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphLinkDto {
+    pub from: usize,
+    pub to: usize,
+    pub label: String,
+}
+
+/// Всё локальное для карточки за один вызов.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InspectDto {
+    pub word: WordDto,
+    pub tokens: Vec<CompactTokenDto>,
+    pub sentences: Vec<CompactSentenceDto>,
+    pub findings: Vec<FindingDto>,
+    pub chunks: Vec<ChunkDto>,
+    pub markers: Vec<MarkerDto>,
+    pub parts: Vec<PartDto>,
+    pub graph_words: Vec<GraphWordDto>,
+    pub graph_links: Vec<GraphLinkDto>,
+}
+
 /// Части речи именами universal tagset — так их читает и сервер, и клиент.
 fn pos_names(set: PosSet) -> Vec<&'static str> {
     set.iter().map(pos_name).collect()

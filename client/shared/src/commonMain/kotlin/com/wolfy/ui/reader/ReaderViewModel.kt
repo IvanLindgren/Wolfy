@@ -12,6 +12,8 @@ import com.wolfy.data.dictionary.DictionaryManager
 import com.wolfy.ffi.Chapter
 import com.wolfy.ffi.CoreException
 import com.wolfy.ffi.ParsedText
+import com.wolfy.ffi.PreparedChapter
+import com.wolfy.ffi.Sentence
 import com.wolfy.ffi.Token
 import com.wolfy.ffi.WolfyCore
 import com.wolfy.ui.card.TranslationState
@@ -201,15 +203,21 @@ class ReaderViewModel(
         viewModelScope.launch {
             _state.update { it.copy(loading = true, card = null) }
             try {
-                val (chapter, blocks) = withContext(Dispatchers.Default) {
-                    val chapter = core.readChapter(handle, index)
-                    chapter to chapter.toReaderBlocks(core)
+                val (title, blocks) = withContext(Dispatchers.Default) {
+                    // Один тяжёлый переход вместо N токенизаций по блокам (§15)
+                    try {
+                        val prepared = core.preparedChapter(handle, index)
+                        prepared.title to prepared.toReaderBlocks()
+                    } catch (_: Throwable) {
+                        val chapter = core.readChapter(handle, index)
+                        chapter.title to chapter.toReaderBlocks(core)
+                    }
                 }
                 _state.update {
                     it.copy(
                         loading = false,
                         chapterIndex = index,
-                        chapterTitle = chapter.title.orEmpty(),
+                        chapterTitle = title.orEmpty(),
                         blocks = blocks,
                         error = null,
                     )
@@ -241,79 +249,59 @@ class ReaderViewModel(
     /**
      * Читатель нажал по слову.
      *
-     * Карточка открывается тем же кадром: разбор считается локально и занимает
-     * микросекунды. Перевод уходит запросом и приезжает в уже открытую
-     * карточку — ждать сеть, чтобы показать слово, нельзя.
+     * Карточка открывается тем же кадром: shell видна сразу, локальный разбор
+     * догоняет в фоне одним [WolfyCore.inspectWord]. Перевод не задерживает
+     * анимацию — он идёт параллельно и независимо.
      */
     fun onWordTap(block: Int, token: Token, parsed: ParsedText) {
         val context = parsed.sentenceAt(token.start)?.text ?: token.text
-        val analysis = core.analyzeWord(token.text)
-        // Грамматика считается здесь же, а не отдельным запросом: она про то
-        // же предложение и стоит доли миллисекунды. Тянуть её вторым шагом
-        // значило бы показать карточку, которая потом дёрнется.
-        val grammar = core.explain(context)
-        val sentenceTokens = core.tokenize(context).tokens
-        val graph = buildSentenceGraph(core, context, grammar.findings)
 
+        // Shell сразу — анимация не ждёт даже локального разбора.
+        val placeholder = com.wolfy.ffi.WordAnalysis(
+            surface = token.text,
+            lemma = token.text,
+            pos = emptyList(),
+            matchedPos = null,
+            dominantPos = null,
+            form = "unknown",
+            facts = emptyList(),
+            zipf = 0f,
+            cefr = "C2",
+            known = false,
+        )
         _state.update {
             it.copy(
                 selectedBlock = block,
                 card = WordCardState(
                     token = token,
-                    analysis = analysis,
+                    analysis = placeholder,
                     context = context,
-                    grammar = grammar.findings,
-                    sentenceTokens = sentenceTokens,
-                    chunks = grammar.chunks,
-                    markers = grammar.markers,
-                    graphWords = graph.first,
-                    graphLinks = graph.second,
+                    grammar = emptyList(),
+                    sentenceTokens = parsed.tokens,
+                    chunks = emptyList(),
+                    markers = emptyList(),
+                    graphWords = emptyList(),
+                    graphLinks = emptyList(),
                     translation = TranslationState.Loading,
                     definition = DefinitionState.Loading,
-                    saved = analysis.lemma in it.savedLemmas,
+                    saved = token.text.lowercase() in it.savedLemmas,
                 ),
             )
         }
 
+        // Отменяем предыдущие запросы — новый тап перекрывает старый.
         definitionJob?.cancel()
-        definitionJob = viewModelScope.launch {
-            val entry = dictionary.define(analysis.lemma)
-            _state.update { current ->
-                val card = current.card ?: return@update current
-                if (current.selectedBlock != block || card.token.start != token.start) {
-                    return@update current
-                }
-                current.copy(
-                    card = card.copy(
-                        definition = entry?.let(DefinitionState::Ready) ?: DefinitionState.Missing,
-                    ),
-                )
-            }
-        }
-
         translationJob?.cancel()
+
+        // Перевод стартует сразу, не дожидаясь локального разбора.
         translationJob = viewModelScope.launch {
-            // Два перевода разом: слово отдельно и предложение целиком. Слово,
-            // переведённое внутри фразы, теряется — в русском переводе «she
-            // left the library» слова «library» может не оказаться вовсе, а
-            // читатель тапнул именно по нему.
-            //
-            // Параллельно, а не по очереди: последовательно карточка ждала бы
-            // две сети вместо одной.
             val word = async { api.translate(token.text) }
             val sentence = if (context == token.text) null else async { api.translate(context) }
-
             val wordResult = word.await()
             val sentenceResult = sentence?.await()
-
-            // Пока ходили в сеть, читатель мог закрыть карточку или нажать по
-            // другому слову — тогда ответ уже не про то, что на экране.
             _state.update { current ->
                 val card = current.card ?: return@update current
-                if (current.selectedBlock != block || card.token.start != token.start) {
-                    return@update current
-                }
-
+                if (current.selectedBlock != block || card.token.start != token.start) return@update current
                 current.copy(
                     card = card.copy(
                         translation = when (wordResult) {
@@ -321,11 +309,81 @@ class ReaderViewModel(
                                 word = wordResult.text,
                                 sentence = (sentenceResult as? TranslateResult.Ready)?.text.orEmpty(),
                             )
-                            is TranslateResult.Failed ->
-                                TranslationState.Failed(wordResult.message)
+                            is TranslateResult.Failed -> TranslationState.Failed(wordResult.message)
                         },
                     ),
                 )
+            }
+        }
+
+        // Локальный разбор одним переходом — в фоне, не блокируя анимацию.
+        viewModelScope.launch {
+            try {
+                val inspected = withContext(Dispatchers.Default) {
+                    try {
+                        core.inspectWord(token.text, context)
+                    } catch (_: Throwable) {
+                        null
+                    }
+                }
+                if (inspected != null) {
+                    val sentenceTokens = inspected.toTokens(context)
+                    _state.update { current ->
+                        val card = current.card ?: return@update current
+                        if (current.selectedBlock != block || card.token.start != token.start) return@update current
+                        current.copy(
+                            card = card.copy(
+                                analysis = inspected.word,
+                                grammar = inspected.findings,
+                                sentenceTokens = sentenceTokens,
+                                chunks = inspected.chunks,
+                                markers = inspected.markers,
+                                graphWords = inspected.graphWords.map { GraphWord(it.text, it.tag) },
+                                graphLinks = inspected.graphLinks.map { GraphLink(it.from, it.to, it.label) },
+                                saved = inspected.word.lemma in current.savedLemmas,
+                            ),
+                        )
+                    }
+                    // Определение — после того как узнали лемму.
+                    definitionJob?.cancel()
+                    definitionJob = viewModelScope.launch {
+                        val entry = dictionary.define(inspected.word.lemma)
+                        _state.update { current ->
+                            val card = current.card ?: return@update current
+                            if (current.selectedBlock != block || card.token.start != token.start) return@update current
+                            current.copy(card = card.copy(definition = entry?.let(DefinitionState::Ready) ?: DefinitionState.Missing))
+                        }
+                    }
+                } else {
+                    // Fallback: старая развёртка если inspectWord отсутствует
+                    val analysis = withContext(Dispatchers.Default) { core.analyzeWord(token.text) }
+                    val grammar = withContext(Dispatchers.Default) { core.explain(context) }
+                    val sentenceTokens = withContext(Dispatchers.Default) { core.tokenize(context).tokens }
+                    _state.update { current ->
+                        val card = current.card ?: return@update current
+                        if (current.selectedBlock != block || card.token.start != token.start) return@update current
+                        current.copy(
+                            card = card.copy(
+                                analysis = analysis,
+                                grammar = grammar.findings,
+                                sentenceTokens = sentenceTokens,
+                                chunks = grammar.chunks,
+                                markers = grammar.markers,
+                                saved = analysis.lemma in current.savedLemmas,
+                            ),
+                        )
+                    }
+                    definitionJob = viewModelScope.launch {
+                        val entry = dictionary.define(analysis.lemma)
+                        _state.update { current ->
+                            val card = current.card ?: return@update current
+                            if (current.selectedBlock != block || card.token.start != token.start) return@update current
+                            current.copy(card = card.copy(definition = entry?.let(DefinitionState::Ready) ?: DefinitionState.Missing))
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+                // Тихо — карточка уже видна с placeholder, сеть продолжает работу.
             }
         }
     }
@@ -480,99 +538,90 @@ private fun Chapter.toReaderBlocks(core: WolfyCore): List<ReaderBlock> =
     }
 
 /**
- * Готовит понятную схему фразы без тяжёлого синтаксического парсера.
+ * Переводит подготовленную главу (один переход) в блоки экрана.
  *
- * Точные скобки грамматических конструкций приходят из движка. Поверх них
- * добавляются только безопасные локальные связи: ближайшее имя до сказуемого
- * как исполнитель, ближайшее после как дополнение и прилагательное с
- * ближайшим существительным. Это подсказки для чтения, а не заявление о
- * полном академическом dependency parse, поэтому неоднозначные случаи
- * намеренно пропускаются.
+ * Токены компактные (без текста) — текст режется по смещениям UTF-16.
+ * Построение блоков повторяет `Chapter::plain_text` — пустая строка между
+ * текстовыми блоками, и гарантирует те же индексы, что и прямая токенизация.
  */
-private fun buildSentenceGraph(
-    core: WolfyCore,
-    sentence: String,
-    grammar: List<com.wolfy.ffi.Finding>,
-): Pair<List<GraphWord>, List<GraphLink>> {
-    val parsed = core.tokenize(sentence)
-    val visible = parsed.tokens.withIndex().filter { it.value.kind != "space" }
-    val originalToVisible = mutableMapOf<Int, Int>()
-    val analyses = visible.mapIndexed { visibleIndex, indexed ->
-        originalToVisible[indexed.index] = visibleIndex
-        if (indexed.value.kind == "word") core.analyzeWord(indexed.value.text) else null
-    }
-    val words = visible.mapIndexed { index, indexed ->
-        GraphWord(indexed.value.text, analyses[index]?.primaryPos)
-    }
-    if (words.isEmpty()) return emptyList<GraphWord>() to emptyList()
-
-    val links = grammar.mapNotNull { finding ->
-        val covered = (finding.start until finding.end).mapNotNull(originalToVisible::get)
-        if (covered.isEmpty()) null else GraphLink(
-            from = covered.minOrNull() ?: return@mapNotNull null,
-            to = (covered.maxOrNull() ?: return@mapNotNull null) + 1,
-            label = finding.title,
+private fun PreparedChapter.toReaderBlocks(): List<ReaderBlock> {
+    val plain = plainText()
+    // Глобальные токены с текстом, нарезанным из plain (UTF-16 совместимо)
+    val globalTokens = tokens.map { c ->
+        Token(
+            kind = c.kind,
+            start = c.start,
+            end = c.end,
+            text = plain.substring(c.start, c.end),
         )
-    }.toMutableList()
-
-    val root = analyses.indexOfFirst { it?.primaryPos == "VERB" }.takeIf { it >= 0 }
-    if (root != null) {
-        val subject = (root - 1 downTo 0).firstOrNull {
-            analyses[it]?.primaryPos in setOf("NOUN", "PRON")
-        }
-        val target = (root + 1 until analyses.size).firstOrNull {
-            analyses[it]?.primaryPos in setOf("NOUN", "PRON")
-        }
-        subject?.let { links.add(spanLink(it, root, "исполнитель — действие")) }
-        target?.let { links.add(spanLink(root, it, "действие — дополнение")) }
     }
-
-    analyses.forEachIndexed { index, analysis ->
-        if (analysis?.primaryPos != "ADJ") return@forEachIndexed
-        val noun = (index + 1 until analyses.size).firstOrNull {
-            analyses[it]?.primaryPos == "NOUN"
+    var at = 0
+    var firstText = true
+    val out = mutableListOf<ReaderBlock>()
+    for (block in blocks) {
+        val text = block.text.orEmpty()
+        val isText = !block.text.isNullOrBlank() && block.kind != "image" && block.kind != "divider"
+        if (!isText) {
+            out.add(
+                ReaderBlock(
+                    kind = block.kind,
+                    text = text,
+                    level = block.level,
+                    parsed = null,
+                    imagePath = block.path,
+                    alt = block.alt,
+                ),
+            )
+            continue
         }
-        if (noun != null && noun - index <= 2) {
-            links.add(spanLink(index, noun, "признак — слово"))
+        if (!firstText) at += 2
+        firstText = false
+        val blockStart = at
+        val blockEnd = at + text.length
+        // Токены, принадлежащие блоку (фильтруем по глобальному start)
+        val indices = globalTokens.indices.filter { i ->
+            val s = globalTokens[i].start
+            s >= blockStart && s < blockEnd
         }
+        val localTokens = indices.map { gi ->
+            val g = globalTokens[gi]
+            Token(
+                kind = g.kind,
+                start = g.start - blockStart,
+                end = g.end - blockStart,
+                text = g.text,
+            )
+        }
+        // Предложения блока — те, чей start внутри блока
+        val localSentences = sentences
+            .filter { it.start >= blockStart && it.start < blockEnd }
+            .map { s ->
+                // Мапим token indexes
+                val localFirst = indices.count { it < s.firstToken }
+                val localLast = indices.count { it < s.lastToken }
+                Sentence(
+                    start = s.start - blockStart,
+                    end = s.end - blockStart,
+                    firstToken = localFirst,
+                    lastToken = localLast,
+                    text = plain.substring(s.start, s.end),
+                )
+            }
+        val parsed = if (localTokens.isEmpty() && localSentences.isEmpty()) null else ParsedText(
+            tokens = localTokens,
+            sentences = localSentences,
+        )
+        out.add(
+            ReaderBlock(
+                kind = block.kind,
+                text = text,
+                level = block.level,
+                parsed = parsed,
+                imagePath = block.path,
+                alt = block.alt,
+            ),
+        )
+        at = blockEnd
     }
-
-    // Служебные слова особенно важны именно в английском: артикль, частица
-    // или предлог меняют роль соседнего слова сильнее, чем род, которого у
-    // английского существительного обычно вовсе нет. Показываем только
-    // ближайшую однозначную связь, не притворяясь полным dependency parser.
-    analyses.forEachIndexed { index, analysis ->
-        when (analysis?.primaryPos) {
-            "DET" -> (index + 1 until analyses.size).firstOrNull {
-                analyses[it]?.primaryPos in setOf("NOUN", "ADJ")
-            }?.takeIf { it - index <= 2 }?.let {
-                links.add(spanLink(index, it, "определитель — имя"))
-            }
-            "ADP" -> (index + 1 until analyses.size).firstOrNull {
-                analyses[it]?.primaryPos in setOf("NOUN", "PRON")
-            }?.takeIf { it - index <= 3 }?.let {
-                links.add(spanLink(index, it, "предлог — зависимое слово"))
-            }
-            "PART" -> (analyses.indices).minByOrNull { candidate ->
-                if (analyses[candidate]?.primaryPos == "VERB") kotlin.math.abs(candidate - index)
-                else Int.MAX_VALUE
-            }?.takeIf { analyses[it]?.primaryPos == "VERB" }?.let {
-                links.add(spanLink(index, it, "частица — действие"))
-            }
-            "ADV" -> (analyses.indices).minByOrNull { candidate ->
-                if (analyses[candidate]?.primaryPos == "VERB") kotlin.math.abs(candidate - index)
-                else Int.MAX_VALUE
-            }?.takeIf { analyses[it]?.primaryPos == "VERB" }?.let {
-                links.add(spanLink(index, it, "обстоятельство — действие"))
-            }
-        }
-    }
-
-    return words to links.distinctBy { Triple(it.from, it.to, it.label) }
+    return out
 }
-
-private fun spanLink(first: Int, second: Int, label: String): GraphLink = GraphLink(
-    from = minOf(first, second),
-    to = maxOf(first, second) + 1,
-    label = label,
-)

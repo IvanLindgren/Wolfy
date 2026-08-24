@@ -45,8 +45,8 @@ import { readerFont, readerMeasure, readingMode, setReaderFont, setReaderMeasure
 import styles from './reader.module.css'
 import { sentenceAt, useChapter } from './useChapter'
 
-/** Как часто записывать место в книге. */
-const PROGRESS_DELAY = 900
+/** Как часто записывать место в книге — ~3 секунды (политику native). */
+const PROGRESS_DELAY = 3000
 
 /** Сколько горит вспышка на месте, к которому пришли из заметок. */
 const FLASH_MS = 1600
@@ -179,40 +179,140 @@ export function ReaderScreen() {
   }, [opened, bookId])
 
   // --- Картинки главы -------------------------------------------------------
-
+  // §24: в scroll режиме грузим только видимые + 600px prefetch через
+  // IntersectionObserver с лимитом 2 параллельных resource, в pages — eager
+  // но тоже с лимитом 2 и батчем (один setImages) чтобы не дёргать пагинацию.
   useEffect(() => {
     const paths = chapter.blocks
       .map((item) => item.block)
       .filter((block) => block.kind === 'image' && block.path)
       .map((block) => block.path!)
-    if (!paths.length) {
-      setImages(new Map())
+    const uniqPaths = [...new Set(paths)]
+    if (!uniqPaths.length) {
+      setImages((prev) => {
+        prev.forEach((url) => URL.revokeObjectURL(url))
+        return new Map()
+      })
       return
     }
 
     let alive = true
-    const urls: string[] = []
-    void Promise.all(
-      paths.map(async (path) => {
-        const bytes = await bridge.resource(bookId, path)
-        if (!bytes) return null
+    const createdUrls: string[] = []
+    const revokeCreated = () => createdUrls.forEach((u) => URL.revokeObjectURL(u))
+
+    // page mode: eager батч
+    if (mode === 'pages') {
+      // очищаем предыдущие перед загрузкой новой главы
+      setImages((prev) => {
+        prev.forEach((u) => URL.revokeObjectURL(u))
+        return new Map()
+      })
+      void (async () => {
+        const { limitedResource } = await import('./imageLoader')
+        const results = new Map<string, string>()
+        // Запускаем все, но limitedResource держит семафор 2
+        const pairs = await Promise.all(
+          uniqPaths.map(async (p) => {
+            try {
+              const bytes = await limitedResource(bookId, p)
+              if (!alive || !bytes) return null
+              const url = URL.createObjectURL(new Blob([bytes as BlobPart]))
+              createdUrls.push(url)
+              return [p, url] as const
+            } catch {
+              return null
+            }
+          }),
+        )
+        if (!alive) {
+          revokeCreated()
+          return
+        }
+        for (const pair of pairs) if (pair) results.set(pair[0], pair[1])
+        setImages(results)
+      })()
+      return () => {
+        alive = false
+        revokeCreated()
+        // revoke уже выставленной карты при размонтаже/переключении режима
+        setImages((prev) => {
+          // не трогаем createdUrls двойным revoke — они уже в prev если успели
+          return prev
+        })
+      }
+    }
+
+    // scroll mode: lazy по видимости
+    setImages((prev) => {
+      prev.forEach((u) => URL.revokeObjectURL(u))
+      return new Map()
+    })
+    const loaded = new Map<string, string>()
+    let observer: IntersectionObserver | null = null
+    let raf = 0
+    let scrollerEl: HTMLElement | null = scroller.current
+
+    // фолбэк если наблюдателя нет — грузим с лимитом инкрементально
+    const scheduleLoad = async (path: string) => {
+      if (!alive || loaded.has(path)) return
+      const { limitedResource } = await import('./imageLoader')
+      try {
+        const bytes = await limitedResource(bookId, path)
+        if (!alive || !bytes) return
         const url = URL.createObjectURL(new Blob([bytes as BlobPart]))
-        urls.push(url)
-        return [path, url] as const
-      }),
-    ).then((pairs) => {
-      if (!alive) {
-        urls.forEach((url) => URL.revokeObjectURL(url))
+        createdUrls.push(url)
+        loaded.set(path, url)
+        if (alive) setImages(new Map(loaded))
+      } catch {
+        // игнорируем битую картинку
+      }
+    }
+
+    const observeTargets = () => {
+      if (!alive) return
+      scrollerEl = scroller.current
+      const host: HTMLElement | null = scrollerEl
+      if (!host) {
+        raf = window.requestAnimationFrame(observeTargets)
         return
       }
-      setImages(new Map(pairs.filter((pair): pair is [string, string] => !!pair)))
-    })
+      const figures = host.querySelectorAll<HTMLElement>('[data-image-path]')
+      if (!figures.length) {
+        // контент ещё не отрендерился — пробуем следующий кадр (до 10 попыток)
+        raf = window.requestAnimationFrame(observeTargets)
+        return
+      }
+      if (typeof IntersectionObserver === 'undefined') {
+        // фолбэк: грузим всё с лимитом
+        uniqPaths.forEach((p) => void scheduleLoad(p))
+        return
+      }
+      observer = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            if (!entry.isIntersecting) continue
+            const target = entry.target as HTMLElement
+            const p = target.dataset.imagePath
+            if (!p || loaded.has(p)) continue
+            observer?.unobserve(target)
+            void scheduleLoad(p)
+          }
+        },
+        { root: host, rootMargin: '600px 0px', threshold: 0 },
+      )
+      figures.forEach((fig) => observer!.observe(fig))
+    }
+
+    raf = window.requestAnimationFrame(observeTargets)
 
     return () => {
       alive = false
-      urls.forEach((url) => URL.revokeObjectURL(url))
+      if (raf) cancelAnimationFrame(raf)
+      observer?.disconnect()
+      revokeCreated()
+      loaded.forEach((u) => URL.revokeObjectURL(u))
     }
-  }, [chapter.blocks, bookId])
+  }, [chapter.blocks, bookId, mode])
 
   // --- Подсветка сохранённых слов -------------------------------------------
 
@@ -262,37 +362,134 @@ export function ReaderScreen() {
     if (mode === 'pages') return pager.current?.firstToken() ?? 0
     const host = scroller.current
     if (!host) return 0
+    // §21: не сканировать 10k spans: сначала находим видимый block, потом токены внутри него
+    const blocks = host.querySelectorAll<HTMLElement>('[data-block]')
+    if (blocks.length) {
+      const scrollerRect = host.getBoundingClientRect()
+      const hasLayout = scrollerRect.height > 0 && scrollerRect.width > 0
+      if (hasLayout) {
+        const edgeTop = scrollerRect.top + 8
+        let target: HTMLElement | null = null
+        for (const b of Array.from(blocks)) {
+          const r = b.getBoundingClientRect()
+          // content-visibility:auto даёт 0×0 у offscreen — пропускаем, они не видимы
+          if (r.width < 1 && r.height < 1) continue
+          if (r.bottom >= edgeTop) {
+            // блок с токенами либо первый после обреза
+            const first = b.dataset.firstToken
+            if (first !== undefined && first !== '-1') {
+              target = b
+              break
+            }
+            // блок без токенов (divider/image) — ищем следующий с токенами
+            continue
+          }
+        }
+        if (!target) {
+          // внизу книги — берём последний блок с токенами
+          for (let i = blocks.length - 1; i >= 0; i -= 1) {
+            const b = blocks[i] as HTMLElement
+            if (b.dataset.firstToken !== undefined && b.dataset.firstToken !== '-1') {
+              target = b
+              break
+            }
+          }
+        }
+        if (target) {
+          const tokens = target.querySelectorAll<HTMLElement>('[data-t]')
+          for (const el of Array.from(tokens)) {
+            const r = el.getBoundingClientRect()
+            if (r.width < 1 && r.height < 1) {
+              if ((el as HTMLElement).offsetTop >= host.scrollTop + 8) return Number(el.dataset.t)
+              continue
+            }
+            if (r.top >= edgeTop) return Number(el.dataset.t)
+          }
+          const first = target.dataset.firstToken
+          if (first && first !== '-1') return Number(first)
+        }
+      } else {
+        // jsdom / без layout: fallback через offsetTop, но только по блокам
+        const edge = host.scrollTop + 8
+        let target: HTMLElement | null = null
+        for (const b of Array.from(blocks)) {
+          if (b.dataset.firstToken === '-1') continue
+          const top = (b as HTMLElement).offsetTop
+          const h = (b as HTMLElement).offsetHeight || 260
+          if (top + h >= edge || top >= edge) {
+            target = b
+            break
+          }
+        }
+        if (target) {
+          const tokens = target.querySelectorAll<HTMLElement>('[data-t]')
+          for (const el of Array.from(tokens)) {
+            if (el.offsetTop >= edge) return Number(el.dataset.t)
+          }
+          const ft = target.dataset.firstToken
+          if (ft && ft !== '-1') return Number(ft)
+        }
+      }
+    }
+    // Fallback: глобальный скан только если block-путь не нашёл (безопасность)
     const edge = host.scrollTop + 8
     const all = host.querySelectorAll<HTMLElement>('[data-t]')
-    for (const element of all) {
+    for (const element of Array.from(all)) {
+      const hostRect = host.getBoundingClientRect()
+      if (hostRect.height > 0) {
+        const r = element.getBoundingClientRect()
+        if (r.width >= 1 && r.height >= 1) {
+          if (r.top >= hostRect.top + 8) return Number(element.dataset.t)
+          continue
+        }
+      }
       if (element.offsetTop >= edge) return Number(element.dataset.t)
     }
     return 0
   }, [mode])
 
-  const remember = useCallback(() => {
-    if (!book || !chapter.tokens.length) return
-    const token = currentToken()
-    const fraction = Math.min(1, Math.max(0, token / chapter.tokens.length))
-    const now = Date.now()
-    if (now - savedAt.current < PROGRESS_DELAY) return
-    savedAt.current = now
-    void session.rememberProgress(book.id, Math.max(0, chapterIndex), fraction)
-  }, [book, chapter.tokens.length, chapterIndex, currentToken])
+  const remember = useCallback(
+    (force = false) => {
+      if (!book || !chapter.tokens.length) return
+      const token = currentToken()
+      const fraction = Math.min(1, Math.max(0, token / chapter.tokens.length))
+      const now = Date.now()
+      if (!force && now - savedAt.current < PROGRESS_DELAY) return
+      savedAt.current = now
+      void session.rememberProgress(book.id, Math.max(0, chapterIndex), fraction)
+    },
+    [book, chapter.tokens.length, chapterIndex, currentToken],
+  )
 
-  // Место записывается по таймеру, а не на каждый кадр прокрутки: разница
-  // между «раз в секунду» и «десять раз в секунду» для читателя нулевая, а
-  // для главного потока — заметная.
+  const flushProgress = useCallback(() => {
+    savedAt.current = 0
+    remember(true)
+  }, [remember])
+
+  // Место записывается по таймеру, а не на каждый кадр прокрутки
   useEffect(() => {
-    const timer = window.setInterval(remember, PROGRESS_DELAY)
+    const timer = window.setInterval(() => remember(false), PROGRESS_DELAY)
     return () => {
       window.clearInterval(timer)
-      // При уходе с экрана место записывается немедленно: иначе последняя
-      // страница пропадёт.
-      savedAt.current = 0
-      remember()
+      flushProgress()
     }
-  }, [remember])
+  }, [remember, flushProgress])
+
+  // §22: flush при скрытии вкладки / уходе страницы (visibility hidden / pagehide)
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') flushProgress()
+    }
+    const onPageHide = () => flushProgress()
+    document.addEventListener('visibilitychange', onVisibility)
+    window.addEventListener('pagehide', onPageHide)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('pagehide', onPageHide)
+    }
+  }, [flushProgress])
+
+
 
   // Возврат ровно туда, где закрыли: доля главы превращается обратно в токен.
   // Если пришла ссылка из заметок, она сильнее сохранённого места — и после
@@ -359,12 +556,21 @@ export function ReaderScreen() {
   const goChapter = useCallback(
     (index: number) => {
       if (index < 0 || index >= chapters) return
+      // §22: фиксируем место старой главы до смены
+      savedAt.current = 0
+      // вызываем remember синхронно до смены индекса, чтобы доли считались для старой главы
+      if (book && chapter.tokens.length) {
+        const token = currentToken()
+        const fraction = Math.min(1, Math.max(0, token / chapter.tokens.length))
+        void session.rememberProgress(book.id, Math.max(0, chapterIndex), fraction)
+        savedAt.current = Date.now()
+      }
       restored.current = true
       setChapterIndex(index)
       setContents(false)
       scroller.current?.scrollTo({ top: 0 })
     },
-    [chapters],
+    [chapters, book, chapter.tokens.length, chapterIndex, currentToken],
   )
 
   const turn = useCallback(
@@ -590,6 +796,7 @@ export function ReaderScreen() {
       onPhrase={openPhrase}
       dropCap
       images={images}
+      mode={mode}
     />
   )
 
@@ -715,7 +922,7 @@ export function ReaderScreen() {
             {content}
           </Paginator>
         ) : (
-          <div className={styles.scroller} ref={scroller}>
+          <div className={styles.scroller} ref={scroller} data-reader-scroller>
             {content}
             {chapterIndex < chapters - 1 && (
               <div className={styles.column}>

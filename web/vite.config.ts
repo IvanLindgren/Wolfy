@@ -80,6 +80,8 @@ export default defineConfig({
         skipWaiting: true,
         clientsClaim: true,
         globPatterns: ['**/*.{js,css,html,woff2,svg,wasm}'],
+        // §29: тяжёлые необязательные чанки не попадают в precache — они скачаются по требованию
+        globIgnores: ['**/pdf*.js', '**/pdf.worker*.js', '**/dnd*.js', '**/Discovery*.js', '**/Training*.js', '**/Grammar*.js'],
         // Лексикон и словарь заведомо больше умолчания в 2 МБ.
         maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
         navigateFallback: 'index.html',
@@ -87,6 +89,24 @@ export default defineConfig({
         // синхронизации — это потерянные данные, а не офлайн-режим.
         navigateFallbackDenylist: [/^\/v1\//, /^\/healthz/],
         runtimeCaching: [
+          {
+            // Ленивые тяжёлые чанки и роут-чанки — кэшируем при первом использовании
+            urlPattern: /\/assets\/(pdf|dnd|motion|tanstack|ReaderScreen|LibraryScreen|DecksScreen|TrainingScreen|Grammar|Discovery|Book|AllWords|Photo|Account|Onboarding|Settings).*\.js$/,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'wolfy-lazy',
+              expiration: { maxEntries: 32, maxAgeSeconds: 60 * 60 * 24 * 30 },
+            },
+          },
+          {
+            // Остальные ассеты (CSS, мелкие чанки) — тоже кэш после первого запроса
+            urlPattern: /\/assets\/.*\.(js|css)$/,
+            handler: 'StaleWhileRevalidate',
+            options: {
+              cacheName: 'wolfy-assets-runtime',
+              expiration: { maxEntries: 64, maxAgeSeconds: 60 * 60 * 24 * 7 },
+            },
+          },
           {
             // Лексикон и словарь неизменяемы: один раз скачали — больше
             // никогда не спрашиваем.

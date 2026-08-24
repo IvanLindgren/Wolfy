@@ -23,8 +23,10 @@ import type {
   DictionaryEntry,
   Exercises,
   Grammar,
+  InspectResult,
   LibraryState,
   Outcome,
+  PreparedChapter,
   Reference,
   TokenizedText,
   WordAnalysis,
@@ -147,6 +149,14 @@ export function openBook(
 
 export function chapter(id: string, index: number): Promise<Chapter> {
   return core().chapter(id, index)
+}
+
+export function preparedChapter(id: string, index: number): Promise<PreparedChapter> {
+  return core().preparedChapter(id, index)
+}
+
+export function inspectWord(word: string, sentence: string): Promise<InspectResult> {
+  return core().inspectWord(word, sentence)
 }
 
 export function resource(id: string, path: string): Promise<Uint8Array | null> {

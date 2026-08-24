@@ -67,6 +67,15 @@ pub fn analyze_word(word: &str) -> Result<String, JsError> {
     json(&WordDto::from(&analysis))
 }
 
+/// Всё для карточки за один вызов — слово, предложение, грамматика и граф.
+///
+/// Смещения токенов — в UTF-16, текст токенов не дублируется.
+#[wasm_bindgen(js_name = inspectWord)]
+pub fn inspect_word(word: &str, sentence: &str) -> Result<String, JsError> {
+    let dto = crate::inspect::inspect_word(word, sentence);
+    json(&dto)
+}
+
 /// Разбивает текст на токены и предложения.
 ///
 /// Позиции токенов — в единицах UTF-16, то есть ровно в тех индексах, которыми
@@ -166,6 +175,14 @@ impl WolfyBook {
     pub fn chapter(&mut self, index: usize) -> Result<String, JsError> {
         let chapter = self.inner.chapter(index).map_err(described)?;
         json(&ChapterDto::from(&chapter))
+    }
+
+    /// Читает главу вместе с токенами/предложениями — один тяжёлый переход.
+    #[wasm_bindgen(js_name = preparedChapter)]
+    pub fn prepared_chapter(&mut self, index: usize) -> Result<String, JsError> {
+        let chapter = self.inner.chapter(index).map_err(described)?;
+        let prepared = crate::prepared::prepare(&chapter);
+        json(&prepared)
     }
 
     /// Байты иллюстрации по пути из блока `image`.

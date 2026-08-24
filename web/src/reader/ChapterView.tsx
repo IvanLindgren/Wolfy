@@ -49,6 +49,8 @@ interface ChapterViewProps {
   dropCap: boolean
   /** Картинки главы: путь внутри книги → `blob:`-адрес. */
   images: Map<string, string>
+  /** Режим чтения: влияет на виртуализацию и фильтрацию подсветки. */
+  mode?: 'pages' | 'scroll'
 }
 
 export function ChapterView({
@@ -58,6 +60,7 @@ export function ChapterView({
   onPhrase,
   dropCap,
   images,
+  mode = 'scroll',
 }: ChapterViewProps) {
   const column = useRef<HTMLDivElement>(null)
 
@@ -91,7 +94,7 @@ export function ChapterView({
       onClick={handleClick}
       lang="en"
     >
-      <MarkLayer container={column} marks={marks} />
+      <MarkLayer container={column} marks={marks} blocks={blocks} mode={mode} />
       {blocks.map((item, position) => (
         <BlockView
           key={item.index}
@@ -119,6 +122,10 @@ function isOpening(blocks: TokenizedBlock[], position: number): boolean {
 /**
  * Один блок. Мемоизирован по данным: главный смысл всей конструкции в том,
  * что абзац, однажды нарисованный, больше не рисуется никогда.
+ *
+ * Для §21 каждый корень несёт data-first/last-token и data-block: по ним
+ * прогресс и подсветка определяют видимый диапазон за O(blocks), а не
+ * O(tokens). Для §20 в scroll режиме на нём включается content-visibility.
  */
 const BlockView = memo(function BlockView({
   item,
@@ -132,37 +139,48 @@ const BlockView = memo(function BlockView({
   images: Map<string, string>
 }) {
   const { block, tokens, offset } = item
+  const first = tokens.length ? offset : -1
+  const last = tokens.length ? offset + tokens.length - 1 : -1
+  const blockAttrs = {
+    'data-block': String(item.index),
+    'data-first-token': String(first),
+    'data-last-token': String(last),
+  } as const
+  const blockClass: string = (styles as Record<string, string>).block ?? 'block'
 
   switch (block.kind) {
     case 'heading': {
       const level = Math.min(Math.max(block.level ?? 2, 1), 3)
       const Tag = (level === 1 ? 'h2' : level === 2 ? 'h3' : 'h4') as 'h2'
       return (
-        <Tag className={`${styles.heading} ${styles[`heading--${level}`]}`}>
+        <Tag
+          className={`${styles.heading} ${styles[`heading--${level}`]} ${blockClass}`}
+          {...blockAttrs}
+        >
           <Tokens tokens={tokens} offset={offset} />
         </Tag>
       )
     }
     case 'quote':
       return (
-        <blockquote className={styles.quote}>
+        <blockquote className={`${styles.quote} ${blockClass}`} {...blockAttrs}>
           <Tokens tokens={tokens} offset={offset} />
         </blockquote>
       )
     case 'listItem':
       return (
-        <p className={styles.listItem}>
+        <p className={`${styles.listItem} ${blockClass}`} {...blockAttrs}>
           <Tokens tokens={tokens} offset={offset} />
         </p>
       )
     case 'divider':
       return (
-        <div className={styles.divider} aria-hidden="true">
+        <div className={`${styles.divider} ${blockClass}`} aria-hidden="true" {...blockAttrs}>
           <span className={styles.divider__mark}>◆</span>
         </div>
       )
     case 'image':
-      return <Illustration block={block} images={images} />
+      return <Illustration block={block} images={images} attrs={blockAttrs} blockClass={blockClass} />
     default:
       return (
         <p
@@ -170,9 +188,11 @@ const BlockView = memo(function BlockView({
             styles.paragraph,
             opening ? styles['paragraph--opening'] : '',
             dropCap ? styles.dropCap : '',
+            blockClass,
           ]
             .filter(Boolean)
             .join(' ')}
+          {...blockAttrs}
         >
           <Tokens tokens={tokens} offset={offset} />
         </p>
@@ -211,12 +231,31 @@ function Tokens({ tokens, offset }: { tokens: Token[]; offset: number }) {
   return <>{nodes}</>
 }
 
-function Illustration({ block, images }: { block: Block; images: Map<string, string> }) {
-  const source = block.path ? images.get(block.path) : undefined
-  if (!source) return null
+function Illustration({
+  block,
+  images,
+  attrs,
+  blockClass,
+}: {
+  block: Block
+  images: Map<string, string>
+  attrs: Record<string, unknown>
+  blockClass: string
+}) {
+  const path = block.path
+  const source = path ? images.get(path) : undefined
+  // Всегда рендерим figure, чтобы IntersectionObserver мог найти её даже до загрузки.
+  // data-image-path нужен ленивому загрузчику в ReaderScreen.
+  const figureAttrs: Record<string, string> = path ? { 'data-image-path': path } : {}
   return (
-    <figure className={styles.image}>
-      <img src={source} alt={block.alt ?? ''} loading="lazy" />
+    <figure className={`${styles.image} ${blockClass}`} {...attrs} {...figureAttrs}>
+      {source ? (
+        <img src={source} alt={block.alt ?? ''} loading="lazy" decoding="async" />
+      ) : (
+        // Placeholder сохраняет место и даёт наблюдателю цель; высота минимальна
+        // но при появлении картинки layout обновится один раз (scroll) или батчем (pages).
+        <span className={styles.image__placeholder} aria-hidden="true" />
+      )}
       {block.alt && <figcaption>{block.alt}</figcaption>}
     </figure>
   )
@@ -229,13 +268,22 @@ function Illustration({ block, images }: { block: Block; images: Map<string, str
  * потому что слово или фраза могут переноситься. Пересчёт идёт при смене
  * набора отметок и при изменении размеров полосы: кегль, тема и ширина окна
  * двигают строки, и отметки обязаны переехать вместе с ними.
+ *
+ * В scroll режиме на слабом устройстве сотни сохранённых слов могли вызвать
+ * тяжёлый forced layout: теперь считаются только видимые + небольшой overscan,
+ * отфильтрованные по block token ranges до любых querySelector/getClientRects.
+ * Resize / scroll батчатся через один rAF.
  */
 function MarkLayer({
   container,
   marks,
+  blocks,
+  mode,
 }: {
   container: React.RefObject<HTMLDivElement | null>
   marks: TokenRange[]
+  blocks: TokenizedBlock[]
+  mode: 'pages' | 'scroll'
 }) {
   const [rects, setRects] = useState<
     {
@@ -249,6 +297,18 @@ function MarkLayer({
     }[]
   >([])
 
+  const frameRef = useRef<number | null>(null)
+  const schedule = useCallback(
+    (fn: () => void) => {
+      if (frameRef.current !== null) cancelAnimationFrame(frameRef.current)
+      frameRef.current = requestAnimationFrame(() => {
+        frameRef.current = null
+        fn()
+      })
+    },
+    [],
+  )
+
   const recompute = useCallback(() => {
     const host = container.current
     if (!host) {
@@ -256,18 +316,52 @@ function MarkLayer({
       return
     }
     const base = host.getBoundingClientRect()
+
+    // §23: в scroll режиме фильтруем marks до DOM запросов.
+    let visibleMarks = marks
+    if (mode === 'scroll' && blocks.length) {
+      const visible = visibleTokenRange(host, blocks)
+      if (visible) {
+        const [firstVisible, lastVisible] = visible
+        // overscan ~ 800 токенов (примерно несколько абзацев каждая сторона)
+        const OVERSCAN_TOKENS = 800
+        const lo = Math.max(0, firstVisible - OVERSCAN_TOKENS)
+        const hi = lastVisible + OVERSCAN_TOKENS
+        visibleMarks = marks.filter((m) => m.end > lo && m.start < hi)
+        // Если меток очень много, а видимых мало, мы только что сэкономили сотни Range.
+      }
+    } else if (mode === 'pages') {
+      // В режиме страниц подсвечивать нужно только текущую и соседнюю страницу.
+      // Без доступа к handle pages мы консервативно оставляем всё, но это
+      // отдельный лёгкий путь: страниц всего несколько десятков токенов.
+      // Оставлен как есть, чтобы не ломать пагинацию пока MarkLayer не знает page.
+    }
+
     const next: typeof rects = []
 
-    for (const mark of marks) {
+    for (const mark of visibleMarks) {
       const first = host.querySelector<HTMLElement>(`[data-t="${mark.start}"]`)
       const last = host.querySelector<HTMLElement>(`[data-t="${mark.end - 1}"]`)
       if (!first || !last) continue
 
+      // content-visibility:auto может сделать offscreen блоки не рендеримыми,
+      // их getClientRects вернёт пусто — такие метки просто пропускаем, они
+      // пересчитаются при прокрутке.
       const range = document.createRange()
-      range.setStartBefore(first)
-      range.setEndAfter(last)
+      try {
+        range.setStartBefore(first)
+        range.setEndAfter(last)
+      } catch {
+        continue
+      }
 
-      Array.from(range.getClientRects()).forEach((box, index) => {
+      let boxes: DOMRectList
+      try {
+        boxes = range.getClientRects()
+      } catch {
+        continue
+      }
+      Array.from(boxes).forEach((box, index) => {
         // Схлопнутые прямоугольники приходят на разрывах строк и рисуют
         // паразитные полоски в ноль пикселей шириной.
         if (box.width < 1 || box.height < 1) return
@@ -284,7 +378,9 @@ function MarkLayer({
     }
 
     setRects(next)
-  }, [container, marks])
+  }, [container, marks, blocks, mode])
+
+  const scheduleRecompute = useCallback(() => schedule(recompute), [schedule, recompute])
 
   useEffect(() => {
     // Отметки считаются после того, как браузер разложил строки: до этого
@@ -296,10 +392,29 @@ function MarkLayer({
   useEffect(() => {
     const host = container.current
     if (!host || typeof ResizeObserver === 'undefined') return
-    const observer = new ResizeObserver(() => recompute())
+    const observer = new ResizeObserver(() => scheduleRecompute())
     observer.observe(host)
+    // Также слушаем размеры scroll-контейнера, если он есть.
+    const scroller = findScrollContainer(host)
+    if (scroller) observer.observe(scroller)
     return () => observer.disconnect()
-  }, [container, recompute])
+  }, [container, scheduleRecompute])
+
+  useEffect(() => {
+    if (mode !== 'scroll') return
+    const host = container.current
+    const scroller = host ? findScrollContainer(host) : null
+    if (!scroller) return
+    const onScroll = () => scheduleRecompute()
+    scroller.addEventListener('scroll', onScroll, { passive: true })
+    return () => scroller.removeEventListener('scroll', onScroll)
+  }, [container, mode, scheduleRecompute])
+
+  useEffect(() => {
+    return () => {
+      if (frameRef.current !== null) cancelAnimationFrame(frameRef.current)
+    }
+  }, [])
 
   return (
     <div className={styles.marks} aria-hidden="true">
@@ -431,4 +546,76 @@ export function textOf(tokens: Token[], start: number, end: number, whole: strin
   const to = tokens[end - 1]
   if (!from || !to) return ''
   return whole.slice(from.start, to.end)
+}
+
+function findScrollContainer(host: HTMLElement): HTMLElement | null {
+  let cur: HTMLElement | null = host.parentElement
+  while (cur) {
+    // В веб-читалке скроллит именно .scroller; у остальных overflow не auto.
+    const style = cur.style ? window.getComputedStyle(cur) : null
+    const overflowY = style?.overflowY ?? ''
+    if (
+      (overflowY === 'auto' || overflowY === 'scroll' || cur.dataset.readerScroller !== undefined) &&
+      cur.scrollHeight > cur.clientHeight + 4
+    ) {
+      return cur
+    }
+    // Fallback: у scroller есть характерный scrollHeight > clientHeight даже без стилей в jsdom
+    if (cur.scrollHeight > cur.clientHeight + 16 && cur.clientHeight > 0) return cur
+    cur = cur.parentElement
+  }
+  return null
+}
+
+/**
+ * Видимый диапазон токенов в scroll режиме, определённый по блокам.
+ *
+ * Берём первый и последний видимый block по геометрии, затем расширяем до
+ * их токен-интервалов. Возвращает [firstToken, lastTokenExcl) или null если
+ * блоки не нашлись (тогда фильтрация отключается).
+ */
+function visibleTokenRange(host: HTMLElement, _blocks: TokenizedBlock[]): [number, number] | null {
+  const scroller = findScrollContainer(host)
+  const blockNodes = Array.from(host.querySelectorAll<HTMLElement>('[data-block]')) as HTMLElement[]
+  if (!blockNodes.length) return null
+
+  // Если есть скроллер, сравниваем rect видимости с небольшим overscan (300px)
+  let scrollerRect: DOMRect | null = null
+  if (scroller) scrollerRect = scroller.getBoundingClientRect()
+  const OVERSCAN_PX = 400
+  let firstSeen: HTMLElement | null = null
+  let lastSeen: HTMLElement | null = null
+  for (const node of blockNodes) {
+    let visible = false
+    if (scrollerRect) {
+      const r = node.getBoundingClientRect()
+      // content-visibility:auto может дать нулевую высоту у невидимых блоков до измерения;
+      // такие считаем невидимыми
+      if (r.height < 1 && r.width < 1) continue
+      const top = r.top - OVERSCAN_PX
+      const bottom = r.bottom + OVERSCAN_PX
+      if (bottom > scrollerRect.top && top < scrollerRect.bottom) visible = true
+    } else {
+      // fallback без скроллера: считаем блоки видимыми если их offset внутри host viewport приближённо
+      const top = (node as HTMLElement).offsetTop
+      const h = (node as HTMLElement).offsetHeight || 200
+      // без скроллера host — весь документ, считаем всё видимым
+      visible = true
+      void top
+      void h
+    }
+    if (visible) {
+      if (!firstSeen) firstSeen = node
+      lastSeen = node
+    }
+  }
+  if (!firstSeen || !lastSeen) return null
+  const firstToken = Number(firstSeen.dataset.firstToken ?? -1)
+  const lastToken = Number(lastSeen.dataset.lastToken ?? -1)
+  if (Number.isNaN(firstToken) || Number.isNaN(lastToken) || firstToken < 0 || lastToken < 0) {
+    // Блоки без токенов — пробуем найти ближайшие с токенами по порядку блоков
+    return null
+  }
+  // lastToken включительно, возвращаем полуинтервал
+  return [firstToken, lastToken + 1]
 }

@@ -43,6 +43,8 @@ internal interface CoreLibrary : Library {
     fun wolfy_book_open(path: ByteArray): Long
     fun wolfy_book_metadata(handle: Long): Pointer?
     fun wolfy_book_chapter(handle: Long, index: Long): Pointer?
+    fun wolfy_book_prepared_chapter(handle: Long, index: Long): Pointer?
+    fun wolfy_inspect_word(word: ByteArray, sentence: ByteArray): Pointer?
     fun wolfy_book_close(handle: Long)
 
     fun wolfy_session_open(library: ByteArray?, settings: ByteArray?): Long
@@ -116,6 +118,18 @@ internal class JnaWolfyCore(private val library: CoreLibrary) : WolfyCore {
     override fun readChapter(handle: Long, index: Int): Chapter {
         val raw = library.wolfy_book_chapter(handle, index.toLong())
             .takeString("глава $index")
+        return json.decodeFromString(raw)
+    }
+
+    override fun preparedChapter(handle: Long, index: Int): PreparedChapter {
+        val raw = library.wolfy_book_prepared_chapter(handle, index.toLong())
+            .takeString("подготовленная глава $index")
+        return json.decodeFromString(raw)
+    }
+
+    override fun inspectWord(word: String, sentence: String): InspectResult {
+        val raw = library.wolfy_inspect_word(word.toUtf8(), sentence.toUtf8())
+            .takeString("inspectWord $word")
         return json.decodeFromString(raw)
     }
 

@@ -76,6 +76,23 @@ interface WolfyCore {
     fun closeBook(handle: Long)
 
     /**
+     * Читает главу вместе с токенами и предложениями — один тяжёлый переход.
+     *
+     * Текст токенов не дублируется: клиент режет строку главы по смещениям.
+     * Вызывать только из `withContext(Dispatchers.Default)`.
+     */
+    fun preparedChapter(handle: Long, index: Int): PreparedChapter
+
+    /**
+     * Всё локальное для карточки за один вызов.
+     *
+     * На вход — слово как в тексте и предложение вокруг него.
+     * Возвращает анализ слова, токены предложения, грамматику и граф.
+     * Вызывать только из `withContext(Dispatchers.Default)`.
+     */
+    fun inspectWord(word: String, sentence: String): InspectResult
+
+    /**
      * Открывает сессию — библиотеку и настройки читателя.
      *
      * Состояние держит ядро, а не клиент. Соблазн отдавать его туда-сюда
@@ -361,6 +378,101 @@ data class Sentence(
     @SerialName("firstToken") val firstToken: Int,
     @SerialName("lastToken") val lastToken: Int,
     val text: String,
+)
+
+/** Компактный токен — без дублирования текста, только смещения UTF-16. */
+@Serializable
+data class CompactToken(
+    val kind: String,
+    val start: Int,
+    val end: Int,
+)
+
+@Serializable
+data class CompactSentence(
+    val start: Int,
+    val end: Int,
+    @SerialName("firstToken") val firstToken: Int,
+    @SerialName("lastToken") val lastToken: Int,
+)
+
+/** Глава с компактными токенами — один тяжёлый переход. */
+@Serializable
+data class PreparedChapter(
+    val title: String? = null,
+    val blocks: List<Block> = emptyList(),
+    val tokens: List<CompactToken> = emptyList(),
+    val sentences: List<CompactSentence> = emptyList(),
+) {
+    /**
+     * Текст главы для нарезки токенов компактного формата.
+     *
+     * Тот же `plainText()`, что у [Chapter]: блоки склеиваются "\n\n".
+     */
+    fun plainText(): String = blocks.mapNotNull { it.text }.joinToString("\n\n")
+
+    /**
+     * Токены, восстановленные из компактного представления нарезанием строки главы.
+     *
+     * Нужен переходному коду, который ещё ожидает [Token.text].
+     */
+    fun toTokens(): List<Token> {
+        val text = plainText()
+        return tokens.map { c ->
+            Token(kind = c.kind, start = c.start, end = c.end, text = text.substring(c.start, c.end))
+        }
+    }
+
+    fun toSentences(text: String = plainText()): List<Sentence> =
+        sentences.map { s ->
+            Sentence(
+                start = s.start,
+                end = s.end,
+                firstToken = s.firstToken,
+                lastToken = s.lastToken,
+                text = text.substring(s.start, s.end),
+            )
+        }
+
+    fun toParsedText(): ParsedText = ParsedText(tokens = toTokens(), sentences = toSentences())
+}
+
+/** Слово графа. */
+@Serializable
+data class GraphWord(
+    val text: String,
+    val tag: String? = null,
+)
+
+@Serializable
+data class GraphLink(
+    val from: Int,
+    val to: Int,
+    val label: String,
+)
+
+/** Всё локальное для карточки за один вызов. */
+@Serializable
+data class InspectResult(
+    val word: WordAnalysis,
+    val tokens: List<CompactToken> = emptyList(),
+    val sentences: List<CompactSentence> = emptyList(),
+    val findings: List<Finding> = emptyList(),
+    val chunks: List<GrammarChunk> = emptyList(),
+    val markers: List<GrammarMarker> = emptyList(),
+    val parts: List<GrammarPart> = emptyList(),
+    @SerialName("graphWords") val graphWords: List<GraphWord> = emptyList(),
+    @SerialName("graphLinks") val graphLinks: List<GraphLink> = emptyList(),
+) {
+    /** Токены предложения, восстановленные нарезанием исходного предложения. */
+    fun toTokens(sentence: String): List<Token> =
+        tokens.map { c -> Token(kind = c.kind, start = c.start, end = c.end, text = sentence.substring(c.start, c.end)) }
+}
+
+@Serializable
+data class GrammarPart(
+    val token: Int,
+    val pos: String,
 )
 
 /** Книга сразу после открытия. */

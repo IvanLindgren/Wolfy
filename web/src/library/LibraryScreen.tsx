@@ -86,11 +86,16 @@ export function LibraryScreen() {
     [books, order],
   )
 
-  const wordsOf = useCallback(
-    (bookId: string) =>
-      cards.filter((card) => card.bookId === bookId && !card.deleted).length,
-    [cards],
-  )
+  const wordCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const card of cards) {
+      if (card.deleted) continue
+      counts.set(card.bookId, (counts.get(card.bookId) ?? 0) + 1)
+    }
+    return counts
+  }, [cards])
+
+  const wordsOf = useCallback((bookId: string) => wordCounts.get(bookId) ?? 0, [wordCounts])
 
   const onDragStart = useCallback(
     (event: DragStartEvent) => {
