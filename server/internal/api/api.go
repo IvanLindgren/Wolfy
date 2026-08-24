@@ -202,6 +202,11 @@ func (s *Server) Handler() http.Handler {
 	// обязано переезжать между устройствами вместе с аккаунтом.
 	private.HandleFunc("GET /v1/books/{bookId}/annotations", s.getBookAnnotations)
 	private.HandleFunc("PUT /v1/books/{bookId}/annotations", s.putBookAnnotations)
+	// Тренировка — отдельный CRDT (§6/§7). Go не мерджит, а хранит
+	// per-device opaque blobs и отдаёт известные компоненты. Сливает Rust.
+	private.HandleFunc("GET /v1/practice", s.getPractice)
+	private.HandleFunc("PUT /v1/practice", s.putPractice)
+	private.HandleFunc("PUT /v1/practice/{deviceId}", s.putPractice)
 
 	mux.Handle("/v1/", s.verifier.Middleware(private))
 

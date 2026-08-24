@@ -172,6 +172,8 @@ func createUser(t *testing.T, s *store.Store) string {
 		_, _ = s.Pool.Exec(ctx, `DELETE FROM wolfy.books WHERE user_id = $1`, id)
 		_, _ = s.Pool.Exec(ctx, `DELETE FROM wolfy.book_annotations WHERE user_id = $1`, id)
 		_, _ = s.Pool.Exec(ctx, `DELETE FROM wolfy.book_annotations_devices WHERE user_id = $1`, id)
+		_, _ = s.Pool.Exec(ctx, `DELETE FROM wolfy.practice_components WHERE user_id = $1`, id)
+		_, _ = s.Pool.Exec(ctx, `DELETE FROM wolfy.user_state WHERE user_id = $1`, id)
 		_, _ = s.Pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, id)
 	})
 	return id

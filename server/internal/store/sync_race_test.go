@@ -53,6 +53,8 @@ func createUser(t *testing.T, s *Store) string {
 		ctx := context.Background()
 		_, _ = s.Pool.Exec(ctx, `DELETE FROM wolfy.cards WHERE user_id = $1`, id)
 		_, _ = s.Pool.Exec(ctx, `DELETE FROM wolfy.books WHERE user_id = $1`, id)
+		_, _ = s.Pool.Exec(ctx, `DELETE FROM wolfy.practice_components WHERE user_id = $1`, id)
+		_, _ = s.Pool.Exec(ctx, `DELETE FROM wolfy.user_state WHERE user_id = $1`, id)
 		_, _ = s.Pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, id)
 	})
 	return id
