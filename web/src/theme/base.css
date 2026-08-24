@@ -160,3 +160,125 @@ svg {
   animation-iteration-count: 1 !important;
   transition-duration: 0.001ms !important;
 }
+
+/*
+ * Полосы прокрутки.
+ *
+ * Системная полоса приносит с собой чужую платформу: на Windows это широкий
+ * серый жёлоб, который спорит с полями колонки сильнее, чем любой элемент
+ * интерфейса. Здесь она сведена к тонкому штриху цветом чернил — тем же, что
+ * держит линейки и рамки, поэтому она не читается как отдельная деталь.
+ *
+ * Цвет берётся из чернил, а не из акцента: полоса не сообщает ничего, кроме
+ * того, где вы находитесь в тексте, и красить её выбранным цветом значило бы
+ * дать ей вес, которого у неё нет.
+ */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--ink) 24%, transparent) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  /* Прозрачная рамка + `padding-box` дают штриху воздух по бокам: иначе он
+     прилипает к краю окна и выглядит толще, чем есть. */
+  background: color-mix(in srgb, var(--ink) 24%, transparent);
+  background-clip: padding-box;
+  border: 3px solid transparent;
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--ink) 42%, transparent);
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/*
+ * Ползунки и флажки.
+ *
+ * Браузер рисует их системным синим — цветом, которого нет ни в одной из
+ * четырёх тем. `accent-color` чинит флажки одной строкой, а ползунок
+ * приходится собирать вручную: жёлоб и бегунок задаются разными префиксными
+ * псевдоэлементами, и общего способа их описать до сих пор нет.
+ */
+:root {
+  accent-color: var(--accent);
+}
+
+input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  min-width: 8rem;
+  height: 1.5rem;
+  background: none;
+  cursor: pointer;
+}
+
+input[type='range']::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 999px;
+  background: var(--rule);
+}
+
+input[type='range']::-moz-range-track {
+  height: 3px;
+  border-radius: 999px;
+  background: var(--rule);
+}
+
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 1.05rem;
+  height: 1.05rem;
+  /* Половина бегунка минус половина жёлоба: иначе он висит над линией. */
+  margin-top: calc((1.05rem - 3px) / -2);
+  border: none;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--ink) 28%, transparent);
+  transition: transform var(--instant, 90ms) ease;
+}
+
+input[type='range']::-moz-range-thumb {
+  width: 1.05rem;
+  height: 1.05rem;
+  border: none;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--ink) 28%, transparent);
+}
+
+input[type='range']:hover::-webkit-slider-thumb,
+input[type='range']:active::-webkit-slider-thumb {
+  transform: scale(1.12);
+}
+
+input[type='range']:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/*
+ * Ссылки не подчёркиваются.
+ *
+ * Подчёркивание — приём документа, а не набранной страницы: в книге ссылку
+ * показывают цветом и положением. Там, где ссылка стоит внутри абзаца и цвета
+ * может не хватить, у неё есть своя рамка или значок.
+ */
+a {
+  text-decoration: none;
+}

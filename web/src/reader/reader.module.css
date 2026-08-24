@@ -349,9 +349,9 @@
 }
 
 .mark--saved {
-  background: color-mix(in srgb, var(--highlight) 70%, transparent);
-  /* Подчёркивание, а не заливка целиком: заливка спорит с чтением. */
-  box-shadow: inset 0 -0.16em 0 color-mix(in srgb, var(--gold) 60%, transparent);
+  /* Только подложка. Полоса под словом поверх неё читалась как исправление
+     корректора, а не как «это слово вы отметили». */
+  background: color-mix(in srgb, var(--highlight) 62%, transparent);
 }
 
 .mark--phrase {

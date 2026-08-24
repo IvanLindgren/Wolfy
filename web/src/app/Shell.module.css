@@ -315,8 +315,7 @@
   margin-left: auto;
   font-weight: 600;
   color: var(--on-inverse);
-  text-decoration: underline;
-  text-underline-offset: 3px;
+  border-bottom: 1px solid color-mix(in srgb, var(--on-inverse) 45%, transparent);
 }
 
 /* --- Шпаргалка ------------------------------------------------------------- */
