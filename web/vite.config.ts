@@ -48,7 +48,10 @@ export default defineConfig({
           if (id.includes('@dnd-kit')) return 'dnd'
           if (id.includes('motion') || id.includes('framer')) return 'motion'
           if (id.includes('@tanstack')) return 'tanstack'
-          if (id.includes('react')) return 'react'
+          // React, ReactDOM, scheduler и зависящие от React небольшие пакеты
+          // должны оставаться вместе. Разделение только по подстроке `react`
+          // создавало цикл vendor → react → vendor; production-бандл загружал
+          // scheduler раньше React и падал ещё до первого экрана.
           return 'vendor'
         },
       },

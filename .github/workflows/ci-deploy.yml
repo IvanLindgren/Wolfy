@@ -96,6 +96,14 @@ jobs:
           npm test
           npm run build
 
+      - name: Install Chromium for production smoke test
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      - name: Smoke-test production bundle
+        working-directory: web
+        run: npm run e2e
+
       - name: Build Linux server
         working-directory: server
         shell: bash
