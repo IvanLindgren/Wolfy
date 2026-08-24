@@ -79,6 +79,14 @@ export function ReaderScreen() {
   const restored = useRef(false)
   const savedAt = useRef(0)
 
+  const handlePage = useCallback((current: number, total: number) => {
+    setPage((previous) =>
+      previous.page === current && previous.pages === total
+        ? previous
+        : { page: current, pages: total },
+    )
+  }, [])
+
   const { chapter, error } = useChapter(bookId, Math.max(0, chapterIndex), opened)
 
   // --- Открытие книги -------------------------------------------------------
@@ -540,7 +548,7 @@ export function ReaderScreen() {
             handle={pager}
             resetKey={`${bookId}:${chapterIndex}`}
             duration={timing.flight}
-            onPage={(current, total) => setPage({ page: current, pages: total })}
+            onPage={handlePage}
           >
             {content}
           </Paginator>

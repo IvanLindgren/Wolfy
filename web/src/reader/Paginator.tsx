@@ -48,6 +48,7 @@ export function Paginator({
 }: PaginatorProps) {
   const frame = useRef<HTMLDivElement>(null)
   const inner = useRef<HTMLDivElement>(null)
+  const onPageRef = useRef(onPage)
   const [width, setWidth] = useState(0)
   const [pages, setPages] = useState(1)
   const [page, setPage] = useState(0)
@@ -86,8 +87,15 @@ export function Paginator({
   }, [resetKey])
 
   useEffect(() => {
-    onPage(page, pages)
-  }, [page, pages, onPage])
+    onPageRef.current = onPage
+  }, [onPage])
+
+  // Сообщаем наружу только об изменении самой страницы. Родитель вправе
+  // передать обычную inline-функцию: её новая ссылка после setState не должна
+  // повторно запускать этот эффект и замыкать обновления по кругу.
+  useEffect(() => {
+    onPageRef.current(page, pages)
+  }, [page, pages])
 
   const go = useCallback(
     (next: number) => setPage(clamp(next, 0, Math.max(0, pages - 1))),
