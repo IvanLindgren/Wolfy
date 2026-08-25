@@ -144,25 +144,22 @@ function Sheet({ target, onClose }: { target: CardTarget; onClose: () => void })
     await store.update(mark.id, { tone })
   }
 
-  const setNote = async (note: string) => {
+  const setNote = async () => {
     const store = useAnnotations.getState()
     if (!mark) {
-      if (note === '') return
+      // Стикер клеится пустым: текст на нём появится в книге, когда читатель
+      // нажмёт на сам стикер. Здесь — только жест «приклеить».
       await store.add({
         chapter: target.chapter,
         start: target.range.start,
         end: target.range.end,
         tone: null,
         quote: target.quote,
-        note,
+        note: '',
       })
       return
     }
-    if (note === '' && mark.tone === null) {
-      await store.remove(mark.id)
-      return
-    }
-    await store.update(mark.id, { note })
+    // Стикер уже на месте: текст правится на нём самом, а не в карточке.
   }
 
   const dropMark = async () => {
@@ -396,7 +393,7 @@ function Sheet({ target, onClose }: { target: CardTarget; onClose: () => void })
         existing={mark}
         quote={target.quote}
         onHighlight={(tone) => void setTone(tone)}
-        onNote={(note) => void setNote(note)}
+        onSticker={() => void setNote()}
         onRemove={() => void dropMark()}
       />
 

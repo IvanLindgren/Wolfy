@@ -166,3 +166,18 @@ export const NotesIcon = icon(
     <path d="M8.5 8h7M8.5 12h7M8.5 16h4" />
   </>,
 )
+
+export const PencilIcon = icon(
+  <>
+    <path d="M4.5 19.5c.7-.1 2.2-.6 2.7-1.1L18 7.5a2.1 2.1 0 0 0-3-3L4.2 15.4c-.5.5-1 2-1.1 2.7z" />
+    <path d="m15.5 5.5 3 3" />
+  </>,
+)
+
+export const StickerIcon = icon(
+  <>
+    <path d="M5 4.5h10.5l3.5 3.5V19.5H5z" />
+    <path d="M15.5 4.5V8h3.5" />
+    <path d="m12.5 14.5 1.5-3.5 2 4.5h-4.5" />
+  </>,
+)

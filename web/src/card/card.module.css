@@ -804,6 +804,60 @@
   flex-wrap: wrap;
 }
 
+.highlighter__sticker {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: 100%;
+  padding: 0.35rem 0.6rem;
+  border-radius: 3px 3px 8px 3px;
+  background: linear-gradient(180deg, #ffe9a8, #ffdc7d);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  color: #3c3008;
+  font-size: 0.82rem;
+  line-height: 1.3;
+  overflow: hidden;
+}
+
+.highlighter__stickerButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.7rem;
+  border: 1px dashed color-mix(in srgb, var(--ink) 30%, transparent);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: background 160ms ease, border-color 160ms ease;
+}
+
+.highlighter__stickerButton:hover {
+  background: color-mix(in srgb, #ffdc7d 30%, transparent);
+  border-color: color-mix(in srgb, var(--ink) 55%, transparent);
+}
+
+.highlighter__remove {
+  display: grid;
+  place-items: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  margin-left: auto;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-muted);
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease;
+}
+
+.highlighter__remove:hover {
+  background: color-mix(in srgb, #a33a2b 14%, transparent);
+  color: #a33a2b;
+}
+
 .highlighter__label {
   font-family: var(--sans), 'Inter Fallback';
   font-size: 0.75rem;
@@ -840,39 +894,4 @@
 .tone[data-active='true'] {
   border-color: var(--ink);
   box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px var(--ink);
-}
-
-.noteEditor {
-  display: grid;
-  gap: 0.55rem;
-}
-
-.noteQuote {
-  margin: 0;
-  padding: 0.5rem 0.7rem;
-  border-left: 3px solid var(--rule);
-  background: var(--surface-sunken);
-  border-radius: 0 var(--radius) var(--radius) 0;
-  font-family: var(--serif), 'Playfair Fallback';
-  font-size: 0.95rem;
-  line-height: 1.45;
-  color: var(--ink-muted);
-}
-
-.noteInput {
-  width: 100%;
-  padding: 0.6rem 0.7rem;
-  border: 1px solid var(--rule);
-  border-radius: var(--radius);
-  background: var(--surface);
-  font-family: var(--sans), 'Inter Fallback';
-  font-size: 0.9375rem;
-  line-height: 1.5;
-  resize: vertical;
-  transition: border-color var(--quick, 180ms) ease;
-}
-
-.noteInput:focus {
-  outline: none;
-  border-color: var(--ink);
 }

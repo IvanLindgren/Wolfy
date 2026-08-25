@@ -19,6 +19,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
 
 import type { Block, Token } from '../core/types'
+import { StickerLayer, type StickerInfo } from './annotate'
 import styles from './reader.module.css'
 import type { TokenizedBlock } from './useChapter'
 
@@ -45,12 +46,29 @@ interface ChapterViewProps {
   marks: TokenRange[]
   onWord: (token: number, element: HTMLElement) => void
   onPhrase: (start: number, end: number) => void
+  /**
+   * Промежуточные границы выделения, пока читатель тянет карандашом.
+   *
+   * Приходит на каждый кадр протягивания — по нему слой подсветки красит
+   * выделение ещё до отпускания, как след настоящего маркера.
+   */
+  onPhraseDraft?: (start: number, end: number) => void
   /** Ставить ли буквицу: только в начале главы. */
   dropCap: boolean
   /** Картинки главы: путь внутри книги → `blob:`-адрес. */
   images: Map<string, string>
   /** Режим чтения: влияет на виртуализацию и фильтрацию подсветки. */
   mode?: 'pages' | 'scroll'
+  /** Заметки-стикеры этой главы. */
+  stickers?: StickerInfo[]
+  /** Какой стикер сейчас открыт на редактирование. */
+  editingSticker?: string | null
+  onStickerOpen?: (id: string) => void
+  onStickerClose?: () => void
+  onStickerSave?: (id: string, note: string) => void
+  onStickerDelete?: (id: string) => void
+  /** Скорость анимаций интерфейса, мс. */
+  quick?: number
 }
 
 export function ChapterView({
@@ -58,9 +76,17 @@ export function ChapterView({
   marks,
   onWord,
   onPhrase,
+  onPhraseDraft,
   dropCap,
   images,
   mode = 'scroll',
+  stickers,
+  editingSticker,
+  onStickerOpen,
+  onStickerClose,
+  onStickerSave,
+  onStickerDelete,
+  quick = 180,
 }: ChapterViewProps) {
   const column = useRef<HTMLDivElement>(null)
 
@@ -85,7 +111,7 @@ export function ChapterView({
     [onWord],
   )
 
-  usePhraseSelection(column, onPhrase)
+  usePhraseSelection(column, onPhrase, onPhraseDraft)
 
   return (
     <div
@@ -95,6 +121,17 @@ export function ChapterView({
       lang="en"
     >
       <MarkLayer container={column} marks={marks} blocks={blocks} mode={mode} />
+      <StickerLayer
+        container={column}
+        stickers={stickers ?? []}
+        editing={editingSticker ?? null}
+        mode={mode}
+        quick={quick}
+        onOpen={(id) => onStickerOpen?.(id)}
+        onClose={() => onStickerClose?.()}
+        onSave={(id, note) => onStickerSave?.(id, note)}
+        onDelete={(id) => onStickerDelete?.(id)}
+      />
       {blocks.map((item, position) => (
         <BlockView
           key={item.index}
@@ -298,6 +335,7 @@ function MarkLayer({
   >([])
 
   const frameRef = useRef<number | null>(null)
+  const seenRef = useRef<Set<string>>(new Set())
   const schedule = useCallback(
     (fn: () => void) => {
       if (frameRef.current !== null) cancelAnimationFrame(frameRef.current)
@@ -418,19 +456,27 @@ function MarkLayer({
 
   return (
     <div className={styles.marks} aria-hidden="true">
-      {rects.map((rect) => (
-        <span
-          key={rect.key}
-          className={`${styles.mark} ${styles[`mark--${rect.kind}`]}`}
-          style={{
-            top: rect.top,
-            left: rect.left,
-            width: rect.width,
-            height: rect.height,
-            ...(rect.tone ? { background: rect.tone } : null),
-          }}
-        />
-      ))}
+      {rects.map((rect) => {
+        // Появление — только для свежих выделений: прямоугольник, который
+        // уже был на экране, при повторном пересчёте не «вспыхивает» снова.
+        const fresh = !seenRef.current.has(rect.key)
+        seenRef.current.add(rect.key)
+        return (
+          <span
+            key={rect.key}
+            className={`${styles.mark} ${styles[`mark--${rect.kind}`]}${
+              fresh && rect.kind === 'mark' ? ` ${styles.markPop}` : ''
+            }`}
+            style={{
+              top: rect.top,
+              left: rect.left,
+              width: rect.width,
+              height: rect.height,
+              ...(rect.tone ? { background: rect.tone } : null),
+            }}
+          />
+        )
+      })}
     </div>
   )
 }
@@ -446,6 +492,7 @@ function MarkLayer({
 function usePhraseSelection(
   container: React.RefObject<HTMLDivElement | null>,
   onPhrase: (start: number, end: number) => void,
+  onPhraseDraft?: (start: number, end: number) => void,
 ) {
   useEffect(() => {
     const host = container.current
@@ -483,15 +530,42 @@ function usePhraseSelection(
       onPhrase(start, end)
     }
 
+    // След карандаша: пока читатель тянет, слой подсветки обновляется на
+    // каждый кадр. Отдельно от settle — тот ждёт отпускания, а это — живой
+    // предпросмотр, и без него выделение появлялось бы только после руки.
+    let draftFrame: number | null = null
+    function draft() {
+      if (!onPhraseDraft) return
+      if (draftFrame !== null) return
+      draftFrame = requestAnimationFrame(() => {
+        draftFrame = null
+        const selection = window.getSelection()
+        if (!selection || selection.isCollapsed || selection.rangeCount === 0) return
+        const range = selection.getRangeAt(0)
+        const host = container.current
+        if (!host || !host.contains(range.commonAncestorContainer)) return
+        const first = tokenAt(range.startContainer, host, 'start')
+        const last = tokenAt(range.endContainer, host, 'end')
+        if (first === null || last === null) return
+        const start = Math.min(first, last)
+        const end = Math.max(first, last) + 1
+        if (end - start < 2) return
+        onPhraseDraft(start, end)
+      })
+    }
+
     // `selectionchange` срабатывает на каждый пиксель протягивания; ждать
     // отпускания дешевле и точнее — до него выделение ещё не закончено.
     document.addEventListener('mouseup', settle)
     document.addEventListener('touchend', settle)
+    document.addEventListener('selectionchange', draft)
     return () => {
       document.removeEventListener('mouseup', settle)
       document.removeEventListener('touchend', settle)
+      document.removeEventListener('selectionchange', draft)
+      if (draftFrame !== null) cancelAnimationFrame(draftFrame)
     }
-  }, [container, onPhrase])
+  }, [container, onPhrase, onPhraseDraft])
 }
 
 /** Номер токена, внутри которого стоит узел выделения. */

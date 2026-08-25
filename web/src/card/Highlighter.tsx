@@ -1,26 +1,18 @@
 /**
- * Маркер и заметка к выделенному куску книги.
+ * Маркер и стикер к выделенному куску книги.
  *
- * Стоит в карточке, а не отдельным всплывающим меню над выделением, и это
- * осознанный выбор. Карточка и так открывается на каждое выделение — это
- * место, где читатель уже решает, что с этим куском делать («в колоду»).
- * Второе меню поверх текста означало бы, что на одно и то же движение руки
- * приходят два разных ответа, и один из них закрывает второй.
+ * Здесь только краски маркера и кнопка «приклеить стикер»: читатель выбрал
+ * кусок, и ему нужны два быстрых жеста, а не формы. Сам текст заметки живёт
+ * на стикере в книге — стикер открывается нажатием и пишется на месте, как
+ * бумажный листок.
  *
  * Десять красок показаны кружками без подписей: цвет — это и есть подпись,
  * а десять слов подряд («жёлтый, оранжевый, розовый…») читатель не читает.
- * Название всё же есть — в `title` и `aria-label`, для тех, кому цвета
- * недостаточно.
- *
- * Заметка пишется здесь же и цитату получает автоматически: просить читателя
- * скопировать в неё то, что он только что выделил, значит заставить его
- * сделать работу, которую программа уже сделала.
+ * Название всё же есть — в `title` и `aria-label`.
  */
 
-import { useEffect, useState } from 'react'
-
 import { TONES, toneColor, type Annotation, type Tone } from '../reader/annotations'
-import { Button } from '../widgets/Button'
+import { StickerIcon } from '../widgets/icons'
 import { TrashIcon } from '../widgets/icons'
 import styles from './card.module.css'
 
@@ -29,32 +21,17 @@ interface HighlighterProps {
   existing: Annotation | undefined
   quote: string
   onHighlight: (tone: Tone | null) => void
-  onNote: (note: string) => void
+  /** Приклеить стикер к этому куску. */
+  onSticker: () => void
   onRemove: () => void
 }
 
 export function Highlighter({
   existing,
-  quote,
   onHighlight,
-  onNote,
+  onSticker,
   onRemove,
 }: HighlighterProps) {
-  const [writing, setWriting] = useState(false)
-  const [draft, setDraft] = useState(existing?.note ?? '')
-
-  // Карточка переиспользуется на разные куски текста: без сброса черновик
-  // прошлого выделения уехал бы в заметку к следующему.
-  useEffect(() => {
-    setDraft(existing?.note ?? '')
-    setWriting(Boolean(existing?.note))
-  }, [existing?.id, existing?.note])
-
-  const save = () => {
-    onNote(draft.trim())
-    if (draft.trim() === '') setWriting(false)
-  }
-
   return (
     <section className={styles.highlighter}>
       <div className={styles.highlighter__row}>
@@ -78,57 +55,35 @@ export function Highlighter({
         </div>
       </div>
 
-      {writing ? (
-        <div className={styles.noteEditor}>
-          {quote && (
-            <blockquote className={styles.noteQuote} lang="en">
-              {quote}
-            </blockquote>
-          )}
-          <textarea
-            className={styles.noteInput}
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            placeholder="Что вы об этом думаете"
-            aria-label="Заметка к этому месту"
-            rows={3}
-            autoFocus
-          />
-          <div className={styles.highlighter__row}>
-            <Button variant="primary" small onClick={save}>
-              Сохранить заметку
-            </Button>
-            {existing && (
-              <Button
-                variant="quiet"
-                small
-                onClick={onRemove}
-                aria-label="Удалить заметку и выделение"
-                title="Удалить заметку и выделение"
-              >
-                <TrashIcon size={15} />
-              </Button>
-            )}
-          </div>
-        </div>
-      ) : (
-        <div className={styles.highlighter__row}>
-          <Button small onClick={() => setWriting(true)}>
-            {existing?.note ? 'Изменить заметку' : 'Заметка'}
-          </Button>
-          {existing && (
-            <Button
-              variant="quiet"
-              small
-              onClick={onRemove}
-              aria-label="Снять выделение"
-              title="Снять выделение"
-            >
-              <TrashIcon size={15} />
-            </Button>
-          )}
-        </div>
-      )}
+      <div className={styles.highlighter__row}>
+        {existing?.note ? (
+          <span className={styles.highlighter__sticker} title={existing.note}>
+            <StickerIcon size={14} />
+            {existing.note.length > 42 ? `${existing.note.slice(0, 42)}…` : existing.note}
+          </span>
+        ) : (
+          <button
+            type="button"
+            className={styles.highlighter__stickerButton}
+            onClick={onSticker}
+            aria-label="Наклеить стикер на этот кусок"
+            title="Наклеить стикер — заметка появится в книге"
+          >
+            <StickerIcon size={15} /> Наклеить стикер
+          </button>
+        )}
+        {existing && (
+          <button
+            type="button"
+            className={styles.highlighter__remove}
+            onClick={onRemove}
+            aria-label="Снять отметку"
+            title="Снять отметку"
+          >
+            <TrashIcon size={15} />
+          </button>
+        )}
+      </div>
     </section>
   )
 }

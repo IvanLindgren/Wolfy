@@ -38,7 +38,8 @@ import {
   TuneIcon,
 } from '../widgets/icons'
 import { WolfyCompanion } from '../widgets/Wolfy'
-import { toneColor, useAnnotations } from './annotations'
+import { ToolDock, lastPencilTone, savePencilTone, type StickerInfo, type Tool } from './annotate'
+import { toneColor, useAnnotations, type Tone } from './annotations'
 import { ChapterView, savedRanges, textOf, type TokenRange } from './ChapterView'
 import { Paginator, type PagerHandle } from './Paginator'
 import { readerFont, readerMeasure, readingMode, setReaderFont, setReaderMeasure, setReadingMode, type ReaderFont, type ReadingMode } from './preferences'
@@ -94,6 +95,15 @@ export function ReaderScreen() {
   const [recent, setRecent] = useState<string[]>([])
   const [chapterTitles, setChapterTitles] = useState<(string | null)[]>([])
   const [page, setPage] = useState({ page: 0, pages: 1 })
+
+  // --- Инструменты отметок ---------------------------------------------------
+  //
+  // Карандаш и стикер — два режима поверх чтения. Включённый инструмент
+  // отключает открытие карточек по слову: пока читатель «рисует», читалка не
+  // должна отвечать на нажатия так, как отвечает при чтении.
+  const [tool, setTool] = useState<Tool>(null)
+  const [pencilTone, setPencilTone] = useState<Tone>(lastPencilTone)
+  const [editingSticker, setEditingSticker] = useState<string | null>(null)
 
   const scroller = useRef<HTMLDivElement>(null)
   const pager = useRef<PagerHandle | null>(null)
@@ -601,10 +611,52 @@ export function ReaderScreen() {
 
   // --- Выбор слова и фразы --------------------------------------------------
 
+  /*
+   * Приклеивает стикер к месту.
+   *
+   * Если на этом куске уже есть отметка, второй стикер не клеится — просто
+   * открывается существующий. Иначе создаётся пустая заметка без краски, и
+   * она сразу открывается на редактирование: стикер приклеили — на нём пишут.
+   */
+  const placeSticker = useCallback(
+    async (start: number, end: number, quote: string) => {
+      if (!book) return
+      const existing = useAnnotations
+        .getState()
+        .annotations.find(
+          (item) =>
+            !item.deleted &&
+            item.chapter === chapterIndex &&
+            item.start === start &&
+            item.end === end,
+        )
+      if (existing) {
+        setEditingSticker(existing.id)
+        return
+      }
+      const created = await useAnnotations.getState().add({
+        chapter: chapterIndex,
+        start,
+        end,
+        tone: null,
+        quote,
+        note: '',
+      })
+      setEditingSticker(created.id)
+    },
+    [book, chapterIndex],
+  )
+
   const openWord = useCallback(
     (token: number, element: HTMLElement) => {
+      if (tool === 'pencil') return
       const word = chapter.tokens[token]
       if (!word || !book) return
+      if (tool === 'sticker') {
+        window.getSelection()?.removeAllRanges()
+        void placeSticker(token, token + 1, word.text)
+        return
+      }
       const sentence = sentenceAt(chapter, token)
       setPhraseMark(null)
       setCard({
@@ -623,7 +675,7 @@ export function ReaderScreen() {
         origin: element,
       })
     },
-    [chapter, chapterIndex, book],
+    [chapter, chapterIndex, book, tool, placeSticker],
   )
 
   const openPhrase = useCallback(
@@ -631,6 +683,30 @@ export function ReaderScreen() {
       if (!book) return
       const text = textOf(chapter.tokens, start, end, chapter.text)
       if (!text.trim()) return
+
+      // Карандаш: выделение становится маркером сразу, без карточек и полей.
+      if (tool === 'pencil') {
+        window.getSelection()?.removeAllRanges()
+        setPhraseMark(null)
+        void useAnnotations.getState().add({
+          chapter: chapterIndex,
+          start,
+          end,
+          tone: pencilTone,
+          quote: text,
+          note: '',
+        })
+        return
+      }
+
+      // Стикер: на выделенную фразу клеится заметка.
+      if (tool === 'sticker') {
+        window.getSelection()?.removeAllRanges()
+        setPhraseMark(null)
+        void placeSticker(start, end, text)
+        return
+      }
+
       setPhraseMark({ start, end, kind: 'phrase' })
       setCard({
         kind: 'phrase',
@@ -645,40 +721,57 @@ export function ReaderScreen() {
         origin: null,
       })
     },
-    [book, chapterIndex, chapter.tokens, chapter.text],
+    [book, chapterIndex, chapter.tokens, chapter.text, tool, pencilTone, placeSticker],
   )
 
   /*
-   * Заметка к месту, без выделенной цитаты.
-   *
-   * Привязывается к первому токену того, что сейчас на экране, — то есть к
-   * «этой странице» в том единственном смысле, в каком страница у книги с
-   * перетекающим текстом вообще существует. Открывается сразу редактором: у
-   * такой заметки нет цитаты, и показывать пустую карточку разбора незачем.
+   * След карандаша: пока читатель тянет, выделение уже красится выбранной
+   * краской — как настоящий маркер, который оставляет цвет под собой.
    */
-  const noteHere = useCallback(() => {
-    if (!book) return
-    const token = currentToken()
-    const word = chapter.tokens[token]
-    setPhraseMark(null)
-    setCard({
-      kind: 'phrase',
-      bookId: book.id,
-      surface: '',
-      sentence: '',
-      tokens: [],
-      offset: token,
-      chapter: chapterIndex,
-      range: { start: token, end: token },
-      quote: word?.text ?? '',
-      origin: null,
-    })
-  }, [book, chapter.tokens, chapterIndex, currentToken])
+  const onPhraseDraft = useCallback(
+    (start: number, end: number) => {
+      if (tool !== 'pencil') return
+      setPhraseMark({ start, end, kind: 'phrase', tone: toneColor(pencilTone) })
+    },
+    [tool, pencilTone],
+  )
 
   const closeCard = useCallback(() => {
     setCard(null)
     setPhraseMark(null)
     window.getSelection()?.removeAllRanges()
+  }, [])
+
+  // --- Стикеры этой главы ----------------------------------------------------
+
+  const stickers = useMemo<StickerInfo[]>(
+    () =>
+      annotations
+        .filter(
+          (item) =>
+            !item.deleted &&
+            item.chapter === chapterIndex &&
+            (item.note !== '' || item.tone === null),
+        )
+        .map((item) => ({
+          id: item.id,
+          start: item.start,
+          end:
+            item.end > item.start ? item.end : Math.min(item.start + 1, chapter.tokens.length),
+          note: item.note,
+          quote: item.quote,
+        }))
+        .filter((item) => item.end > item.start),
+    [annotations, chapterIndex, chapter.tokens.length],
+  )
+
+  const saveSticker = useCallback((id: string, note: string) => {
+    void useAnnotations.getState().update(id, { note })
+  }, [])
+
+  const deleteSticker = useCallback((id: string) => {
+    setEditingSticker((current) => (current === id ? null : current))
+    void useAnnotations.getState().remove(id)
   }, [])
 
   // --- Клавиши --------------------------------------------------------------
@@ -713,19 +806,24 @@ export function ReaderScreen() {
           },
         },
         {
-          // Лестница назад: оглавление → карточка → книга.
+          // Лестница назад: стикер → инструмент → оглавление → карточка → книга.
           key: 'Escape',
           run: () => {
-            if (contents) setContents(false)
+            if (editingSticker) setEditingSticker(null)
+            else if (tool) {
+              setTool(null)
+              setPhraseMark(null)
+              window.getSelection()?.removeAllRanges()
+            } else if (contents) setContents(false)
             else if (tuner) setTuner(false)
             else if (card) closeCard()
             else void navigate({ to: '/library' })
           },
         },
       ],
-      [turn, mode, contents, tuner, card, closeCard, navigate],
+      [turn, mode, contents, tuner, card, closeCard, navigate, tool, editingSticker],
     ),
-    { capture: true, enabled: !card },
+    { capture: true, enabled: !card && !editingSticker },
   )
 
   // --- Жесты ----------------------------------------------------------------
@@ -794,9 +892,17 @@ export function ReaderScreen() {
       marks={marks}
       onWord={openWord}
       onPhrase={openPhrase}
+      onPhraseDraft={onPhraseDraft}
       dropCap
       images={images}
       mode={mode}
+      stickers={stickers}
+      editingSticker={editingSticker}
+      onStickerOpen={setEditingSticker}
+      onStickerClose={() => setEditingSticker(null)}
+      onStickerSave={saveSticker}
+      onStickerDelete={deleteSticker}
+      quick={timing.quick}
     />
   )
 
@@ -827,9 +933,10 @@ export function ReaderScreen() {
         <button
           type="button"
           className={styles.iconButton}
-          onClick={noteHere}
-          aria-label="Заметка к этому месту"
-          title="Заметка к этому месту"
+          data-active={tool === 'sticker'}
+          onClick={() => setTool(tool === 'sticker' ? null : 'sticker')}
+          aria-label="Наклеить стикер на место"
+          title="Наклеить стикер на место"
         >
           <NoteIcon />
         </button>
@@ -907,7 +1014,12 @@ export function ReaderScreen() {
         </div>
       )}
 
-      <div className={styles.stage} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
+      <div
+        className={styles.stage}
+        data-tool={tool ?? 'none'}
+        onTouchStart={onTouchStart}
+        onTouchEnd={onTouchEnd}
+      >
         {error ? (
           <div className={styles.column}>
             <p style={{ color: 'var(--ink-muted)' }}>{error}</p>
@@ -945,6 +1057,21 @@ export function ReaderScreen() {
             />
           )}
         </AnimatePresence>
+
+        <ToolDock
+          tool={tool}
+          tone={pencilTone}
+          onTool={(next) => {
+            setTool(next)
+            setEditingSticker(null)
+            if (next) setPhraseMark(null)
+          }}
+          onTone={(tone) => {
+            setPencilTone(tone)
+            savePencilTone(tone)
+          }}
+          quick={timing.quick}
+        />
       </div>
 
       <AnimatePresence>
