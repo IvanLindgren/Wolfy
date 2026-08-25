@@ -107,16 +107,16 @@ func TestPracticePerDeviceStorage(t *testing.T) {
 	if len(components) != 2 {
 		t.Fatalf("компонентов %d, ожидали 2", len(components))
 	}
-	// Проверяем что Go не смешал — каждый device хранит свой blob как есть
-	m := make(map[string]string)
+	// Проверяем что Go не смешал — каждый device хранит свой blob как есть (jsonb нормализует порядок ключей, сравниваем по содержимому)
+	m := make(map[string]json.RawMessage)
 	for _, c := range components {
-		m[c.DeviceID] = string(c.Practice)
+		m[c.DeviceID] = c.Practice
 	}
-	if m["phone"] != string(phonePractice) {
-		t.Fatalf("phone blob изменился: got %s want %s", m["phone"], string(phonePractice))
+	if !jsonEqual(m["phone"], phonePractice) {
+		t.Fatalf("phone blob изменился: got %s want %s", string(m["phone"]), string(phonePractice))
 	}
-	if m["laptop"] != string(laptopPractice) {
-		t.Fatalf("laptop blob изменился")
+	if !jsonEqual(m["laptop"], laptopPractice) {
+		t.Fatalf("laptop blob изменился: got %s want %s", string(m["laptop"]), string(laptopPractice))
 	}
 
 	// Обновление одного устройства не трогает другое (last-write-wins per device)
@@ -128,15 +128,15 @@ func TestPracticePerDeviceStorage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list after update: %v", err)
 	}
-	m = make(map[string]string)
+	m2 := make(map[string]json.RawMessage)
 	for _, c := range components {
-		m[c.DeviceID] = string(c.Practice)
+		m2[c.DeviceID] = c.Practice
 	}
-	if m["phone"] != string(phoneUpdated) {
-		t.Fatalf("phone не обновился")
+	if !jsonEqual(m2["phone"], phoneUpdated) {
+		t.Fatalf("phone не обновился: got %s want %s", string(m2["phone"]), string(phoneUpdated))
 	}
-	if m["laptop"] != string(laptopPractice) {
-		t.Fatalf("laptop затронут обновлением phone")
+	if !jsonEqual(m2["laptop"], laptopPractice) {
+		t.Fatalf("laptop затронут обновлением phone: got %s", string(m2["laptop"]))
 	}
 
 	// Чужая практика не приходит
@@ -187,11 +187,24 @@ func TestPracticeOldReadingPreservedOnUpdate(t *testing.T) {
 		t.Fatalf("reading испорчен: %v", parsed)
 	}
 	// practice тоже там
-	components, err := s.ListPracticeComponents(ctx, user)
-	if err != nil {
-		t.Fatalf("list practice: %v", err)
+	components2, err2 := s.ListPracticeComponents(ctx, user)
+	if err2 != nil {
+		t.Fatalf("list practice: %v", err2)
 	}
-	if len(components) != 1 || string(components[0].Practice) != string(practice) {
-		t.Fatalf("practice пропал после reading: %+v", components)
+	if len(components2) != 1 || !jsonEqual(components2[0].Practice, practice) {
+		t.Fatalf("practice пропал после reading: got %s want %s", string(components2[0].Practice), string(practice))
 	}
+}
+
+func jsonEqual(a, b json.RawMessage) bool {
+	var ja, jb any
+	if err := json.Unmarshal(a, &ja); err != nil {
+		return string(a) == string(b)
+	}
+	if err := json.Unmarshal(b, &jb); err != nil {
+		return string(a) == string(b)
+	}
+	aj, _ := json.Marshal(ja)
+	bj, _ := json.Marshal(jb)
+	return string(aj) == string(bj)
 }

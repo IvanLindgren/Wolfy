@@ -107,17 +107,19 @@ func (s *Store) NextRev(ctx context.Context, tx pgx.Tx, userID string) (int64, e
 // отправка падала бы на unique violation с потерей прогресса.
 func (s *Store) SaveBooks(ctx context.Context, tx pgx.Tx, userID string, rev int64, books []Book) error {
 	for _, book := range books {
-		// §5 alias: если такой source_key уже есть под другим id — сливаем к пришедшему id
+		// §5 alias: если такой source_key уже есть под другим id — освобождаем unique перед вставкой,
+		// чтобы INSERT не упал на books_user_source_idx, а затем перепривязываем зависимости.
+		var oldID string
+		var hasOld bool
 		if book.SourceKey != "" {
-			var oldID string
 			err := tx.QueryRow(ctx, `
                 SELECT id::text FROM wolfy.books
                  WHERE user_id = $1 AND source_key = $2 AND source_key <> '' AND id <> $3::uuid`,
 				userID, book.SourceKey, book.ID).Scan(&oldID)
 			if err == nil {
-				// Перепривязка зависимостей к новому canonical id
-				if err := s.rebindBookAlias(ctx, tx, userID, oldID, book.ID); err != nil {
-					return fmt.Errorf("перепривязка книги %s -> %s: %w", oldID, book.ID, err)
+				hasOld = true
+				if _, err := tx.Exec(ctx, `UPDATE wolfy.books SET source_key='', updated_at=now() WHERE user_id=$1 AND id=$2::uuid`, userID, oldID); err != nil {
+					return fmt.Errorf("освобождение source_key %s: %w", oldID, err)
 				}
 			} else if !errors.Is(err, pgx.ErrNoRows) {
 				return fmt.Errorf("проверка source_key %s: %w", book.SourceKey, err)
@@ -156,6 +158,12 @@ func (s *Store) SaveBooks(ctx context.Context, tx pgx.Tx, userID string, rev int
 			book.Position, rev, deletedAt, book.Rev)
 		if err != nil {
 			return fmt.Errorf("запись книги %s: %w", book.ID, err)
+		}
+
+		if hasOld {
+			if err := s.rebindBookAlias(ctx, tx, userID, oldID, book.ID); err != nil {
+				return fmt.Errorf("перепривязка книги %s -> %s: %w", oldID, book.ID, err)
+			}
 		}
 	}
 	return nil
