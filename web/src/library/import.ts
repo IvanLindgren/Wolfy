@@ -107,7 +107,7 @@ async function addPlain(file: File, extension: string): Promise<ImportResult> {
     if (known) return { kind: 'known', book: known }
   }
 
-  const id =
+  let id =
     (plan.plan === 'attach' || plan.plan === 'revive') && plan.bookId ? plan.bookId : newId()
   const opened = await bridge.importBook(id, file.name, bytes)
 
@@ -116,7 +116,10 @@ async function addPlain(file: File, extension: string): Promise<ImportResult> {
   } else if (plan.plan === 'revive' && plan.bookId) {
     await session.reviveBook(plan.bookId, opened.path, fingerprint)
   } else {
-    await session.addBook({
+    // §5: ядро заменяет id на канонический (из source_key) — узнаём настоящий
+    // номер из ответа, а не из случайного, иначе describe и поиск книги
+    // разойдутся с тем, что лежит в библиотеке.
+    const added = await session.addBook({
       id,
       path: opened.path,
       title: opened.title || titleOf(file.name),
@@ -128,6 +131,7 @@ async function addPlain(file: File, extension: string): Promise<ImportResult> {
       progress: { chapter: 0, withinChapter: 0, openedAt: 0 },
       shelf: null,
     })
+    if (added.book) id = added.book.id
   }
 
   await session.describe(
@@ -170,7 +174,7 @@ async function addPdf(file: File): Promise<ImportResult> {
     }
   }
 
-  const id =
+  let id =
     (plan.plan === 'attach' || plan.plan === 'revive') && plan.bookId ? plan.bookId : newId()
   const title = titleOf(file.name)
   const opened = await bridge.importPages(id, title, pages)
@@ -180,7 +184,7 @@ async function addPdf(file: File): Promise<ImportResult> {
   } else if (plan.plan === 'revive' && plan.bookId) {
     await session.reviveBook(plan.bookId, opened.path, fingerprint)
   } else {
-    await session.addBook({
+    const added = await session.addBook({
       id,
       path: opened.path,
       title,
@@ -194,6 +198,7 @@ async function addPdf(file: File): Promise<ImportResult> {
       progress: { chapter: 0, withinChapter: 0, openedAt: 0 },
       shelf: null,
     })
+    if (added.book) id = added.book.id
   }
 
   await session.describe(id, title, null, opened.chapters.length)
@@ -217,7 +222,7 @@ export async function addDownloaded(
     if (known && known.path) return { kind: 'known', book: known }
   }
 
-  const id = plan.bookId ?? newId()
+  let id = plan.bookId ?? newId()
   const opened = await bridge.importBook(id, fileName, bytes)
 
   if (plan.plan === 'attach' && plan.bookId) {
@@ -225,7 +230,7 @@ export async function addDownloaded(
   } else if (plan.plan === 'revive' && plan.bookId) {
     await session.reviveBook(plan.bookId, opened.path, sourceKey)
   } else {
-    await session.addBook({
+    const added = await session.addBook({
       id,
       path: opened.path,
       title: title || opened.title || titleOf(fileName),
@@ -237,6 +242,7 @@ export async function addDownloaded(
       progress: { chapter: 0, withinChapter: 0, openedAt: 0 },
       shelf: null,
     })
+    if (added.book) id = added.book.id
   }
 
   await session.describe(

@@ -539,8 +539,16 @@ impl Session {
             Command::AddBook { book } => {
                 let added = *book;
                 self.change_library(ops::add_book(&self.library, added.clone()));
+                // §5: у книги с source_key Rust заменяет случайный id на
+                // канонический — наружу обязана уйти та запись, которая
+                // реально легла в библиотеку, иначе клиент будет искать
+                // книгу под старым номером и не найдёт её.
+                let stored = crate::library::book::canonical_book_id(&added.source_key)
+                    .and_then(|id| self.library.books.iter().find(|book| book.id == id))
+                    .cloned()
+                    .unwrap_or(added);
                 self.done(Outcome {
-                    book: Some(added),
+                    book: Some(stored),
                     ..Outcome::default()
                 })
             }
