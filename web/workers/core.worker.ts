@@ -264,12 +264,14 @@ async function persist(outcome: Outcome): Promise<void> {
   await Promise.all(writes)
   // Ack только те домены, которые действительно записали, с их поколением.
   // Если за время записи пришло новое изменение (generation N+1), ack(N) оставит dirty true.
-  const ack = (core as unknown as { ackSaved?: (l: number, s: number, p: number) => void; saved?: (l: boolean, s: boolean) => void; savedWithPractice?: (l: boolean, s: boolean, p: boolean) => void })
+  const ack = (core as unknown as { ackSaved?: (l: bigint, s: bigint, p: bigint) => void; saved?: (l: boolean, s: boolean) => void; savedWithPractice?: (l: boolean, s: boolean, p: boolean) => void })
   if (typeof ack.ackSaved === 'function') {
+    // wasm-bindgen ждёт i64 как BigInt, а не number — иначе
+    // «Cannot convert 1 to a BigInt» и команда падает целиком.
     ack.ackSaved(
-      outcome.libraryChanged ? libGen : -1,
-      outcome.settingsChanged ? setGen : -1,
-      outcome.practiceChanged ? pracGen : -1,
+      BigInt(outcome.libraryChanged ? libGen : -1),
+      BigInt(outcome.settingsChanged ? setGen : -1),
+      BigInt(outcome.practiceChanged ? pracGen : -1),
     )
   } else if (typeof ack.savedWithPractice === 'function' && outcome.practiceChanged) {
     ack.savedWithPractice(!!outcome.libraryChanged, !!outcome.settingsChanged, !!outcome.practiceChanged)
