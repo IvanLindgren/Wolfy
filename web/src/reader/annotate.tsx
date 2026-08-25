@@ -21,8 +21,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion as m } from 'motion/react'
 
 import { seconds } from '../theme/motion'
-import { CheckIcon, CloseIcon, PencilIcon, StickerIcon, TrashIcon } from '../widgets/icons'
+import { CheckIcon, PencilIcon, StickerIcon, TrashIcon } from '../widgets/icons'
 import { TONES, toneColor, type Tone } from './annotations'
+import type { MarkAnchor } from './ChapterView'
 import styles from './reader.module.css'
 
 export type Tool = null | 'pencil' | 'sticker'
@@ -141,268 +142,166 @@ export function ToolDock({
   )
 }
 
-export interface StickerInfo {
+/** Пометка, открытая на правку: то, что показывает панель. */
+export interface OpenAnnotation {
   id: string
-  start: number
-  end: number
-  note: string
   quote: string
-}
-
-const TAB_W = 34
-const TAB_H = 46
-
-interface Anchor {
-  top: number
-  left: number
-  /** Где привязан хвостик стикера — для выравнивания редактора. */
-  tabLeft: number
-  tabTop: number
+  note: string
+  tone: Tone | null
 }
 
 /**
- * Слой стикеров поверх текста.
+ * Панель пометки.
  *
- * Родственник MarkLayer: те же прямоугольники, тот же пересчёт при изменении
- * размеров и прокрутке. Стикер висит на правом поле колонки (в режиме страниц —
- * в желобе между колонками), как бумажный листок, приклеенный к строке.
- */
-export function StickerLayer({
-  container,
-  stickers,
-  editing,
-  mode,
-  quick,
-  onOpen,
-  onClose,
-  onSave,
-  onDelete,
-}: {
-  container: React.RefObject<HTMLDivElement | null>
-  stickers: StickerInfo[]
-  editing: string | null
-  mode: 'pages' | 'scroll'
-  quick: number
-  onOpen: (id: string) => void
-  onClose: () => void
-  onSave: (id: string, note: string) => void
-  onDelete: (id: string) => void
-}) {
-  const [placed, setPlaced] = useState<(StickerInfo & Anchor)[]>([])
-  const frameRef = useRef<number | null>(null)
-
-  const schedule = useCallback((fn: () => void) => {
-    if (frameRef.current !== null) cancelAnimationFrame(frameRef.current)
-    frameRef.current = requestAnimationFrame(() => {
-      frameRef.current = null
-      fn()
-    })
-  }, [])
-
-  const recompute = useCallback(() => {
-    const host = container.current
-    if (!host) {
-      setPlaced([])
-      return
-    }
-    const base = host.getBoundingClientRect()
-    const next: (StickerInfo & Anchor)[] = []
-    for (const sticker of stickers) {
-      const last = host.querySelector<HTMLElement>(`[data-t="${Math.max(sticker.start, sticker.end - 1)}"]`)
-      if (!last) continue
-      const rect = last.getBoundingClientRect()
-      if (rect.width < 1 && rect.height < 1) continue
-      // В ленте — правое поле колонки; в страницах — желоб между колонками.
-      const left =
-        mode === 'scroll'
-          ? base.width - TAB_W - 10
-          : Math.min(rect.right + 8, base.width - TAB_W - 4)
-      const top = Math.max(4, rect.top - base.top - 6)
-      next.push({
-        ...sticker,
-        top,
-        left,
-        tabLeft: left,
-        tabTop: top,
-      })
-    }
-    setPlaced(next)
-  }, [container, stickers, mode])
-
-  useEffect(() => {
-    const frame = requestAnimationFrame(recompute)
-    return () => cancelAnimationFrame(frame)
-  }, [recompute])
-
-  useEffect(() => {
-    const host = container.current
-    if (!host || typeof ResizeObserver === 'undefined') return
-    const observer = new ResizeObserver(() => schedule(recompute))
-    observer.observe(host)
-    return () => observer.disconnect()
-  }, [container, schedule, recompute])
-
-  useEffect(() => {
-    if (mode !== 'scroll') return
-    const host = container.current
-    if (!host) return
-    let scroller = host.parentElement
-    while (scroller && !(scroller.scrollHeight > scroller.clientHeight + 4 && scroller.clientHeight > 0)) {
-      scroller = scroller.parentElement
-    }
-    if (!scroller) return
-    const onScroll = () => schedule(recompute)
-    scroller.addEventListener('scroll', onScroll, { passive: true })
-    return () => scroller.removeEventListener('scroll', onScroll)
-  }, [container, mode, schedule, recompute])
-
-  useEffect(
-    () => () => {
-      if (frameRef.current !== null) cancelAnimationFrame(frameRef.current)
-    },
-    [],
-  )
-
-  const t = seconds(quick)
-
-  return (
-    <div className={styles.stickers} aria-hidden={placed.length === 0}>
-      {placed.map((sticker) => (
-        <m.button
-          key={sticker.id}
-          type="button"
-          className={styles.stickerTab}
-          data-empty={sticker.note === ''}
-          initial={{ scale: 0.4, rotate: -16, opacity: 0 }}
-          animate={{ scale: 1, rotate: -2, opacity: 1 }}
-          transition={{ type: 'spring', stiffness: 420, damping: 24 }}
-          style={{ top: sticker.top, left: sticker.left, width: TAB_W, height: TAB_H }}
-          aria-label={sticker.note ? `Заметка: ${sticker.note}` : 'Пустая заметка-стикер'}
-          title={sticker.note || 'Пустой стикер — нажмите, чтобы написать'}
-          onClick={() => (editing === sticker.id ? onClose() : onOpen(sticker.id))}
-        />
-      ))}
-
-      <AnimatePresence>
-        {editing &&
-          (() => {
-            const sticker = placed.find((item) => item.id === editing)
-            if (!sticker) return null
-            return (
-              <StickerEditor
-                key={sticker.id}
-                sticker={sticker}
-                quick={t}
-                onClose={onClose}
-                onSave={(note) => onSave(sticker.id, note)}
-                onDelete={() => onDelete(sticker.id)}
-              />
-            )
-          })()}
-      </AnimatePresence>
-    </div>
-  )
-}
-
-/**
- * Редактор стикера.
+ * Одно место, где с выделением можно сделать всё: дописать заметку, сменить
+ * краску, снять совсем. Раньше заметка жила бумажным листком на поле колонки,
+ * а снять выделение из книги было нельзя вовсе — только уйдя на страницу
+ * заметок. Листок при этом попадал то в соседнюю колонку, то под другой
+ * листок, и разбирал страницу на части.
  *
- * Открывается рядом со стикером и пишется сразу — автокурсор стоит в поле.
- * Сохранение по потере фокуса или по Enter; пустой текст просто закрывает
- * редактор, не стирая сам стикер (стикер убирается только корзиной).
+ * Панель встаёт под пометкой и уезжает вместе с ней при прокрутке: якорь
+ * пересчитывается тем же слоем, что рисует подсветку.
  */
-function StickerEditor({
-  sticker,
+export function AnnotationPanel({
+  anchor,
+  annotation,
   quick,
-  onClose,
-  onSave,
+  onNote,
+  onTone,
   onDelete,
+  onClose,
 }: {
-  sticker: StickerInfo & Anchor
+  anchor: MarkAnchor
+  annotation: OpenAnnotation
   quick: number
-  onClose: () => void
-  onSave: (note: string) => void
+  onNote: (note: string) => void
+  onTone: (tone: Tone) => void
   onDelete: () => void
+  onClose: () => void
 }) {
-  const [draft, setDraft] = useState(sticker.note)
-  const [left, setLeft] = useState(() => Math.max(8, sticker.left - 236))
+  const [draft, setDraft] = useState(annotation.note)
+  const box = useRef<HTMLDivElement>(null)
 
-  useEffect(() => setDraft(sticker.note), [sticker.note])
-  useEffect(() => setLeft(Math.max(8, sticker.left - 236)), [sticker.left])
+  useEffect(() => setDraft(annotation.note), [annotation.note])
 
   const save = useCallback(() => {
     const text = draft.trim()
-    if (text !== sticker.note.trim()) onSave(text)
-    onClose()
-  }, [draft, sticker.note, onSave, onClose])
+    if (text !== annotation.note.trim()) onNote(text)
+  }, [draft, annotation.note, onNote])
+
+  /*
+   * Нажатие мимо панели закрывает её и сохраняет написанное.
+   *
+   * Именно закрывает, а не «отменяет»: читатель, который дописал мысль и
+   * вернулся к тексту, ждёт, что мысль осталась. Потерять её потому, что
+   * кнопку «готово» не нажали, — худшее, что панель может сделать.
+   */
+  useEffect(() => {
+    const away = (event: PointerEvent) => {
+      const host = box.current
+      if (!host) return
+      const target = event.target as Node | null
+      if (target && host.contains(target)) return
+      // Нажатие по ручке пометки разбирает она сама: иначе панель закрылась бы
+      // здесь и тут же открылась обратно, и повторное нажатие не закрывало бы
+      // ничего.
+      if (target instanceof Element && target.closest('[data-handle]')) return
+      save()
+      onClose()
+    }
+    document.addEventListener('pointerdown', away, true)
+    return () => document.removeEventListener('pointerdown', away, true)
+  }, [save, onClose])
+
+  // Панель шире колонки не бывает, а к её краю прижимается — иначе на узком
+  // экране половина уезжает за поле и до кнопок не дотянуться.
+  const width = Math.min(PANEL_W, Math.max(200, anchor.hostWidth - 16))
+  const left = Math.max(8, Math.min(anchor.left, anchor.hostWidth - width - 8))
 
   return (
     <m.div
-      className={styles.stickerEditor}
-      initial={{ scale: 0.6, opacity: 0, y: 8 }}
-      animate={{ scale: 1, opacity: 1, y: 0 }}
-      exit={{ scale: 0.6, opacity: 0 }}
-      transition={{ type: 'spring', stiffness: 380, damping: 26, duration: quick }}
-      style={{ top: sticker.top, left }}
+      ref={box}
+      className={styles.notePanel}
+      initial={{ opacity: 0, y: -6, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.98 }}
+      transition={{ type: 'spring', stiffness: 380, damping: 28, duration: quick }}
+      style={{ top: anchor.bottom + 8, left, width }}
       role="dialog"
-      aria-label="Заметка-стикер"
+      aria-label="Пометка"
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          event.stopPropagation()
+          save()
+          onClose()
+        }
+      }}
     >
-      {sticker.quote && (
-        <blockquote className={styles.stickerEditor__quote} lang="en">
-          {sticker.quote}
+      {annotation.quote && (
+        <blockquote className={styles.notePanel__quote} lang="en">
+          {annotation.quote}
         </blockquote>
       )}
+
       <textarea
-        className={styles.stickerEditor__input}
+        className={styles.notePanel__input}
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
         onBlur={save}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' && !event.shiftKey) {
-            event.preventDefault()
-            save()
-          }
-          if (event.key === 'Escape') {
-            event.preventDefault()
-            onClose()
-          }
-        }}
         placeholder="Что вы об этом думаете"
         aria-label="Текст заметки"
-        rows={4}
+        rows={3}
         autoFocus
       />
-      <div className={styles.stickerEditor__row}>
+
+      {/*
+       * Краски прямо здесь: сменить цвет уже поставленного выделения иначе
+       * было нельзя — только снять и провести заново.
+       */}
+      <div className={styles.notePanel__tones} role="group" aria-label="Краска">
+        {TONES.map((item) => (
+          <button
+            key={item.tone}
+            type="button"
+            className={styles.notePanel__tone}
+            style={{ background: toneColor(item.tone) }}
+            data-active={annotation.tone === item.tone ? 'true' : undefined}
+            aria-label={item.title}
+            aria-pressed={annotation.tone === item.tone}
+            title={item.title}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => onTone(item.tone)}
+          />
+        ))}
+      </div>
+
+      <div className={styles.notePanel__row}>
         <button
           type="button"
-          className={styles.stickerEditor__delete}
+          className={styles.notePanel__delete}
           onMouseDown={(event) => event.preventDefault()}
           onClick={onDelete}
-          aria-label="Снять стикер"
-          title="Снять стикер"
         >
           <TrashIcon size={15} />
+          Удалить
         </button>
         <button
           type="button"
-          className={styles.stickerEditor__done}
+          className={styles.notePanel__done}
           onMouseDown={(event) => event.preventDefault()}
-          onClick={save}
+          onClick={() => {
+            save()
+            onClose()
+          }}
           aria-label="Готово"
           title="Готово"
         >
           <CheckIcon size={15} />
         </button>
-        <button
-          type="button"
-          className={styles.stickerEditor__close}
-          onClick={onClose}
-          aria-label="Закрыть без сохранения"
-          title="Закрыть"
-        >
-          <CloseIcon size={14} />
-        </button>
       </div>
     </m.div>
   )
 }
+
+const PANEL_W = 268

@@ -17,9 +17,11 @@
  */
 
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
+import { AnimatePresence } from 'motion/react'
 
 import type { Block, FocusMode, Sentence, Token } from '../core/types'
-import { StickerLayer, type StickerInfo } from './annotate'
+import { AnnotationPanel, type OpenAnnotation } from './annotate'
+import type { Tone } from './annotations'
 import { FocusCurtains, useFocusWindow } from './attention'
 import styles from './reader.module.css'
 import type { TokenizedBlock } from './useChapter'
@@ -42,6 +44,24 @@ export interface TokenRange {
   tone?: string
   /** Чем отличать прямоугольники двух выделений одного цвета подряд. */
   id?: string
+  /** Есть ли у пометки текст заметки: по нему ручка получает загнутый угол. */
+  hasNote?: boolean
+}
+
+/**
+ * Где на странице лежит открытая пометка.
+ *
+ * Считается там же, где прямоугольники подсветки, и пересчитывается вместе с
+ * ними: панель заметки обязана ехать за строкой при прокрутке и перевёрстке,
+ * иначе она отвяжется от того места, к которому относится.
+ */
+export interface MarkAnchor {
+  left: number
+  right: number
+  top: number
+  bottom: number
+  /** Ширина колонки — по ней панель прижимается к краю, а не уезжает за него. */
+  hostWidth: number
 }
 
 interface ChapterViewProps {
@@ -63,14 +83,21 @@ interface ChapterViewProps {
   images: Map<string, string>
   /** Режим чтения: влияет на виртуализацию и фильтрацию подсветки. */
   mode?: 'pages' | 'scroll'
-  /** Заметки-стикеры этой главы. */
-  stickers?: StickerInfo[]
-  /** Какой стикер сейчас открыт на редактирование. */
-  editingSticker?: string | null
-  onStickerOpen?: (id: string) => void
-  onStickerClose?: () => void
-  onStickerSave?: (id: string, note: string) => void
-  onStickerDelete?: (id: string) => void
+  /**
+   * Открытая пометка: её заметка, краска и цитата.
+   *
+   * Раньше на каждую заметку висел бумажный листок на поле колонки. В режиме
+   * страниц он попадал в текст соседней колонки, в ленте — прижимался к краю,
+   * и два листка на соседних строках наезжали друг на друга. Теперь у пометки
+   * есть маленькая ручка в конце фразы, а всё остальное живёт в панели,
+   * которая открывается по ней и закрывается совсем.
+   */
+  openAnnotation?: OpenAnnotation | null
+  onAnnotationOpen?: (id: string) => void
+  onAnnotationClose?: () => void
+  onAnnotationNote?: (id: string, note: string) => void
+  onAnnotationTone?: (id: string, tone: Tone) => void
+  onAnnotationDelete?: (id: string) => void
   /**
    * Якоря полужирной основы: по числу на токен главы.
    *
@@ -103,12 +130,12 @@ export function ChapterView({
   dropCap,
   images,
   mode = 'scroll',
-  stickers,
-  editingSticker,
-  onStickerOpen,
-  onStickerClose,
-  onStickerSave,
-  onStickerDelete,
+  openAnnotation,
+  onAnnotationOpen,
+  onAnnotationClose,
+  onAnnotationNote,
+  onAnnotationTone,
+  onAnnotationDelete,
   anchors,
   focusMode = 'off',
   sentences,
@@ -116,6 +143,7 @@ export function ChapterView({
   quick = 180,
 }: ChapterViewProps) {
   const column = useRef<HTMLDivElement>(null)
+  const [anchor, setAnchor] = useState<MarkAnchor | null>(null)
   const focus = useFocusWindow(column, focusMode, sentences ?? EMPTY_SENTENCES, focusToken)
 
   /**
@@ -148,19 +176,30 @@ export function ChapterView({
       onClick={handleClick}
       lang="en"
     >
-      <MarkLayer container={column} marks={marks} blocks={blocks} mode={mode} />
-      <FocusCurtains window={focus ?? null} />
-      <StickerLayer
+      <MarkLayer
         container={column}
-        stickers={stickers ?? []}
-        editing={editingSticker ?? null}
+        marks={marks}
+        blocks={blocks}
         mode={mode}
-        quick={quick}
-        onOpen={(id) => onStickerOpen?.(id)}
-        onClose={() => onStickerClose?.()}
-        onSave={(id, note) => onStickerSave?.(id, note)}
-        onDelete={(id) => onStickerDelete?.(id)}
+        openId={openAnnotation?.id ?? null}
+        onOpen={(id) => onAnnotationOpen?.(id)}
+        onAnchor={setAnchor}
       />
+      <FocusCurtains window={focus ?? null} />
+      <AnimatePresence>
+        {openAnnotation && anchor && (
+          <AnnotationPanel
+            key={openAnnotation.id}
+            anchor={anchor}
+            annotation={openAnnotation}
+            quick={quick}
+            onNote={(note) => onAnnotationNote?.(openAnnotation.id, note)}
+            onTone={(tone) => onAnnotationTone?.(openAnnotation.id, tone)}
+            onDelete={() => onAnnotationDelete?.(openAnnotation.id)}
+            onClose={() => onAnnotationClose?.()}
+          />
+        )}
+      </AnimatePresence>
       {blocks.map((item, position) => (
         <BlockView
           key={item.index}
@@ -372,11 +411,17 @@ function MarkLayer({
   marks,
   blocks,
   mode,
+  openId,
+  onOpen,
+  onAnchor,
 }: {
   container: React.RefObject<HTMLDivElement | null>
   marks: TokenRange[]
   blocks: TokenizedBlock[]
   mode: 'pages' | 'scroll'
+  openId?: string | null
+  onOpen?: (id: string) => void
+  onAnchor?: (anchor: MarkAnchor | null) => void
 }) {
   const [rects, setRects] = useState<
     {
@@ -387,6 +432,9 @@ function MarkLayer({
       left: number
       width: number
       height: number
+      /** Заполнен у ручки: по нему пометка открывается и закрывается. */
+      id?: string
+      hasNote?: boolean
     }[]
   >([])
 
@@ -432,6 +480,7 @@ function MarkLayer({
     }
 
     const next: typeof rects = []
+    let anchor: MarkAnchor | null = null
 
     for (const mark of visibleMarks) {
       const first = host.querySelector<HTMLElement>(`[data-t="${mark.start}"]`)
@@ -455,6 +504,8 @@ function MarkLayer({
       } catch {
         continue
       }
+      let lastBox: DOMRect | null = null
+      let bounds: MarkAnchor | null = null
       Array.from(boxes).forEach((box, index) => {
         // Схлопнутые прямоугольники приходят на разрывах строк и рисуют
         // паразитные полоски в ноль пикселей шириной.
@@ -468,11 +519,54 @@ function MarkLayer({
           width: box.width,
           height: box.height,
         })
+        lastBox = box
+        bounds = bounds
+          ? {
+              left: Math.min(bounds.left, box.left - base.left),
+              right: Math.max(bounds.right, box.right - base.left),
+              top: Math.min(bounds.top, box.top - base.top),
+              bottom: Math.max(bounds.bottom, box.bottom - base.top),
+              hostWidth: base.width,
+            }
+          : {
+              left: box.left - base.left,
+              right: box.right - base.left,
+              top: box.top - base.top,
+              bottom: box.bottom - base.top,
+              hostWidth: base.width,
+            }
       })
+
+      /*
+       * Ручка пометки — единственное, за что её можно взять.
+       *
+       * Стоит в конце фразы, размером с точку: слой подсветки не должен
+       * перехватывать нажатия целиком, иначе по выделенному тексту нельзя
+       * будет ни протянуть новое выделение, ни открыть карточку слова.
+       */
+      if (mark.id && lastBox) {
+        const box: DOMRect = lastBox
+        const size = 11
+        const left = Math.min(box.right - base.left + 2, base.width - size - 2)
+        next.push({
+          key: `handle:${mark.id}`,
+          kind: 'handle',
+          tone: mark.tone,
+          top: box.top - base.top + (box.height - size) / 2,
+          left: Math.max(0, left),
+          width: size,
+          height: size,
+          id: mark.id,
+          hasNote: mark.hasNote,
+        })
+      }
+
+      if (mark.id && mark.id === openId) anchor = bounds
     }
 
     setRects(next)
-  }, [container, marks, blocks, mode])
+    onAnchor?.(anchor)
+  }, [container, marks, blocks, mode, openId, onAnchor])
 
   const scheduleRecompute = useCallback(() => schedule(recompute), [schedule, recompute])
 
@@ -511,25 +605,49 @@ function MarkLayer({
   }, [])
 
   return (
-    <div className={styles.marks} aria-hidden="true">
+    <div className={styles.marks}>
       {rects.map((rect) => {
         // Появление — только для свежих выделений: прямоугольник, который
         // уже был на экране, при повторном пересчёте не «вспыхивает» снова.
         const fresh = !seenRef.current.has(rect.key)
         seenRef.current.add(rect.key)
+        const box = {
+          top: rect.top,
+          left: rect.left,
+          width: rect.width,
+          height: rect.height,
+        }
+
+        if (rect.kind === 'handle' && rect.id) {
+          const id = rect.id
+          return (
+            <button
+              key={rect.key}
+              type="button"
+              className={styles.markHandle}
+              data-handle="true"
+              data-note={rect.hasNote ? 'true' : undefined}
+              data-open={id === openId ? 'true' : undefined}
+              style={{ ...box, ...(rect.tone ? { background: rect.tone } : null) }}
+              aria-label={rect.hasNote ? 'Открыть заметку' : 'Открыть выделение'}
+              title={rect.hasNote ? 'Заметка' : 'Выделение'}
+              onMouseDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation()
+                onOpen?.(id)
+              }}
+            />
+          )
+        }
+
         return (
           <span
             key={rect.key}
+            aria-hidden="true"
             className={`${styles.mark} ${styles[`mark--${rect.kind}`]}${
               fresh && rect.kind === 'mark' ? ` ${styles.markPop}` : ''
             }`}
-            style={{
-              top: rect.top,
-              left: rect.left,
-              width: rect.width,
-              height: rect.height,
-              ...(rect.tone ? { background: rect.tone } : null),
-            }}
+            style={{ ...box, ...(rect.tone ? { background: rect.tone } : null) }}
           />
         )
       })}

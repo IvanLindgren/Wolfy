@@ -38,7 +38,7 @@ import {
   TuneIcon,
 } from '../widgets/icons'
 import { WolfyCompanion } from '../widgets/Wolfy'
-import { ToolDock, lastPencilTone, savePencilTone, type StickerInfo, type Tool } from './annotate'
+import { ToolDock, lastPencilTone, savePencilTone, type OpenAnnotation, type Tool } from './annotate'
 import { toneColor, useAnnotations, type Tone } from './annotations'
 import { AttentionBar, usePacer } from './attention'
 import { ChapterView, savedRanges, textOf, type TokenRange } from './ChapterView'
@@ -104,7 +104,7 @@ export function ReaderScreen() {
   // должна отвечать на нажатия так, как отвечает при чтении.
   const [tool, setTool] = useState<Tool>(null)
   const [pencilTone, setPencilTone] = useState<Tone>(lastPencilTone)
-  const [editingSticker, setEditingSticker] = useState<string | null>(null)
+  const [openNote, setOpenNote] = useState<string | null>(null)
 
   const scroller = useRef<HTMLDivElement>(null)
   const pager = useRef<PagerHandle | null>(null)
@@ -453,9 +453,62 @@ export function ReaderScreen() {
           kind: item.tone ? ('mark' as const) : ('note' as const),
           tone: item.tone ? toneColor(item.tone) : undefined,
           id: item.id,
+          hasNote: item.note !== '',
         }))
         .filter((range) => range.end > range.start),
     [annotations, chapterIndex, chapter.tokens.length],
+  )
+
+  /*
+   * Пометка, открытая на правку.
+   *
+   * Берётся из хранилища по номеру, а не запоминается снимком: заметку можно
+   * менять и со страницы заметок, и с другого устройства, и панель обязана
+   * показывать то, что есть сейчас.
+   */
+  const openAnnotation = useMemo<OpenAnnotation | null>(() => {
+    if (!openNote) return null
+    const item = annotations.find((entry) => entry.id === openNote && !entry.deleted)
+    if (!item) return null
+    return { id: item.id, quote: item.quote, note: item.note, tone: item.tone }
+  }, [annotations, openNote])
+
+  // Пометка могла исчезнуть — со страницы заметок или с другого устройства.
+  useEffect(() => {
+    if (openNote && !openAnnotation) setOpenNote(null)
+  }, [openNote, openAnnotation])
+
+  const saveNote = useCallback((id: string, note: string) => {
+    void useAnnotations.getState().update(id, { note })
+  }, [])
+
+  const setNoteTone = useCallback((id: string, tone: Tone) => {
+    void useAnnotations.getState().update(id, { tone })
+  }, [])
+
+  const deleteNote = useCallback((id: string) => {
+    setOpenNote((current) => (current === id ? null : current))
+    void useAnnotations.getState().remove(id)
+  }, [])
+
+  /**
+   * Пометка под токеном — то, что сотрёт карандаш.
+   *
+   * Из нескольких берётся самая короткая: выделенное слово внутри выделенного
+   * абзаца стирается первым, иначе до него было бы не добраться.
+   */
+  const annotationAt = useCallback(
+    (token: number): string | null => {
+      let found: { id: string; size: number } | null = null
+      for (const item of annotations) {
+        if (item.deleted || item.chapter !== chapterIndex) continue
+        if (token < item.start || token >= item.end) continue
+        const size = item.end - item.start
+        if (!found || size < found.size) found = { id: item.id, size }
+      }
+      return found?.id ?? null
+    },
+    [annotations, chapterIndex],
   )
 
   const marks = useMemo<TokenRange[]>(() => {
@@ -732,7 +785,7 @@ export function ReaderScreen() {
             item.end === end,
         )
       if (existing) {
-        setEditingSticker(existing.id)
+        setOpenNote(existing.id)
         return
       }
       const created = await useAnnotations.getState().add({
@@ -743,14 +796,25 @@ export function ReaderScreen() {
         quote,
         note: '',
       })
-      setEditingSticker(created.id)
+      setOpenNote(created.id)
     },
     [book, chapterIndex],
   )
 
   const openWord = useCallback(
     (token: number, element: HTMLElement) => {
-      if (tool === 'pencil') return
+      /*
+       * Карандаш работает и ластиком.
+       *
+       * Провёл — покрасил, нажал по покрашенному — снял. Отдельный
+       * инструмент-ластик тут был бы лишней кнопкой: тем же карандашом
+       * зачёркивают на бумаге.
+       */
+      if (tool === 'pencil') {
+        const existing = annotationAt(token)
+        if (existing) deleteNote(existing)
+        return
+      }
       const word = chapter.tokens[token]
       if (!word || !book) return
       if (tool === 'sticker') {
@@ -776,7 +840,7 @@ export function ReaderScreen() {
         origin: element,
       })
     },
-    [chapter, chapterIndex, book, tool, placeSticker],
+    [chapter, chapterIndex, book, tool, placeSticker, annotationAt, deleteNote],
   )
 
   const openPhrase = useCallback(
@@ -845,36 +909,6 @@ export function ReaderScreen() {
 
   // --- Стикеры этой главы ----------------------------------------------------
 
-  const stickers = useMemo<StickerInfo[]>(
-    () =>
-      annotations
-        .filter(
-          (item) =>
-            !item.deleted &&
-            item.chapter === chapterIndex &&
-            (item.note !== '' || item.tone === null),
-        )
-        .map((item) => ({
-          id: item.id,
-          start: item.start,
-          end:
-            item.end > item.start ? item.end : Math.min(item.start + 1, chapter.tokens.length),
-          note: item.note,
-          quote: item.quote,
-        }))
-        .filter((item) => item.end > item.start),
-    [annotations, chapterIndex, chapter.tokens.length],
-  )
-
-  const saveSticker = useCallback((id: string, note: string) => {
-    void useAnnotations.getState().update(id, { note })
-  }, [])
-
-  const deleteSticker = useCallback((id: string) => {
-    setEditingSticker((current) => (current === id ? null : current))
-    void useAnnotations.getState().remove(id)
-  }, [])
-
   // --- Клавиши --------------------------------------------------------------
 
   // Перехват **до потомков**: читалка обязана забрать пробел и стрелки у
@@ -910,7 +944,7 @@ export function ReaderScreen() {
           // Лестница назад: стикер → инструмент → оглавление → карточка → книга.
           key: 'Escape',
           run: () => {
-            if (editingSticker) setEditingSticker(null)
+            if (openNote) setOpenNote(null)
             else if (tool) {
               setTool(null)
               setPhraseMark(null)
@@ -922,9 +956,9 @@ export function ReaderScreen() {
           },
         },
       ],
-      [turn, mode, contents, tuner, card, closeCard, navigate, tool, editingSticker],
+      [turn, mode, contents, tuner, card, closeCard, navigate, tool, openNote],
     ),
-    { capture: true, enabled: !card && !editingSticker },
+    { capture: true, enabled: !card && !openNote },
   )
 
   // --- Жесты ----------------------------------------------------------------
@@ -1001,12 +1035,12 @@ export function ReaderScreen() {
       focusMode={settings.focusMode}
       sentences={chapter.sentences}
       focusToken={pacing ? pacer.token : null}
-      stickers={stickers}
-      editingSticker={editingSticker}
-      onStickerOpen={setEditingSticker}
-      onStickerClose={() => setEditingSticker(null)}
-      onStickerSave={saveSticker}
-      onStickerDelete={deleteSticker}
+      openAnnotation={openAnnotation}
+      onAnnotationOpen={(id) => setOpenNote((current) => (current === id ? null : id))}
+      onAnnotationClose={() => setOpenNote(null)}
+      onAnnotationNote={saveNote}
+      onAnnotationTone={setNoteTone}
+      onAnnotationDelete={deleteNote}
       quick={timing.quick}
     />
   )
@@ -1181,7 +1215,7 @@ export function ReaderScreen() {
           tone={pencilTone}
           onTool={(next) => {
             setTool(next)
-            setEditingSticker(null)
+            setOpenNote(null)
             if (next) setPhraseMark(null)
           }}
           onTone={(tone) => {
