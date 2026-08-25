@@ -99,7 +99,7 @@ func validate(changes store.Changes) error {
 		if card.BookID != "" && !uuidPattern.MatchString(card.BookID) {
 			return fmt.Errorf("карточка ссылается на непонятную книгу: %q", card.BookID)
 		}
-		if kind := strings.TrimSpace(card.Kind); kind != "" && kind != "word" && kind != "phrase" {
+		if kind := strings.TrimSpace(card.Kind); kind != "" && kind != "word" && kind != "phrase" && kind != "rule" {
 			return fmt.Errorf("неизвестный вид карточки: %q", card.Kind)
 		}
 		if len(card.Context) > MaxTextLength {

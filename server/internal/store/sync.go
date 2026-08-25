@@ -34,7 +34,7 @@ type Book struct {
 	Deleted      bool   `json:"deleted"`
 }
 
-// Card — слово или фраза в колоде вместе с состоянием повторений.
+// Card — слово, фраза или правило вместе с состоянием повторений.
 type Card struct {
 	ID           string     `json:"id"`
 	BookID       string     `json:"bookId"`

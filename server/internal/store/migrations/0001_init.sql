@@ -54,14 +54,14 @@ CREATE INDEX books_user_rev_idx ON wolfy.books (user_id, rev);
 CREATE UNIQUE INDEX books_user_source_idx
     ON wolfy.books (user_id, source_key) WHERE source_key <> '';
 
--- Слова и фразы, сохранённые из книги. Одна таблица на оба вида: у них
+-- Слова, фразы и грамматические правила. Одна таблица на все виды: у них
 -- одинаковая жизнь в колоде, а отличаются они полем kind и длиной текста.
 CREATE TABLE wolfy.cards (
     id         uuid PRIMARY KEY,
     user_id    uuid        NOT NULL,
     -- Книга, из которой слово пришло. NULL — слово из общей колоды.
     book_id    uuid        REFERENCES wolfy.books (id) ON DELETE SET NULL,
-    -- 'word' или 'phrase'.
+    -- 'word', 'phrase' или 'rule'.
     kind       text        NOT NULL DEFAULT 'word',
     -- Слово так, как оно стояло в тексте.
     surface    text        NOT NULL,
