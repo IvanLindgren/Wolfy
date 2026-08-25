@@ -69,6 +69,11 @@ import com.wolfy.platform.rememberBrowserAuthLauncher
 import com.wolfy.platform.deviceName
 import com.wolfy.platform.devicePlatform
 import com.wolfy.platform.rememberAppUpdateController
+import androidx.compose.runtime.DisposableEffect
+import com.wolfy.data.library.LibraryStore
+import com.wolfy.data.loadRadio
+import com.wolfy.data.saveRadio
+import com.wolfy.platform.createRadioPlayer
 import com.wolfy.theme.ReadingTheme
 import com.wolfy.theme.WolfyTheme
 import com.wolfy.theme.WolfyMotion
@@ -107,7 +112,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private const val APP_VERSION = "1.0.7"
+/**
+ * Версия по умолчанию — та, что зашита в общий модуль.
+ *
+ * Обычно её перебивает платформа: Android передаёт `BuildConfig.VERSION_NAME`,
+ * десктоп — запечённое сборкой `-Dwolfy.version`. Значение здесь остаётся
+ * последним доводом для запуска из исходников и тестов.
+ */
+const val APP_VERSION = "1.0.7"
 
 /**
  * Корень приложения.
@@ -177,6 +189,7 @@ fun WolfyApplication(
                     dictionary = dictionary,
                 ),
                 catalogue = LibraryViewModel(library, core, api, store),
+                store = store,
                 training = TrainingViewModel(library, settings, coreSession),
                 session = session,
                 discovery = DiscoveryViewModel(api, session, library),
@@ -385,6 +398,13 @@ private class Parts(
     val training: TrainingViewModel,
     val session: AccountSession,
     val discovery: DiscoveryViewModel,
+    /**
+     * Хранилище устройства.
+     *
+     * Нужно тем настройкам, которые нарочно не синхронизируются: громкость
+     * радио, подобранная в тишине кабинета, в метро оказывается неслышной.
+     */
+    val store: LibraryStore,
     val dictionary: DictionaryManager,
     val api: WolfyApi,
 )
@@ -430,6 +450,33 @@ private fun Shell(
         articles = withContext(Dispatchers.Default) {
             runCatching { parts.core.reference() }.getOrElse { emptyList() }
         }
+    }
+
+    /*
+     * Настройки чтения: якорь слова, окно, ведущая строка, отрезок.
+     *
+     * Читалке передаётся не весь объект настроек, а только то, что ей нужно:
+     * иначе смена темы перерисовывала бы главу.
+     */
+    /*
+     * Радио.
+     *
+     * Проигрыватель живёт при приложении, а не при экране: фон не должен
+     * замолкать оттого, что читатель ушёл из книги в колоды. Отпускается он
+     * вместе с приложением — звуковое устройство надо вернуть системе.
+     */
+    val radio = remember { createRadioPlayer() }
+    val radioState by radio.state.collectAsState()
+    var radioPreferences by remember { mutableStateOf(parts.store.loadRadio()) }
+    LaunchedEffect(radio) { radio.setVolume(radioPreferences.volume) }
+    DisposableEffect(radio) { onDispose { radio.release() } }
+
+    val readingSettings by parts.settings.state.collectAsState()
+    LaunchedEffect(readingSettings.emphasizeStems) {
+        parts.reader.setEmphasizeStems(readingSettings.emphasizeStems)
+    }
+    LaunchedEffect(readingSettings.segmentWords) {
+        parts.reader.setSegmentWords(readingSettings.segmentWords)
     }
 
     val catalogue by parts.catalogue.state.collectAsState()
@@ -639,6 +686,10 @@ private fun Shell(
                     onThemeChange = onThemeChange,
                     onFontScaleChange = onFontScaleChange,
                     onLineScaleChange = onLineScaleChange,
+                    focusMode = readingSettings.focus,
+                    pacerWpm = readingSettings.pacerWpm,
+                    onNextSegment = parts.reader::planSegment,
+                    onStopSegments = { parts.settings.setSegmentWords(0) },
                 )
 
                 Route.Shelves -> ShelvesScreen(
@@ -690,6 +741,31 @@ private fun Shell(
                     accountEmail = accountEmail,
                     reduceMotion = reduceMotion,
                     onReduceMotion = onReduceMotion,
+                    emphasizeStems = readingSettings.emphasizeStems,
+                    onEmphasizeStems = parts.settings::setEmphasizeStems,
+                    focusMode = readingSettings.focus,
+                    onFocusMode = parts.settings::setFocusMode,
+                    pacerWpm = readingSettings.pacerWpm,
+                    onPacer = parts.settings::setPacer,
+                    segmentWords = readingSettings.segmentWords,
+                    onSegmentWords = parts.settings::setSegmentWords,
+                    radio = radioState,
+                    radioOwnUrl = radioPreferences.ownUrl,
+                    onRadioStation = { station ->
+                        radio.play(station)
+                        radioPreferences = radioPreferences.copy(stationId = station.id)
+                        parts.store.saveRadio(radioPreferences)
+                    },
+                    onRadioStop = radio::stop,
+                    onRadioVolume = { volume ->
+                        radio.setVolume(volume)
+                        radioPreferences = radioPreferences.copy(volume = volume)
+                        parts.store.saveRadio(radioPreferences)
+                    },
+                    onRadioOwnUrl = { url ->
+                        radioPreferences = radioPreferences.copy(ownUrl = url)
+                        parts.store.saveRadio(radioPreferences)
+                    },
                     onSignIn = onSignIn,
                     onSignOut = onSignOut,
                     onOpenReference = { reference = "" },

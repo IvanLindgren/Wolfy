@@ -24,6 +24,10 @@ kotlin {
         jvmMain.dependencies {
             implementation(project(":shared"))
             implementation(compose.desktop.currentOs)
+            // Панель «вас ждёт книга» рисуется здесь, до всякой композиции
+            // приложения: ей нужны сами примитивы, а не только окно.
+            implementation(compose.foundation)
+            implementation(compose.material3)
         }
     }
 }
@@ -115,6 +119,20 @@ val wolfyServerUrl = providers.gradleProperty("wolfyServerUrl")
     .orElse(providers.environmentVariable("WOLFY_SERVER_URL"))
     .orElse("http://localhost:8080")
 
+/*
+ * Версия приложения — одна строка на всю сборку.
+ *
+ * Раньше их было три: `packageVersion` установщика, константа в общем модуле и
+ * литерал в `Main.kt`. Автообновление сравнивает манифест сервера именно с
+ * последним, и стоило поднять версию в двух местах из трёх — обновление молча
+ * переставало предлагаться, потому что установленная версия «уже свежая».
+ *
+ * Отсюда значение попадает и в установщик, и в launcher: в установленном
+ * приложении нет ни терминала, ни его переменных среды, поэтому версия
+ * запекается тем же способом, что и адрес API.
+ */
+val wolfyVersion = "1.0.7"
+
 // Путь к ядру для запуска из исходников.
 //
 // Только для него: в установленном приложении библиотека приезжает ресурсом, и
@@ -148,6 +166,7 @@ compose.desktop {
         // Поэтому production-адрес API запекается в launcher при сборке;
         // WOLFY_SERVER_URL при запуске всё ещё может его переопределить.
         jvmArgs += "-Dwolfy.server.url=${wolfyServerUrl.get()}"
+        jvmArgs += "-Dwolfy.version=$wolfyVersion"
 
         // JNA находит C-функции динамически. Обычный shrink/optimize не видит
         // эти обращения и удаляет в release-сборке необходимые методы самой
@@ -165,7 +184,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Exe)
             packageName = "Wolfy"
-            packageVersion = "1.0.7"
+            packageVersion = wolfyVersion
             // Латиницей, и не по недосмотру: установщик собирает WiX, а строки
             // он пишет в кодовой странице 1252 — кириллица в неё не влезает и
             // роняет сборку целиком (LGHT0311). Название приложения при этом

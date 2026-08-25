@@ -1,12 +1,19 @@
 package com.wolfy.desktop
 
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
+import androidx.compose.ui.window.Tray
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import com.wolfy.ui.APP_VERSION
 import com.wolfy.ui.WolfyApplication
 import java.awt.GraphicsEnvironment
 import java.awt.SplashScreen
@@ -14,8 +21,51 @@ import java.awt.SplashScreen
 fun main() = application {
     val state = rememberWindowState(size = defaultWindowSize())
 
+    /*
+     * Главное окно можно свернуть, а панель — оставить.
+     *
+     * Смысл панели ровно в этом: приложения на экране нет, а книга о себе
+     * напоминает. Поэтому окно и панель — два независимых состояния, и
+     * закрытие панели не закрывает приложение.
+     */
+    var windowOpen by remember { mutableStateOf(true) }
+    var panelOpen by remember { mutableStateOf(false) }
+
+    /*
+     * Значок в трее.
+     *
+     * Он же и весь пульт: открыть окно, показать панель, выйти. Подсказка
+     * значка — та же строка, что и в панели: наведя мышь, читатель узнаёт, на
+     * чём остановился, не открывая ничего вовсе.
+     */
+    Tray(
+        icon = rememberVectorPainter(TrayBook),
+        tooltip = readNudge()?.oneLine() ?: "Wolfy",
+        onAction = { windowOpen = true },
+        menu = {
+            Item("Открыть Wolfy") { windowOpen = true }
+            Item(if (panelOpen) "Убрать панель со стола" else "Панель на рабочий стол") {
+                panelOpen = !panelOpen
+            }
+            Separator()
+            Item("Выход", onClick = ::exitApplication)
+        },
+    )
+
+    if (panelOpen) {
+        DesktopNudgePanel(
+            onOpen = { windowOpen = true },
+            onClose = { panelOpen = false },
+        )
+    }
+
+    if (!windowOpen) return@application
+
     Window(
-        onCloseRequest = ::exitApplication,
+        // Крестик прячет окно, а не выходит из приложения: панель и трей
+        // остаются, и это единственный способ, которым панель вообще имеет
+        // смысл — иначе она умирала бы вместе с окном.
+        onCloseRequest = { if (panelOpen) windowOpen = false else exitApplication() },
         title = "Wolfy",
         state = state,
     ) {
@@ -29,7 +79,13 @@ fun main() = application {
                 ?: System.getProperty("wolfy.server.url")
                 ?: "http://localhost:8080",
             sessionToken = System.getenv("WOLFY_SESSION_TOKEN"),
-            currentVersion = "1.0.7",
+            // Версию запекает сборка (`-Dwolfy.version`): литерал здесь
+            // однажды разошёлся бы с `packageVersion` установщика, и
+            // автообновление перестало бы предлагаться — установленная
+            // версия оказалась бы «уже свежей».
+            currentVersion = System.getProperty("wolfy.version")
+                ?.takeIf(String::isNotBlank)
+                ?: APP_VERSION,
             onExitForUpdate = ::exitApplication,
         )
     }

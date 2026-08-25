@@ -86,6 +86,9 @@ kotlin {
             implementation(libs.kotlinx.coroutines.swing)
             implementation(libs.ktor.client.cio)
             implementation(libs.jna)
+            // Декодер MP3 для радио. В JDK его нет вовсе: `javax.sound.sampled`
+            // читает WAV и AIFF, а радиопоток — это MP3.
+            implementation(libs.jlayer)
         }
     }
 }

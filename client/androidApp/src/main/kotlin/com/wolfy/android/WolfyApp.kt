@@ -2,6 +2,7 @@ package com.wolfy.android
 
 import android.app.Application
 import com.wolfy.data.library.initializeStorage
+import com.wolfy.platform.initializeNudge
 import com.wolfy.platform.initializeReminders
 
 /**
@@ -24,5 +25,8 @@ class WolfyApp : Application() {
         // и тоже здесь: приёмник напоминания просыпается в процессе, который
         // может не дойти ни до одного экрана.
         initializeReminders(this)
+        // Виджет рабочего стола будится из общего кода, а класс виджета
+        // живёт здесь: контекст ему передаём тем же способом, что и всем.
+        initializeNudge(this)
     }
 }

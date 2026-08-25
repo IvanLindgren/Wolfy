@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Виджет «вас ждёт книга».
+
+  Три строки и ничего больше. Виджет живёт на рабочем столе среди чужих
+  значков, и всё, что он может себе позволить, — быть тихой запиской: бумага,
+  чернила, тонкая линейка. Кнопок нет вовсе — нажатие по всей карточке
+  открывает книгу, и это единственное, чего от него хотят.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@drawable/widget_paper"
+    android:padding="14dp">
+
+    <TextView
+        android:id="@+id/widget_title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:maxLines="2"
+        android:ellipsize="end"
+        android:textColor="#111111"
+        android:textSize="15sp"
+        android:textStyle="bold"
+        android:text="@string/widget_empty_title" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginTop="8dp"
+        android:layout_marginBottom="8dp"
+        android:background="#D9D8D2" />
+
+    <TextView
+        android:id="@+id/widget_place"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:maxLines="1"
+        android:ellipsize="end"
+        android:textColor="#6B6B66"
+        android:textSize="12sp" />
+
+    <TextView
+        android:id="@+id/widget_teaser"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:maxLines="3"
+        android:ellipsize="end"
+        android:textColor="#6B6B66"
+        android:textSize="12sp" />
+</LinearLayout>

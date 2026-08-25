@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Wolfy</string>
+    <string name="widget_description">Книга, которую вы читаете, и место, где остановились</string>
+    <string name="widget_empty_title">Пока нечего читать</string>
+    <string name="widget_empty_hint">Добавьте книгу — и она появится здесь</string>
 </resources>

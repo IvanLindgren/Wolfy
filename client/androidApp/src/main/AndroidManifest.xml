@@ -28,6 +28,22 @@
         android:supportsRtl="false"
         android:theme="@style/Theme.Wolfy">
 
+        <!--
+             Виджет «вас ждёт книга». Экспортирован, потому что его размещает
+             и будит лаунчер — чужой процесс; без этого он просто не появится
+             в списке виджетов.
+        -->
+        <receiver
+            android:name=".BookWidget"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_book_info" />
+        </receiver>
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

@@ -27,6 +27,10 @@ import com.wolfy.widgets.SectionLabel
 import com.wolfy.widgets.Sticker
 import com.wolfy.widgets.ThemePicker
 import com.wolfy.widgets.WolfySticker
+import com.wolfy.data.FocusMode
+import com.wolfy.platform.RadioState
+import com.wolfy.platform.RadioStation
+import com.wolfy.ui.radio.RadioPanel
 import com.wolfy.widgets.pressable
 
 /**
@@ -50,6 +54,31 @@ fun SettingsScreen(
     accountEmail: String,
     reduceMotion: Boolean,
     onReduceMotion: (Boolean) -> Unit,
+    /*
+     * Помощь вниманию: якорь слова, окно чтения, ведущая строка, отрезок.
+     * Всё выключено по умолчанию — навязанная помощь мешает тем, кому она не
+     * нужна, — и всё синхронизируется: включив окно на телефоне, читатель
+     * ждёт его и в браузере.
+     */
+    emphasizeStems: Boolean,
+    onEmphasizeStems: (Boolean) -> Unit,
+    focusMode: FocusMode,
+    onFocusMode: (FocusMode) -> Unit,
+    pacerWpm: Int,
+    onPacer: (Int) -> Unit,
+    segmentWords: Int,
+    onSegmentWords: (Int) -> Unit,
+    /*
+     * Радио. Живёт в «Ещё» рядом с остальным, что настраивают редко, но
+     * управляется отсюда же: отдельный экран ради выключателя — это ещё один
+     * экран, который надо найти.
+     */
+    radio: RadioState,
+    radioOwnUrl: String,
+    onRadioStation: (RadioStation) -> Unit,
+    onRadioStop: () -> Unit,
+    onRadioVolume: (Float) -> Unit,
+    onRadioOwnUrl: (String) -> Unit,
     onSignIn: () -> Unit,
     onSignOut: () -> Unit,
     onOpenReference: () -> Unit,
@@ -113,6 +142,46 @@ fun SettingsScreen(
         )
 
         MotionToggle(reduceMotion, onReduceMotion)
+
+        Rule()
+        SectionLabel("Чтение")
+        SwitchRow(
+            title = "Полужирная основа",
+            hint = "Взгляд цепляется за начало слова, а окончание достраивает сам.",
+            on = emphasizeStems,
+            onChange = onEmphasizeStems,
+        )
+        ChoiceRow(
+            title = "Окно чтения",
+            hint = "Всё, кроме текущего места, притушено — как бумажная линейка с прорезью.",
+            options = FOCUS_TITLES.map { it.second },
+            selected = FOCUS_TITLES.indexOfFirst { it.first == focusMode }.coerceAtLeast(0),
+            onSelect = { onFocusMode(FOCUS_TITLES[it].first) },
+        )
+        ChoiceRow(
+            title = "Ведущая строка",
+            hint = "Окно едет само. Включается кнопкой в читалке, останавливается касанием.",
+            options = PACES.map { it.second },
+            selected = PACES.indexOfFirst { it.first == pacerWpm }.coerceAtLeast(0),
+            onSelect = { onPacer(PACES[it].first) },
+        )
+        ChoiceRow(
+            title = "Отрезок чтения",
+            hint = "Видимый конец подхода. Граница подтягивается к точке, а не рвёт фразу.",
+            options = SEGMENTS.map { it.second },
+            selected = SEGMENTS.indexOfFirst { it.first == segmentWords }.coerceAtLeast(0),
+            onSelect = { onSegmentWords(SEGMENTS[it].first) },
+        )
+
+        Rule()
+        RadioPanel(
+            state = radio,
+            ownUrl = radioOwnUrl,
+            onStation = onRadioStation,
+            onStop = onRadioStop,
+            onVolume = onRadioVolume,
+            onOwnUrl = onRadioOwnUrl,
+        )
 
         Rule()
         SectionLabel("Аккаунт")
@@ -208,6 +277,81 @@ fun SettingsScreen(
                     text = "Хранитель библиотеки",
                     style = WolfyTheme.typography.caption,
                     color = colors.inkMuted,
+                )
+            }
+        }
+    }
+}
+
+/*
+ * Подписи к режимам чтения.
+ *
+ * Числа темпа не круглые и не произвольные: 160 — спокойное чтение вслух,
+ * 220 — обычное про себя на неродном языке, 300 — быстро, но ещё с
+ * пониманием. Отрезок задан в словах, а не в минутах: минуты пришлось бы
+ * переводить в слова по скорости, которой мы не знаем, и обещание «пять
+ * минут» оказалось бы неверным ровно для того, кто читает медленнее.
+ */
+private val FOCUS_TITLES = listOf(
+    FocusMode.Off to "без окна",
+    FocusMode.Sentence to "предложение",
+    FocusMode.Paragraph to "абзац",
+)
+
+private val PACES = listOf(0 to "выключена", 160 to "спокойно", 220 to "обычно", 300 to "быстро")
+
+private val SEGMENTS =
+    listOf(0 to "без отрезков", 150 to "короткий", 400 to "средний", 900 to "длинный")
+
+/** Переключатель «включено/выключено» той же пластики, что и убавленное движение. */
+@Composable
+private fun SwitchRow(title: String, hint: String, on: Boolean, onChange: (Boolean) -> Unit) {
+    val colors = WolfyTheme.colors
+    val spacing = WolfyTheme.spacing
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .pressable { onChange(!on) }
+            .padding(vertical = spacing.small),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(spacing.tight)) {
+            Text(title, style = WolfyTheme.typography.body, color = colors.ink)
+            Text(hint, style = WolfyTheme.typography.caption, color = colors.inkMuted)
+        }
+        Text(
+            if (on) "включено" else "выключено",
+            style = WolfyTheme.typography.button,
+            color = if (on) colors.accent else colors.inkMuted,
+        )
+    }
+}
+
+/** Выбор одного из нескольких: подписями в строку, без выпадающих списков. */
+@Composable
+private fun ChoiceRow(
+    title: String,
+    hint: String,
+    options: List<String>,
+    selected: Int,
+    onSelect: (Int) -> Unit,
+) {
+    val colors = WolfyTheme.colors
+    val spacing = WolfyTheme.spacing
+    Column(
+        Modifier.fillMaxWidth().padding(vertical = spacing.small),
+        verticalArrangement = Arrangement.spacedBy(spacing.tight),
+    ) {
+        Text(title, style = WolfyTheme.typography.body, color = colors.ink)
+        Text(hint, style = WolfyTheme.typography.caption, color = colors.inkMuted)
+        Row(horizontalArrangement = Arrangement.spacedBy(spacing.medium)) {
+            options.forEachIndexed { index, option ->
+                Text(
+                    text = option,
+                    style = WolfyTheme.typography.button,
+                    color = if (index == selected) colors.accent else colors.inkMuted,
+                    modifier = Modifier.pressable { onSelect(index) },
                 )
             }
         }

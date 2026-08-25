@@ -9,10 +9,12 @@ import com.wolfy.srs.Queue
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -60,25 +62,23 @@ class CoreSession(
         if (prac != null) {
             try {
                 core.openSessionStrictWithPractice(lib, set, prac)
-            } catch (e: Exception) {
-                val msg = e.message.orEmpty()
-                // Если метод отсутствует (старое ядро/мок) — пробуем без practice.
-                if (msg.contains("Unresolved") || msg.contains("not implemented") || msg.contains("NoSuchMethod")) {
-                    core.openSessionStrict(lib, set)
-                } else {
-                    throw e
-                }
+            } catch (e: Throwable) {
+                // Отсутствующий символ в старой нативной библиотеке прилетает
+                // как UnsatisfiedLinkError — это Error, а не Exception, и
+                // `catch (Exception)` его не поймал бы: приложение падало бы
+                // на старте вместо отката к открытию без practice.
+                if (isMissingCoreSymbol(e)) core.openSessionStrict(lib, set) else throw e
             }
         } else {
             core.openSessionStrict(lib, set)
         }
-    } catch (e: Exception) {
+    } catch (e: Throwable) {
         // Совместимость: если strict недоступен (старое ядро) — падаем в lenient.
         // Но если strict бросил из-за повреждённого JSON, не маскируем ошибку
         // пустым состоянием: пробрасываем её наверх, чтобы WolfyApplication
         // показал explicit error, а не перезаписал файл пустым.
         val msg = e.message.orEmpty()
-        if (msg.contains("corrupted") || msg.contains("corrupted") || msg.contains("поврежд")) {
+        if (msg.contains("corrupted") || msg.contains("поврежд")) {
             throw e
         }
         // Fallback для ядер без strict (например, в тестах с моком).
@@ -90,13 +90,13 @@ class CoreSession(
             if (prac != null) {
                 try {
                     core.openSessionWithPractice(lib, set, prac)
-                } catch (_: Exception) {
+                } catch (_: Throwable) {
                     core.openSession(lib, set)
                 }
             } else {
                 core.openSession(lib, set)
             }
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             throw e
         }
     }
@@ -157,22 +157,32 @@ class CoreSession(
     }
 
     private fun schedulePersist(outcome: Outcome) {
-        // Извлекаем поколения из outcome; фолбэк — через generations() если ядро старое и не отдало.
-        val libGen = outcome.libraryGeneration
-        val setGen = outcome.settingsGeneration
-        val pracGen = outcome.practiceGeneration
-        // Если ядро не прислало поколения (старый билд), считаем что запись нужна
-        // и используем текущие поколения через sessionGenerations.
-        val fallback = try {
-            json.decodeFromString<GenerationsDto>(core.sessionGenerations(handle))
-        } catch (_: Exception) {
-            null
+        // Какие домены писать, решает ядро флагами `*Changed`, а не наличием
+        // поколения: поколение приходит в каждом ответе всегда, и если брать
+        // его за признак «надо писать», смена темы переписывала бы ещё и
+        // список книг, и тренировку.
+        //
+        // Поколения старое ядро могло не прислать — тогда спрашиваем текущие
+        // отдельным вызовом. Он ленивый: на новом ядре по FFI не ходим вовсе.
+        val fallback: GenerationsDto? by lazy {
+            try {
+                json.decodeFromString<GenerationsDto>(core.sessionGenerations(handle))
+            } catch (_: Throwable) {
+                null
+            }
         }
-        val effLibGen = libGen ?: if (outcome.libraryChanged) fallback?.library ?: 0L else null
-        val effSetGen = setGen ?: if (outcome.settingsChanged) fallback?.settings ?: 0L else null
-        val effPracGen = pracGen ?: if (outcome.practiceChanged) fallback?.practice ?: 0L else null
+        val effLibGen =
+            if (outcome.libraryChanged) outcome.libraryGeneration ?: fallback?.library ?: 0L else null
+        val effSetGen =
+            if (outcome.settingsChanged) outcome.settingsGeneration ?: fallback?.settings ?: 0L else null
+        val effPracGen =
+            if (outcome.practiceChanged) outcome.practiceGeneration ?: fallback?.practice ?: 0L else null
         if (effLibGen == null && effSetGen == null && effPracGen == null) return
 
+        // `launch` заводит Job синхронно, ещё до того как тело доедет до
+        // диспетчера. Благодаря этому `flushBlocking` при закрытии видит
+        // работу, даже если запись ещё не начиналась, — иначе последнее
+        // изменение уезжало бы вместе с отменой scope.
         persistScope.launch {
             var shouldStart = false
             persistMutex.withLock {
@@ -255,25 +265,28 @@ class CoreSession(
         }
     }
 
-    /** Дождаться окончания фоновых записей (для тестов / закрытия). */
+    /**
+     * Дождаться окончания фоновых записей (для тестов / закрытия).
+     *
+     * Ждём именно завершения корутин, а не опрашиваем флаги в цикле: опрос
+     * не только жёг бы ядро на UI-потоке, но и врал бы — поставленная в
+     * очередь запись, до которой диспетчер ещё не дошёл, флагов не выставила
+     * и выглядела бы как «работы нет». `launch` же регистрирует Job сразу,
+     * поэтому здесь она видна.
+     */
     fun flushBlocking(timeoutMs: Long = 5_000L) {
-        val deadline = currentTimeMillis() + timeoutMs
-        while (currentTimeMillis() < deadline) {
-            val busy = runBlocking {
-                persistMutex.withLock { isWriting || pendingLibraryGen != null || pendingSettingsGen != null || pendingPracticeGen != null }
-            }
-            if (!busy) break
-            // Небольшая пауза без платформенного Thread — просто спин.
-            // На JVM это быстро, проверка каждые несколько мс достаточна.
-        }
+        runBlocking { withTimeoutOrNull(timeoutMs) { flush() } }
     }
 
     /** Корутинная версия flush для тестов. */
     suspend fun flush() {
+        // Цикл записи живёт внутри той же корутины, что его завела, поэтому
+        // join по детям дожидается и самой записи на диск. Повторяем, пока
+        // детей не останется: пока мы ждали одну, могла появиться следующая.
         while (true) {
-            val busy = persistMutex.withLock { isWriting || pendingLibraryGen != null || pendingSettingsGen != null || pendingPracticeGen != null }
-            if (!busy) break
-            kotlinx.coroutines.delay(10)
+            val running = persistScope.coroutineContext.job.children.toList()
+            if (running.isEmpty()) return
+            running.forEach { it.join() }
         }
     }
 
@@ -374,4 +387,34 @@ fun command(op: String, body: JsonObjectBuilder.() -> Unit = {}): JsonObject =
 val json = Json {
     ignoreUnknownKeys = true
     encodeDefaults = true
+}
+
+/**
+ * Отсутствует ли в нативной библиотеке функция, которую позвал клиент.
+ *
+ * Свежий клиент рядом со старым `libwolfy_core` — обычное дело при обновлении
+ * по частям, и такой запуск обязан деградировать до доступных функций, а не
+ * падать на старте.
+ *
+ * Ловится по типу, а не по тексту: JNA сообщает об отсутствующем символе
+ * `UnsatisfiedLinkError`, то есть `Error`, — его не поймает ни один
+ * `catch (e: Exception)`. Текст проверяется дополнительно, потому что
+ * обёртки иногда перепаковывают причину в обычное исключение.
+ */
+internal fun isMissingCoreSymbol(error: Throwable): Boolean {
+    var current: Throwable? = error
+    while (current != null) {
+        if (current is UnsatisfiedLinkError) return true
+        val message = current.message.orEmpty()
+        if (
+            message.contains("Error looking up function") ||
+            message.contains("Unresolved") ||
+            message.contains("NoSuchMethod") ||
+            message.contains("not implemented")
+        ) {
+            return true
+        }
+        current = current.cause?.takeIf { it !== current }
+    }
+    return false
 }
