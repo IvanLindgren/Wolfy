@@ -18,10 +18,14 @@
 
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
 
-import type { Block, Token } from '../core/types'
+import type { Block, FocusMode, Sentence, Token } from '../core/types'
 import { StickerLayer, type StickerInfo } from './annotate'
+import { FocusCurtains, useFocusWindow } from './attention'
 import styles from './reader.module.css'
 import type { TokenizedBlock } from './useChapter'
+
+/** Пустой список предложений: постоянная ссылка, чтобы не дёргать мемоизацию. */
+const EMPTY_SENTENCES: Sentence[] = []
 
 export interface TokenRange {
   start: number
@@ -67,6 +71,25 @@ interface ChapterViewProps {
   onStickerClose?: () => void
   onStickerSave?: (id: string, note: string) => void
   onStickerDelete?: (id: string) => void
+  /**
+   * Якоря полужирной основы: по числу на токен главы.
+   *
+   * Приходит из ядра одним массивом на главу. Пустой массив означает
+   * «выключено»: проверять настройку здесь незачем, её уже проверил тот, кто
+   * решал, запрашивать якоря или нет.
+   */
+  anchors?: Uint16Array
+  /** Окно чтения: что оставить светлым. `off` — окна нет. */
+  focusMode?: FocusMode
+  /** Предложения главы: по ним окно понимает, где кончается единица чтения. */
+  sentences?: Sentence[]
+  /**
+   * Токен, на который показывает ведущая строка.
+   *
+   * `null` — ведущая строка молчит, и окном правит указатель: человек водит
+   * по странице так же, как водил бы бумажной линейкой.
+   */
+  focusToken?: number | null
   /** Скорость анимаций интерфейса, мс. */
   quick?: number
 }
@@ -86,9 +109,14 @@ export function ChapterView({
   onStickerClose,
   onStickerSave,
   onStickerDelete,
+  anchors,
+  focusMode = 'off',
+  sentences,
+  focusToken = null,
   quick = 180,
 }: ChapterViewProps) {
   const column = useRef<HTMLDivElement>(null)
+  const focus = useFocusWindow(column, focusMode, sentences ?? EMPTY_SENTENCES, focusToken)
 
   /**
    * Одно нажатие на всю главу.
@@ -121,6 +149,7 @@ export function ChapterView({
       lang="en"
     >
       <MarkLayer container={column} marks={marks} blocks={blocks} mode={mode} />
+      <FocusCurtains window={focus ?? null} />
       <StickerLayer
         container={column}
         stickers={stickers ?? []}
@@ -136,6 +165,7 @@ export function ChapterView({
         <BlockView
           key={item.index}
           item={item}
+          anchors={anchors}
           dropCap={dropCap && position === firstParagraph(blocks)}
           opening={position === 0 || isOpening(blocks, position)}
           images={images}
@@ -166,11 +196,18 @@ function isOpening(blocks: TokenizedBlock[], position: number): boolean {
  */
 const BlockView = memo(function BlockView({
   item,
+  anchors,
   dropCap,
   opening,
   images,
 }: {
   item: TokenizedBlock
+  /*
+   * Массив якорей на всю главу. Мемоизация от него не страдает: он приходит
+   * из ядра один раз на главу и не пересоздаётся на перерисовках, поэтому
+   * сравнение по ссылке остаётся верным.
+   */
+  anchors: Uint16Array | undefined
   dropCap: boolean
   opening: boolean
   images: Map<string, string>
@@ -194,20 +231,20 @@ const BlockView = memo(function BlockView({
           className={`${styles.heading} ${styles[`heading--${level}`]} ${blockClass}`}
           {...blockAttrs}
         >
-          <Tokens tokens={tokens} offset={offset} />
+          <Tokens tokens={tokens} offset={offset} anchors={anchors} />
         </Tag>
       )
     }
     case 'quote':
       return (
         <blockquote className={`${styles.quote} ${blockClass}`} {...blockAttrs}>
-          <Tokens tokens={tokens} offset={offset} />
+          <Tokens tokens={tokens} offset={offset} anchors={anchors} />
         </blockquote>
       )
     case 'listItem':
       return (
         <p className={`${styles.listItem} ${blockClass}`} {...blockAttrs}>
-          <Tokens tokens={tokens} offset={offset} />
+          <Tokens tokens={tokens} offset={offset} anchors={anchors} />
         </p>
       )
     case 'divider':
@@ -231,7 +268,7 @@ const BlockView = memo(function BlockView({
             .join(' ')}
           {...blockAttrs}
         >
-          <Tokens tokens={tokens} offset={offset} />
+          <Tokens tokens={tokens} offset={offset} anchors={anchors} />
         </p>
       )
   }
@@ -244,7 +281,15 @@ const BlockView = memo(function BlockView({
  * препинания идут текстом. Так на абзац приходится не сто элементов, а
  * столько, сколько в нём слов.
  */
-function Tokens({ tokens, offset }: { tokens: Token[]; offset: number }) {
+function Tokens({
+  tokens,
+  offset,
+  anchors,
+}: {
+  tokens: Token[]
+  offset: number
+  anchors: Uint16Array | undefined
+}) {
   const nodes: React.ReactNode[] = []
   let plain = ''
 
@@ -254,9 +299,20 @@ function Tokens({ tokens, offset }: { tokens: Token[]; offset: number }) {
         nodes.push(plain)
         plain = ''
       }
+      const at = offset + index
+      // Ноль означает «якоря нет»: у слова из одной буквы выделять нечего,
+      // и лишний элемент внутри токена ему не нужен.
+      const anchor = anchors && at < anchors.length ? anchors[at]! : 0
       nodes.push(
-        <span key={index} className={styles.token} data-t={offset + index}>
-          {token.text}
+        <span key={index} className={styles.token} data-t={at}>
+          {anchor > 0 && anchor < token.text.length ? (
+            <>
+              <b className={styles.anchor}>{token.text.slice(0, anchor)}</b>
+              {token.text.slice(anchor)}
+            </>
+          ) : (
+            token.text
+          )}
         </span>,
       )
     } else {
@@ -506,8 +562,8 @@ function usePhraseSelection(
       const host = container.current
       if (!host || !host.contains(range.commonAncestorContainer)) return
 
-      const first = tokenAt(range.startContainer, host, 'start')
-      const last = tokenAt(range.endContainer, host, 'end')
+      const first = tokenAt(range.startContainer, range.startOffset, host, 'start')
+      const last = tokenAt(range.endContainer, range.endOffset, host, 'end')
       if (first === null || last === null) return
 
       const start = Math.min(first, last)
@@ -544,8 +600,8 @@ function usePhraseSelection(
         const range = selection.getRangeAt(0)
         const host = container.current
         if (!host || !host.contains(range.commonAncestorContainer)) return
-        const first = tokenAt(range.startContainer, host, 'start')
-        const last = tokenAt(range.endContainer, host, 'end')
+        const first = tokenAt(range.startContainer, range.startOffset, host, 'start')
+        const last = tokenAt(range.endContainer, range.endOffset, host, 'end')
         if (first === null || last === null) return
         const start = Math.min(first, last)
         const end = Math.max(first, last) + 1
@@ -568,30 +624,68 @@ function usePhraseSelection(
   }, [container, onPhrase, onPhraseDraft])
 }
 
-/** Номер токена, внутри которого стоит узел выделения. */
-function tokenAt(node: Node, host: HTMLElement, edge: 'start' | 'end'): number | null {
-  let element: HTMLElement | null =
-    node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as HTMLElement)
+/**
+ * Номер токена, к которому прилипает край выделения.
+ *
+ * Край, попавший внутрь слова, — это само слово. Край, попавший на пробел или
+ * знак препинания между словами, ищется в нужную сторону: у начала выделения
+ * вперёд, у конца — назад.
+ *
+ * Сравнивается именно граница `(container, offset)`, а не её родительский
+ * элемент: родителем пробела оказывается весь абзац, и тогда «ближайшим»
+ * словом становилось первое слово главы, а выделение фразы красило текст от
+ * самого её начала. Список `[data-t]` идёт в порядке документа, поэтому
+ * граница ищется делением пополам, а не перебором всех слов главы.
+ */
+function tokenAt(
+  container: Node,
+  offset: number,
+  host: HTMLElement,
+  edge: 'start' | 'end',
+): number | null {
+  const element: HTMLElement | null =
+    container.nodeType === Node.TEXT_NODE
+      ? container.parentElement
+      : (container as HTMLElement)
 
   const direct = element?.closest<HTMLElement>('[data-t]')
   if (direct) return Number(direct.dataset.t)
 
-  // Край выделения попал между словами — на пробел или знак препинания.
-  // Ищем ближайшее слово в нужную сторону: у начала вперёд, у конца назад.
-  const all = Array.from(host.querySelectorAll<HTMLElement>('[data-t]'))
+  const all = host.querySelectorAll<HTMLElement>('[data-t]')
   if (!all.length) return null
 
-  const target = node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as HTMLElement)
-  if (!target) return null
-
-  const position = all.findIndex(
-    (candidate) =>
-      candidate.compareDocumentPosition(target) & Node.DOCUMENT_POSITION_FOLLOWING,
-  )
-  if (position === -1) {
-    return edge === 'start' ? Number(all[0]!.dataset.t) : Number(all[all.length - 1]!.dataset.t)
+  const point = document.createRange()
+  try {
+    point.setStart(container, offset)
+    point.collapse(true)
+  } catch {
+    return null
   }
-  const pick = edge === 'start' ? all[position] : all[Math.max(position - 1, 0)]
+
+  // Первое слово, начало которого стоит не раньше границы выделения.
+  let low = 0
+  let high = all.length - 1
+  let after = all.length
+  while (low <= high) {
+    const middle = (low + high) >> 1
+    let side: number
+    try {
+      side = point.comparePoint(all[middle]!, 0)
+    } catch {
+      return null
+    }
+    if (side >= 0) {
+      after = middle
+      high = middle - 1
+    } else {
+      low = middle + 1
+    }
+  }
+
+  const pick =
+    edge === 'start'
+      ? all[Math.min(after, all.length - 1)]
+      : all[Math.max(after - 1, 0)]
   return pick ? Number(pick.dataset.t) : null
 }
 

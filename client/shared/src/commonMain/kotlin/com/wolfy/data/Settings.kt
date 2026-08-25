@@ -38,6 +38,28 @@ data class AppSettings(
     val lastSeenVersion: String = "",
     val reduceMotion: Boolean = false,
     /**
+     * Набирать основу слова полужирным.
+     *
+     * Приём беглого чтения: взгляд цепляется за начало слова, а окончание
+     * достраивает сам. Где проходит граница основы — решает ядро, здесь
+     * только «включено или нет».
+     */
+    val emphasizeStems: Boolean = false,
+    /**
+     * Окно чтения: что оставлять светлым, а что притушить.
+     *
+     * Именем, а не флагом: режимов будет больше, а `Boolean` пришлось бы
+     * менять на строку ровно тогда, когда настройки уже лежат на устройствах.
+     * Известные значения — `off`, `sentence`, `paragraph`.
+     */
+    val focusMode: String = FOCUS_OFF,
+    /** Темп ведущей строки, слов в минуту. Ноль — выключена. */
+    val pacerWpm: Int = 0,
+    /** Размер отрезка чтения в словах. Ноль — отрезки выключены. */
+    val segmentWords: Int = 0,
+    /** Разделы газеты, интересные читателю. Пустой список — весь номер. */
+    val newspaperTopics: List<String> = emptyList(),
+    /**
      * Клали ли уже демо-книгу.
      *
      * Проверять «библиотека пуста» вместо этого нельзя: читатель, удаливший
@@ -80,6 +102,29 @@ data class AppSettings(
 
     /** Интенсивность по имени. */
     val reviewIntensity: Intensity get() = Intensity.of(intensity)
+
+    /** Режим окна чтения. Незнакомое имя гасит окно, а не включает что попало. */
+    val focus: FocusMode
+        get() = when (focusMode) {
+            "sentence" -> FocusMode.Sentence
+            "paragraph" -> FocusMode.Paragraph
+            else -> FocusMode.Off
+        }
+}
+
+/** Окно чтения выключено. */
+const val FOCUS_OFF: String = "off"
+
+/**
+ * Что притушить вокруг того места, где читатель сейчас.
+ *
+ * Предложение — единица смысла, абзац — единица мысли. Что из них подходит,
+ * зависит от человека и от книги, поэтому выбор оставлен читателю.
+ */
+enum class FocusMode(val code: String) {
+    Off(FOCUS_OFF),
+    Sentence("sentence"),
+    Paragraph("paragraph"),
 }
 
 /**
@@ -143,6 +188,32 @@ class Settings(private val session: CoreSession) {
 
     fun setIntensity(intensity: Intensity) {
         send(command("setIntensity") { put("intensity", intensity.name) })
+    }
+
+    fun setEmphasizeStems(on: Boolean) {
+        send(command("setEmphasizeStems") { put("on", on) })
+    }
+
+    fun setFocusMode(mode: FocusMode) {
+        send(command("setFocusMode") { put("mode", mode.code) })
+    }
+
+    /** Ноль выключает ведущую строку; пределы ставит ядро. */
+    fun setPacer(wpm: Int) {
+        send(command("setPacer") { put("wpm", wpm) })
+    }
+
+    /** Ноль выключает отрезки чтения. */
+    fun setSegmentWords(words: Int) {
+        send(command("setSegmentWords") { put("words", words) })
+    }
+
+    fun setNewspaperTopics(topics: List<String>) {
+        send(
+            command("setNewspaperTopics") {
+                put("topics", json.encodeToJsonElement(topics))
+            },
+        )
     }
 
     private fun send(command: kotlinx.serialization.json.JsonObject) {

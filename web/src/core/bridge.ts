@@ -27,6 +27,7 @@ import type {
   LibraryState,
   Outcome,
   PreparedChapter,
+  ReadingSegment,
   Reference,
   TokenizedText,
   WordAnalysis,
@@ -155,6 +156,26 @@ export function preparedChapter(id: string, index: number): Promise<PreparedChap
   return core().preparedChapter(id, index)
 }
 
+/**
+ * Якоря полужирной основы для главы: по числу на токен.
+ *
+ * Пустой массив означает «ядро этого не умеет» — читалка просто не выделяет
+ * основы и работает как раньше.
+ */
+export function chapterAnchors(id: string, index: number): Promise<Uint16Array> {
+  return core().chapterAnchors(id, index)
+}
+
+/** Отрезок чтения главы, посчитанный ядром. */
+export function chapterSegment(
+  id: string,
+  index: number,
+  from: number,
+  targetWords: number,
+): Promise<ReadingSegment | null> {
+  return core().chapterSegment(id, index, from, targetWords)
+}
+
 export function inspectWord(word: string, sentence: string): Promise<InspectResult> {
   return core().inspectWord(word, sentence)
 }
@@ -174,6 +195,10 @@ export function bookText(path: string): Promise<string> {
 
 export function bookChapters(path: string): Promise<(string | null)[]> {
   return core().bookChapters(path)
+}
+
+export function rekeyBook(from: string, to: string): Promise<void> {
+  return core().rekeyBook(from, to)
 }
 
 export function closeBook(id: string): Promise<void> {

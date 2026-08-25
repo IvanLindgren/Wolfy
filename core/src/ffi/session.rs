@@ -254,6 +254,26 @@ pub enum Command {
     SetReduceMotion {
         on: bool,
     },
+    /// Набирать основу слова полужирным.
+    SetEmphasizeStems {
+        on: bool,
+    },
+    /// Прожектор: `off`, `sentence`, `paragraph`.
+    SetFocusMode {
+        mode: String,
+    },
+    /// Темп ведущей строки, слов в минуту. Ноль выключает её.
+    SetPacer {
+        wpm: i32,
+    },
+    /// Размер отрезка чтения в словах. Ноль выключает отрезки.
+    SetSegmentWords {
+        words: i32,
+    },
+    /// Разделы газеты, интересные читателю.
+    SetNewspaperTopics {
+        topics: Vec<String>,
+    },
     SetIntensity {
         intensity: String,
     },
@@ -876,6 +896,42 @@ impl Session {
 
             Command::SetReduceMotion { on } => {
                 self.settings.reduce_motion = on;
+                self.mark_settings_dirty();
+                self.done(Outcome::default())
+            }
+
+            Command::SetEmphasizeStems { on } => {
+                self.settings.emphasize_stems = on;
+                self.mark_settings_dirty();
+                self.done(Outcome::default())
+            }
+
+            Command::SetFocusMode { mode } => {
+                // Неизвестное имя гасит прожектор, а не включает что попало:
+                // режим приезжает и с другого устройства, где версия может
+                // быть новее этой.
+                self.settings.focus_mode = match mode.as_str() {
+                    "sentence" | "paragraph" => mode,
+                    _ => crate::settings::FOCUS_OFF.to_string(),
+                };
+                self.mark_settings_dirty();
+                self.done(Outcome::default())
+            }
+
+            Command::SetPacer { wpm } => {
+                self.settings = self.settings.with_pacer(wpm);
+                self.mark_settings_dirty();
+                self.done(Outcome::default())
+            }
+
+            Command::SetSegmentWords { words } => {
+                self.settings = self.settings.with_segment(words);
+                self.mark_settings_dirty();
+                self.done(Outcome::default())
+            }
+
+            Command::SetNewspaperTopics { topics } => {
+                self.settings = self.settings.with_newspaper_topics(topics);
                 self.mark_settings_dirty();
                 self.done(Outcome::default())
             }

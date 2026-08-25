@@ -42,6 +42,7 @@ import type {
   LibraryState,
   Outcome,
   PreparedChapter,
+  ReadingSegment,
   Reference,
   TokenizedText,
   WordAnalysis,
@@ -234,6 +235,33 @@ function current(): WolfySession {
  * crash-атомарна и без неё битый файл молча стал бы пустой библиотекой (P12).
  * Книги (`books/*`) пишутся обычным `writeFile` — они большие.
  */
+/**
+ * Очередь записей на каждый путь состояния.
+ *
+ * `command` — обычный метод comlink, и главный поток вправе позвать две
+ * команды, не дожидаясь первой. Тогда две записи в один и тот же файл идут
+ * внахлёст, а OPFS решает спор по времени закрытия дескриптора: снимок
+ * поколения N мог лечь поверх N+1. Поколения этого не ловят — `ackSaved`
+ * берёт максимум и снял бы пометку с состояния, которого на диске нет.
+ * Поэтому записи в один файл выстраиваются в очередь.
+ */
+const writeQueues = new Map<string, Promise<unknown>>()
+
+function writeSerial(path: string, data: string): Promise<void> {
+  const previous = writeQueues.get(path) ?? Promise.resolve()
+  // Провал прошлой записи не должен обрывать очередь: следующая всё равно
+  // должна попробовать — она несёт более свежее состояние.
+  const next = previous.then(
+    () => writeStateAtomic(path, data),
+    () => writeStateAtomic(path, data),
+  )
+  writeQueues.set(
+    path,
+    next.catch(() => undefined),
+  )
+  return next
+}
+
 async function persist(outcome: Outcome): Promise<void> {
   if (!outcome.changed) return
   const core = current()
@@ -245,19 +273,21 @@ async function persist(outcome: Outcome): Promise<void> {
   const writes: Promise<void>[] = []
   if (outcome.libraryChanged) {
     // Сериализация уже на воркере, не на главном потоке — приемлемо.
+    // Снимок берётся здесь, синхронно после команды: он отвечает ровно
+    // тому поколению, которое подтвердит `ackSaved`.
     const libJson = core.library()
-    writes.push(writeStateAtomic(LIBRARY_PATH, libJson))
+    writes.push(writeSerial(LIBRARY_PATH, libJson))
   }
   if (outcome.settingsChanged) {
     const setJson = core.settings()
-    writes.push(writeStateAtomic(SETTINGS_PATH, setJson))
+    writes.push(writeSerial(SETTINGS_PATH, setJson))
   }
   if (outcome.practiceChanged) {
     const maybePractice = (core as unknown as { practice?: () => string }).practice
     if (typeof maybePractice === 'function') {
       try {
         const pracJson = maybePractice.call(core)
-        writes.push(writeStateAtomic(PRACTICE_PATH, pracJson))
+        writes.push(writeSerial(PRACTICE_PATH, pracJson))
       } catch {}
     }
   }
@@ -612,6 +642,46 @@ const api = {
     }
   },
 
+  /**
+   * Якоря полужирной основы: по числу на токен главы.
+   *
+   * Считается ядром на всю главу разом и возвращается типизированным
+   * массивом: на десять тысяч токенов JSON весил бы под сорок килобайт
+   * текста, который ещё надо разобрать.
+   *
+   * Ядро без этой функции (старый wasm рядом со свежей сборкой) отвечает
+   * пустым массивом, а не падением: выделение — украшение чтения, и его
+   * отсутствие не должно закрывать книгу.
+   */
+  async chapterAnchors(id: string, index: number): Promise<Uint16Array> {
+    const book = opened.get(id)
+    if (!book) throw new Error('книга не открыта')
+    const maybe = (book as unknown as { chapterAnchors?: (i: number) => Uint16Array })
+    if (typeof maybe.chapterAnchors !== 'function') return new Uint16Array()
+    return maybe.chapterAnchors(index)
+  },
+
+  /**
+   * Отрезок чтения: докуда честно читать за один подход.
+   *
+   * Границу выбирает ядро — она обязана совпадать с телефоном, иначе одна и
+   * та же закладка даст на двух устройствах разные отрезки.
+   */
+  async chapterSegment(
+    id: string,
+    index: number,
+    from: number,
+    targetWords: number,
+  ): Promise<ReadingSegment | null> {
+    const book = opened.get(id)
+    if (!book) throw new Error('книга не открыта')
+    const maybe = (book as unknown as {
+      chapterSegment?: (i: number, from: number, target: number) => string
+    })
+    if (typeof maybe.chapterSegment !== 'function') return null
+    return JSON.parse(maybe.chapterSegment(index, from, targetWords)) as ReadingSegment
+  },
+
   /** Иллюстрация из книги — отдаётся байтами, без копии. */
   async resource(id: string, path: string): Promise<Uint8Array | null> {
     const book = opened.get(id)
@@ -633,6 +703,24 @@ const api = {
   async bookText(path: string): Promise<string> {
     const bytes = await readBook(path)
     return bytes ? new TextDecoder().decode(bytes) : ''
+  },
+
+  /**
+   * Переносит уже разобранную книгу под другой номер.
+   *
+   * Нужно из-за §5: файл кладётся под случайным номером, а ядро заменяет его
+   * на канонический из `source_key`. Без переноса разобранная книга осталась
+   * бы висеть в памяти под старым ключом до конца жизни воркера, а читалка
+   * разбирала бы тот же файл заново.
+   */
+  async rekeyBook(from: string, to: string): Promise<void> {
+    if (from === to) return
+    const book = opened.get(from)
+    if (!book) return
+    opened.delete(from)
+    // Под целевым номером что-то уже могло быть открыто — отпускаем.
+    opened.get(to)?.free()
+    opened.set(to, book)
   },
 
   /** Закрывает книгу и отпускает её память. */

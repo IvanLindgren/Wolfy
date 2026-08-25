@@ -47,6 +47,10 @@ fun DropCapParagraph(
     saved: Set<String> = emptySet(),
     savedLemmaOf: (Token) -> String = { it.text.lowercase() },
     selected: Token? = null,
+    /** Докуда набирать каждое слово полужирным — по числу на токен абзаца. */
+    anchors: List<Int> = emptyList(),
+    /** Притушить абзац целиком: читатель сейчас не здесь. */
+    dimmed: Boolean = false,
     onWordTap: (Token) -> Unit = {},
 ) {
     val colors = WolfyTheme.colors
@@ -70,6 +74,8 @@ fun DropCapParagraph(
             saved = saved,
             savedLemmaOf = savedLemmaOf,
             selected = selected,
+            anchors = anchors,
+            dimmed = dimmed,
             onWordTap = onWordTap,
         )
         return
@@ -110,8 +116,10 @@ fun DropCapParagraph(
 
         // Смещения считаются от начала абзаца: буквица — один символ, поэтому
         // граница в исходном тексте на единицу больше.
-        val besideParsed = parsed.slice(1, splitAt + 1)
-        val belowParsed = parsed.slice(splitAt + 1, fullText.length)
+        val beside = parsed.slice(1, splitAt + 1, anchors)
+        val below = parsed.slice(splitAt + 1, fullText.length, anchors)
+        val besideParsed = beside.parsed
+        val belowParsed = below.parsed
 
         // Тап по обрезанному куску слова должен открывать карточку целого
         // слова: «he» после буквицы — это по-прежнему «the», и разбирать надо
@@ -138,6 +146,8 @@ fun DropCapParagraph(
                             saved = saved,
                             savedLemmaOf = savedLemmaOf,
                             selected = selected,
+                            anchors = beside.anchors,
+                            dimmed = dimmed,
                             onWordTap = tapWhole,
                         )
                     }
@@ -149,6 +159,8 @@ fun DropCapParagraph(
                         saved = saved,
                         savedLemmaOf = savedLemmaOf,
                         selected = selected,
+                        anchors = below.anchors,
+                        dimmed = dimmed,
                         onWordTap = tapWhole,
                     )
                 }
@@ -170,27 +182,39 @@ fun DropCapParagraph(
  * пересчитываются относительно начала куска только для отрисовки, а исходные
  * границы едут в `Token.start`/`Token.end` как есть.
  */
-private fun ParsedText.slice(from: Int, to: Int): ParsedText {
-    if (from >= to) return ParsedText()
+private data class SlicedText(val parsed: ParsedText, val anchors: List<Int>)
 
-    val inside = tokens.mapNotNull { token ->
+private fun ParsedText.slice(from: Int, to: Int, anchors: List<Int>): SlicedText {
+    if (from >= to) return SlicedText(ParsedText(), emptyList())
+
+    val inside = mutableListOf<Token>()
+    val insideAnchors = mutableListOf<Int>()
+
+    tokens.forEachIndexed { index, token ->
         val start = maxOf(token.start, from)
         val end = minOf(token.end, to)
-        if (start >= end) return@mapNotNull null
+        if (start >= end) return@forEachIndexed
 
         if (start == token.start && end == token.end) {
-            token
+            inside.add(token)
+            insideAnchors.add(anchors.getOrElse(index) { 0 })
         } else {
             // Токен пересекает границу — обрезаем его, а не выбрасываем.
             // Именно здесь живёт буквица: слово «The» делится на литеру «T» и
             // остаток «he», и без обрезки этот остаток пропал бы со страницы.
-            token.copy(
-                start = start,
-                end = end,
-                text = token.text.substring(start - token.start, end - token.start),
+            inside.add(
+                token.copy(
+                    start = start,
+                    end = end,
+                    text = token.text.substring(start - token.start, end - token.start),
+                ),
             )
+            // У обрезанного слова якоря нет: он считался от начала целого
+            // слова, а начала здесь уже нет — буквица его унесла. Полужирный
+            // хвост без своего начала выглядел бы опечаткой.
+            insideAnchors.add(0)
         }
     }
-    return ParsedText(tokens = inside, sentences = sentences)
+    return SlicedText(ParsedText(tokens = inside, sentences = sentences), insideAnchors)
 }
 

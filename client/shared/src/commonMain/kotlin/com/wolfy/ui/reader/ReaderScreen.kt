@@ -46,7 +46,10 @@ import com.wolfy.ui.card.WordCardSheet
 import com.wolfy.ui.nav.shortcuts
 import com.wolfy.ui.nav.LocalKeyboard
 import androidx.compose.ui.backhandler.BackHandler
+import androidx.compose.runtime.derivedStateOf
+import com.wolfy.data.FocusMode
 import com.wolfy.theme.ReadingTheme
+import kotlinx.coroutines.delay
 import com.wolfy.theme.WolfyTheme
 import com.wolfy.widgets.ChapterHeading
 import com.wolfy.widgets.DropCapParagraph
@@ -88,6 +91,14 @@ fun ReaderScreen(
     onThemeChange: (ReadingTheme) -> Unit,
     onFontScaleChange: (Float) -> Unit,
     onLineScaleChange: (Float) -> Unit,
+    /*
+     * Помощь вниманию. Всё выключено по умолчанию и приезжает из настроек,
+     * общих с браузером: включив окно на телефоне, читатель ждёт его и там.
+     */
+    focusMode: FocusMode = FocusMode.Off,
+    pacerWpm: Int = 0,
+    onNextSegment: (Int) -> Unit = {},
+    onStopSegments: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val colors = WolfyTheme.colors
@@ -99,6 +110,47 @@ fun ReaderScreen(
     val scroll = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val cardOpen = state.card != null
+
+    /*
+     * Ведущая строка.
+     *
+     * Едет, только пока читатель этого хочет: пауза — состояние по умолчанию,
+     * и открытая карточка слова её останавливает. Темп здесь не про скорость,
+     * а про то, что решение «читать дальше» больше не нужно принимать на
+     * каждой строке.
+     */
+    var pacing by remember { mutableStateOf(false) }
+    var paceSentence by remember(state.chapterIndex) { mutableStateOf(0) }
+    LaunchedEffect(state.chapterIndex, pacerWpm) { pacing = false }
+    LaunchedEffect(cardOpen) { if (cardOpen) pacing = false }
+
+    // Активный блок — первый видимый: на телефоне указателя нет, и водить
+    // окно нечем, кроме самой прокрутки.
+    val activeBlock by remember { derivedStateOf { scroll.firstVisibleItemIndex } }
+    val activeParsed = state.blocks.getOrNull(activeBlock)?.parsed
+
+    LaunchedEffect(pacing, pacerWpm, activeBlock, paceSentence, activeParsed) {
+        if (!pacing || pacerWpm <= 0) return@LaunchedEffect
+        val sentences = activeParsed?.sentences.orEmpty()
+        val sentence = sentences.getOrNull(paceSentence)
+        if (sentence == null) {
+            paceSentence = 0
+            scroll.animateScrollToItem((activeBlock + 1).coerceAtMost(state.blocks.size))
+            return@LaunchedEffect
+        }
+        // Время предложения — по числу слов в нём: «Yes.» и придаточное на
+        // сорок слов требуют разного времени, и равный шаг сделал бы одно
+        // ожиданием, а другое гонкой. Полсекунды снизу — чтобы окно на
+        // коротком предложении не моргало быстрее, чем глаз его замечает.
+        val words = sentence.text.split(" ").count { it.isNotBlank() }.coerceAtLeast(1)
+        delay(maxOf(500L, (words.toLong() * 60_000L) / pacerWpm))
+        if (paceSentence + 1 < sentences.size) {
+            paceSentence += 1
+        } else {
+            paceSentence = 0
+            scroll.animateScrollToItem((activeBlock + 1).coerceAtMost(state.blocks.size))
+        }
+    }
 
     // Уход назад разбирает то, что открыто, по одному слою за раз: сначала
     // оглавление, потом карточка, и только потом сама книга. Закрывать всё
@@ -184,12 +236,25 @@ fun ReaderScreen(
                 )
             }
 
+            AttentionBar(
+                state = state,
+                activeBlock = activeBlock,
+                pacing = pacing,
+                pacerWpm = pacerWpm,
+                onPace = { pacing = it },
+                onNextSegment = onNextSegment,
+                onStopSegments = onStopSegments,
+            )
+
             when {
                 state.error != null -> Message(state.error)
                 state.loading -> Message("Книга открывается…")
                 else -> ChapterBody(
                     state = state,
                     scroll = scroll,
+                    focusMode = focusMode,
+                    activeBlock = activeBlock,
+                    activeSentence = if (pacing) paceSentence else 0,
                     onWordTap = onWordTap,
                     onPreviousChapter = onPreviousChapter,
                     onNextChapter = onNextChapter,
@@ -363,6 +428,9 @@ private fun SettingStepper(
 private fun ChapterBody(
     state: ReaderState,
     scroll: LazyListState,
+    focusMode: FocusMode,
+    activeBlock: Int,
+    activeSentence: Int,
     onWordTap: (Int, com.wolfy.ffi.Token, com.wolfy.ffi.ParsedText) -> Unit,
     onPreviousChapter: () -> Unit,
     onNextChapter: () -> Unit,
@@ -420,6 +488,15 @@ private fun ChapterBody(
                 block = block,
                 withDropCap = index == dropCapAt,
                 savedLemmas = state.savedLemmas,
+                // Окно чтения: светлым остаётся только то место, где читатель
+                // сейчас. Абзац целиком или одно предложение в нём — решает он.
+                dimmed = focusMode != FocusMode.Off && index != activeBlock,
+                bright = if (focusMode == FocusMode.Sentence && index == activeBlock) {
+                    block.parsed?.sentences?.getOrNull(activeSentence)
+                        ?.let { it.start until it.end }
+                } else {
+                    null
+                },
                 // Подсвечивается только тот блок, в котором нашлось слово.
                 // Иначе абзац с тем же смещением подсветит своё слово заодно —
                 // смещения у блоков считаются каждое от своего начала.
@@ -445,6 +522,8 @@ private fun BlockView(
     block: ReaderBlock,
     withDropCap: Boolean,
     savedLemmas: Set<String>,
+    dimmed: Boolean,
+    bright: IntRange?,
     selected: com.wolfy.ffi.Token?,
     onWordTap: (Int, com.wolfy.ffi.Token, com.wolfy.ffi.ParsedText) -> Unit,
 ) {
@@ -460,6 +539,8 @@ private fun BlockView(
                     saved = savedLemmas,
                     savedLemmaOf = { it.text.lowercase() },
                     selected = selected,
+                    anchors = block.anchors,
+                    dimmed = dimmed,
                     onWordTap = { onWordTap(index, it, parsed) },
                 )
             } else {
@@ -468,6 +549,9 @@ private fun BlockView(
                     saved = savedLemmas,
                     savedLemmaOf = { it.text.lowercase() },
                     selected = selected,
+                    anchors = block.anchors,
+                    dimmed = dimmed,
+                    bright = bright,
                     onWordTap = { onWordTap(index, it, parsed) },
                 )
             }
@@ -482,6 +566,8 @@ private fun BlockView(
                     parsed = parsed,
                     saved = savedLemmas,
                     selected = selected,
+                    anchors = block.anchors,
+                    dimmed = dimmed,
                     onWordTap = { onWordTap(index, it, parsed) },
                 )
             }

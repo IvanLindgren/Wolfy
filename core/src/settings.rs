@@ -26,6 +26,20 @@ const FONT_SCALE: (f32, f32) = (0.8, 1.6);
 /// Пределы множителя межстрочного интервала.
 const LINE_SCALE: (f32, f32) = (0.9, 1.5);
 
+/// Пределы темпа ведущей строки, слов в минуту.
+///
+/// Ниже сотни ведущая строка тормозит даже медленного читателя и начинает
+/// раздражать; выше четырёхсот она обгоняет понимание и превращается в
+/// мелькание. Ноль — «выключено» и в пределы не входит.
+const PACER_WPM: (i32, i32) = (100, 400);
+
+/// Пределы отрезка чтения в словах.
+///
+/// Сорок слов — примерно абзац, две тысячи — минут десять чтения. Меньше
+/// сорока подход перестаёт быть подходом, больше двух тысяч — перестаёт быть
+/// обозримым, а обозримость и есть весь смысл.
+const SEGMENT_WORDS: (i32, i32) = (40, 2000);
+
 /// Настройки приложения.
 ///
 /// Имена полей и их запись в JSON совпадают с тем, что писал клиент на
@@ -56,6 +70,32 @@ pub struct AppSettings {
     /// Свести согласованные анимации к мгновенным переходам.
     #[serde(default)]
     pub reduce_motion: bool,
+    /// Набирать основу слова полужирным.
+    ///
+    /// Приём беглого чтения: взгляд цепляется за начало слова, а окончание
+    /// достраивает сам. Где именно проходит граница — дело
+    /// [`crate::reading::emphasis`], здесь только «включено или нет».
+    #[serde(default)]
+    pub emphasize_stems: bool,
+    /// Прожектор: что оставлять светлым, а что притушить.
+    ///
+    /// Именем, а не номером, по той же причине, что тема: набор режимов ещё
+    /// будет меняться, а у читателя не должен от этого поехать выбор.
+    /// Известные значения — `off`, `sentence`, `paragraph`.
+    #[serde(default = "default_focus")]
+    pub focus_mode: String,
+    /// Темп ведущей строки, слов в минуту. Ноль — выключена.
+    #[serde(default)]
+    pub pacer_wpm: i32,
+    /// Размер отрезка чтения в словах. Ноль — отрезки выключены.
+    #[serde(default)]
+    pub segment_words: i32,
+    /// Разделы газеты, которые читателю интересны.
+    ///
+    /// Пустой список — весь номер: читатель, который ничего не выбирал,
+    /// должен увидеть газету, а не приглашение сперва её настроить.
+    #[serde(default)]
+    pub newspaper_topics: Vec<String>,
     /// Клали ли уже демо-книгу.
     ///
     /// Проверять «библиотека пуста» вместо этого нельзя: читатель, удаливший
@@ -105,6 +145,15 @@ fn default_theme() -> String {
     DEFAULT_THEME.to_string()
 }
 
+/// Прожектор по умолчанию выключен: приём помогает не всем, а навязанный
+/// полумрак мешает всем остальным.
+fn default_focus() -> String {
+    FOCUS_OFF.to_string()
+}
+
+/// Прожектор выключен.
+pub const FOCUS_OFF: &str = "off";
+
 fn default_intensity() -> String {
     Intensity::Normal.name().to_string()
 }
@@ -122,6 +171,11 @@ impl Default for AppSettings {
             onboarding_seen: false,
             last_seen_version: String::new(),
             reduce_motion: false,
+            emphasize_stems: false,
+            focus_mode: default_focus(),
+            pacer_wpm: 0,
+            segment_words: 0,
+            newspaper_topics: Vec::new(),
             demo_added: false,
             intensity: default_intensity(),
             trained_on: 0,
@@ -197,6 +251,54 @@ impl AppSettings {
     pub fn with_line_scale(&self, scale: f32) -> AppSettings {
         AppSettings {
             line_scale: scale.clamp(LINE_SCALE.0, LINE_SCALE.1),
+            ..self.clone()
+        }
+    }
+
+    /// Темп ведущей строки в допустимых пределах.
+    ///
+    /// Ноль проходит как есть — это «выключено», а не «очень медленно».
+    pub fn with_pacer(&self, wpm: i32) -> AppSettings {
+        AppSettings {
+            pacer_wpm: if wpm <= 0 {
+                0
+            } else {
+                wpm.clamp(PACER_WPM.0, PACER_WPM.1)
+            },
+            ..self.clone()
+        }
+    }
+
+    /// Отрезок чтения в допустимых пределах. Ноль — выключено.
+    pub fn with_segment(&self, words: i32) -> AppSettings {
+        AppSettings {
+            segment_words: if words <= 0 {
+                0
+            } else {
+                words.clamp(SEGMENT_WORDS.0, SEGMENT_WORDS.1)
+            },
+            ..self.clone()
+        }
+    }
+
+    /// Разделы газеты: без пустых, без повторов и не больше, чем их бывает.
+    ///
+    /// Чистка здесь, а не в интерфейсе: список приезжает с другого устройства
+    /// и через сеть, и доверять ему на слово нельзя.
+    pub fn with_newspaper_topics(&self, topics: Vec<String>) -> AppSettings {
+        let mut clean: Vec<String> = Vec::new();
+        for topic in topics {
+            let code = topic.trim().to_lowercase();
+            if code.is_empty() || code.len() > 32 || clean.contains(&code) {
+                continue;
+            }
+            clean.push(code);
+            if clean.len() >= 16 {
+                break;
+            }
+        }
+        AppSettings {
+            newspaper_topics: clean,
             ..self.clone()
         }
     }
@@ -386,5 +488,87 @@ mod tests {
         assert_eq!(settings.theme, "Oled");
         assert_eq!(settings.font_scale, 1.0);
         assert_eq!(settings.review_intensity(), Intensity::Normal);
+    }
+}
+
+#[cfg(test)]
+mod reading_tests {
+    use super::*;
+
+    // Настройки уже лежат на устройствах. Новое поле обязано читаться из
+    // старого файла, а не превращать его в «настроек нет».
+    #[test]
+    fn старый_файл_читается_с_умолчаниями() {
+        let old = r#"{"theme":"Sepia","fontScale":1.2,"lineScale":1.1,
+                      "onboardingSeen":true,"reduceMotion":false,
+                      "demoAdded":true,"intensity":"normal"}"#;
+        let settings: AppSettings = serde_json::from_str(old).expect("старый файл");
+
+        assert_eq!(settings.theme, "Sepia");
+        assert!(!settings.emphasize_stems);
+        assert_eq!(settings.focus_mode, FOCUS_OFF);
+        assert_eq!(settings.pacer_wpm, 0);
+        assert_eq!(settings.segment_words, 0);
+        assert!(settings.newspaper_topics.is_empty());
+    }
+
+    #[test]
+    fn темп_держится_в_пределах_и_выключается_нулём() {
+        let settings = AppSettings::default();
+        assert_eq!(settings.with_pacer(0).pacer_wpm, 0);
+        assert_eq!(settings.with_pacer(-5).pacer_wpm, 0);
+        assert_eq!(settings.with_pacer(10).pacer_wpm, 100);
+        assert_eq!(settings.with_pacer(10_000).pacer_wpm, 400);
+        assert_eq!(settings.with_pacer(220).pacer_wpm, 220);
+    }
+
+    #[test]
+    fn отрезок_держится_в_пределах_и_выключается_нулём() {
+        let settings = AppSettings::default();
+        assert_eq!(settings.with_segment(0).segment_words, 0);
+        assert_eq!(settings.with_segment(5).segment_words, 40);
+        assert_eq!(settings.with_segment(99_999).segment_words, 2000);
+        assert_eq!(settings.with_segment(300).segment_words, 300);
+    }
+
+    #[test]
+    fn разделы_газеты_чистятся_от_мусора() {
+        let settings = AppSettings::default().with_newspaper_topics(vec![
+            " World ".to_string(),
+            "world".to_string(),
+            String::new(),
+            "SPORT".to_string(),
+            "x".repeat(64),
+        ]);
+        assert_eq!(settings.newspaper_topics, vec!["world", "sport"]);
+    }
+
+    #[test]
+    fn разделов_газеты_не_больше_шестнадцати() {
+        let many: Vec<String> = (0..40).map(|at| format!("topic{at}")).collect();
+        let settings = AppSettings::default().with_newspaper_topics(many);
+        assert_eq!(settings.newspaper_topics.len(), 16);
+    }
+
+    // Настройки чтения — местное дело каждого читателя, но не каждого
+    // устройства: включив жирную основу на телефоне, он ждёт её и в браузере.
+    #[test]
+    fn настройки_чтения_приезжают_с_другого_устройства() {
+        let here = AppSettings::default();
+        let there = AppSettings {
+            emphasize_stems: true,
+            focus_mode: "sentence".to_string(),
+            pacer_wpm: 220,
+            segment_words: 300,
+            newspaper_topics: vec!["world".to_string()],
+            ..AppSettings::default()
+        };
+
+        let merged = here.replaced_by(&there);
+        assert!(merged.emphasize_stems);
+        assert_eq!(merged.focus_mode, "sentence");
+        assert_eq!(merged.pacer_wpm, 220);
+        assert_eq!(merged.segment_words, 300);
+        assert_eq!(merged.newspaper_topics, vec!["world"]);
     }
 }

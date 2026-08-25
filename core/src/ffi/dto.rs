@@ -514,6 +514,29 @@ pub struct PreparedChapterDto {
     pub sentences: Vec<CompactSentenceDto>,
 }
 
+/// Отрезок чтения: докуда читать за один подход.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SegmentDto {
+    pub start: usize,
+    pub end: usize,
+    pub words: usize,
+    pub sentences: usize,
+    pub last: bool,
+}
+
+impl From<crate::reading::Segment> for SegmentDto {
+    fn from(segment: crate::reading::Segment) -> Self {
+        SegmentDto {
+            start: segment.start,
+            end: segment.end,
+            words: segment.words,
+            sentences: segment.sentences,
+            last: segment.last,
+        }
+    }
+}
+
 /// Слово в графе предложения.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

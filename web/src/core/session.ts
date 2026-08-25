@@ -26,6 +26,7 @@ import type {
   Command,
   DeckStatus,
   Drill,
+  FocusMode,
   LibraryBook,
   LibraryState,
   Outcome,
@@ -48,6 +49,11 @@ const DEFAULT_SETTINGS: AppSettings = {
   onboardingSeen: false,
   lastSeenVersion: '',
   reduceMotion: false,
+  emphasizeStems: false,
+  focusMode: 'off',
+  pacerWpm: 0,
+  segmentWords: 0,
+  newspaperTopics: [],
   demoAdded: false,
   intensity: 'Normal',
   trainedOn: 0,
@@ -342,6 +348,28 @@ export const session = {
 
   async setReduceMotion(on: boolean): Promise<void> {
     await run({ op: 'setReduceMotion', on })
+  },
+
+  async setEmphasizeStems(on: boolean): Promise<void> {
+    await run({ op: 'setEmphasizeStems', on })
+  },
+
+  async setFocusMode(mode: FocusMode): Promise<void> {
+    await run({ op: 'setFocusMode', mode })
+  },
+
+  /** Ноль выключает ведущую строку; остальное ядро прижимает к пределам. */
+  async setPacer(wpm: number): Promise<void> {
+    await run({ op: 'setPacer', wpm })
+  },
+
+  /** Ноль выключает отрезки чтения. */
+  async setSegmentWords(words: number): Promise<void> {
+    await run({ op: 'setSegmentWords', words })
+  },
+
+  async setNewspaperTopics(topics: string[]): Promise<void> {
+    await run({ op: 'setNewspaperTopics', topics })
   },
 
   async setIntensity(intensity: string): Promise<void> {

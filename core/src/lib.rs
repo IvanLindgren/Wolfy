@@ -32,6 +32,7 @@ pub mod library;
 pub mod parser;
 pub mod practice;
 pub mod prepared;
+pub mod reading;
 pub mod settings;
 pub mod srs;
 pub mod tagger;

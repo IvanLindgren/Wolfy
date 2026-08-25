@@ -857,3 +857,143 @@
   margin-left: auto;
   color: var(--ink-muted);
 }
+
+/* --- Окно чтения ------------------------------------------------------------
+ *
+ * Шторки цвета бумаги поверх строк. `z-index: 1` — выше подсветки слов, но
+ * ниже стикеров: притушенное выделение остаётся притушенным, а листок на поле
+ * остаётся видимым, иначе до него нельзя дотянуться.
+ *
+ * Края растушёваны: резкая граница сама притягивает взгляд и работает против
+ * того, ради чего окно заведено.
+ */
+.focus {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.focus__curtain {
+  position: absolute;
+  left: -1rem;
+  right: -1rem;
+  background: var(--paper);
+  opacity: 0.72;
+  transition: top var(--quick, 180ms) ease, height var(--quick, 180ms) ease;
+  -webkit-mask-image: linear-gradient(to top, transparent 0, #000 1.6rem);
+  mask-image: linear-gradient(to top, transparent 0, #000 1.6rem);
+}
+
+.focus__curtain[data-side='bottom'] {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 1.6rem);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 1.6rem);
+}
+
+/*
+ * Тише — значит меньше движения, а не меньше помощи: при выключенном
+ * движении шторка встаёт на место сразу.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .focus__curtain {
+    transition: none;
+  }
+}
+
+/* --- Полужирная основа ------------------------------------------------------
+ *
+ * Отдельным элементом внутри слова, а не подменой шрифта всего токена:
+ * жирнее должно стать только начало. Насыщенность взята умеренная — 620, а
+ * не 700: на странице, где выделено каждое слово, разница в двести единиц
+ * превращает текст в сплошную черноту, и якорь перестаёт быть якорем.
+ */
+.anchor {
+  font-weight: 620;
+}
+
+/* --- Полоса помощи вниманию -------------------------------------------------
+ *
+ * Одна строка под шапкой читалки. Панель управления вниманием, которая сама
+ * требует внимания, противоречит себе, поэтому здесь нет ни рамок, ни
+ * заливок — только линейка прогресса и одна кнопка.
+ */
+.attention {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.35rem clamp(0.75rem, 3vw, 1.5rem);
+  border-bottom: 1px solid var(--rule);
+  background: var(--surface);
+  font-family: var(--sans), 'Inter Fallback';
+  font-size: 0.78rem;
+  color: var(--ink-muted);
+}
+
+.attention__label {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.attention__track {
+  flex: 1;
+  min-width: 3rem;
+  max-width: 22rem;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--surface-sunken);
+  overflow: hidden;
+}
+
+.attention__fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width var(--calm, 280ms) ease;
+}
+
+.attention__count {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.attention__done {
+  flex: 1;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.attention__action,
+.attention__quiet,
+.attention__pace {
+  padding: 0.2rem 0.6rem;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: var(--paper);
+  color: inherit;
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color var(--quick, 180ms) ease, color var(--quick, 180ms) ease;
+}
+
+.attention__action {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--rule));
+  color: var(--accent);
+}
+
+.attention__pace {
+  margin-left: auto;
+}
+
+.attention__pace[data-active='true'] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--paper));
+  color: var(--accent);
+}
+
+.attention__action:hover,
+.attention__quiet:hover,
+.attention__pace:hover {
+  border-color: var(--ink-muted);
+  color: var(--ink);
+}

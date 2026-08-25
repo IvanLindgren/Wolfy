@@ -185,6 +185,39 @@ impl WolfyBook {
         json(&prepared)
     }
 
+    /// Якоря полужирного выделения: по числу на токен подготовленной главы.
+    ///
+    /// `Uint16Array` вместо JSON нарочно: на главу в десять тысяч токенов
+    /// массив чисел в JSON весит под сорок килобайт текста, который ещё надо
+    /// разобрать, а типизированный массив переезжает как есть.
+    #[wasm_bindgen(js_name = chapterAnchors)]
+    pub fn chapter_anchors(&mut self, index: usize) -> Result<Vec<u16>, JsError> {
+        let chapter = self.inner.chapter(index).map_err(described)?;
+        Ok(crate::reading::text_anchors(
+            crate::lexicon::Lexicon::embedded(),
+            &chapter.plain_text(),
+        ))
+    }
+
+    /// Отрезок чтения: докуда честно читать за один подход.
+    ///
+    /// Конец подтягивается к границе предложения, поэтому слов в отрезке
+    /// бывает больше заказанного — обрыв на полуфразе хуже перебора.
+    #[wasm_bindgen(js_name = chapterSegment)]
+    pub fn chapter_segment(
+        &mut self,
+        index: usize,
+        from: usize,
+        target_words: usize,
+    ) -> Result<String, JsError> {
+        let chapter = self.inner.chapter(index).map_err(described)?;
+        let text = chapter.plain_text();
+        let tokens = crate::tokenizer::tokenize(&text);
+        let sentences = crate::tokenizer::split(&tokens);
+        let segment = crate::reading::segment(&tokens, &sentences, from, target_words);
+        json(&crate::ffi::dto::SegmentDto::from(segment))
+    }
+
     /// Байты иллюстрации по пути из блока `image`.
     pub fn resource(&mut self, path: &str) -> Result<Vec<u8>, JsError> {
         self.inner.resource(path).map_err(described)

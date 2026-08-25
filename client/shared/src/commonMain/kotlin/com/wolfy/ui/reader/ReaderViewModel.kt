@@ -12,6 +12,8 @@ import com.wolfy.data.dictionary.DictionaryManager
 import com.wolfy.ffi.Chapter
 import com.wolfy.ffi.CoreException
 import com.wolfy.ffi.ParsedText
+import com.wolfy.ffi.ReadingSegment
+import com.wolfy.platform.refreshBookNudge
 import com.wolfy.ffi.PreparedChapter
 import com.wolfy.ffi.Sentence
 import com.wolfy.ffi.Token
@@ -56,6 +58,14 @@ data class ReaderState(
     val blocks: List<ReaderBlock> = emptyList(),
     /** Начальные формы слов, уже сохранённых в колоду этой книги. */
     val savedLemmas: Set<String> = emptySet(),
+    /**
+     * Отрезок чтения: докуда читаем сейчас.
+     *
+     * Границу считает ядро — она обязана совпадать с браузером, иначе одна и
+     * та же закладка дала бы на двух устройствах разные отрезки. `null` —
+     * отрезки выключены или ядро их не умеет.
+     */
+    val segment: ReadingSegment? = null,
     val card: WordCardState? = null,
     /**
      * Номер блока, в котором стоит открытое слово.
@@ -94,6 +104,26 @@ data class ReaderBlock(
     val parsed: ParsedText?,
     val imagePath: String?,
     val alt: String?,
+    /**
+     * Докуда набирать слово полужирным: по числу на токен блока.
+     *
+     * Список, а не `IntArray`: массив сравнивается по ссылке, и блок с теми
+     * же якорями считался бы изменившимся при каждой перерисовке — а `@Immutable`
+     * обещает Compose ровно обратное.
+     *
+     * Пустой список — выделение выключено или ядро его не умеет.
+     */
+    val anchors: List<Int> = emptyList(),
+    /**
+     * Номер первого токена блока в нумерации всей главы.
+     *
+     * Токены внутри блока пересчитаны от его начала — так тап по слову
+     * попадает в свой блок. Но отрезок чтения считает ядро по главе целиком,
+     * и ему нужен именно сквозной номер.
+     *
+     * `-1` — блок без текста: у разделителя и картинки токенов нет.
+     */
+    val firstToken: Int = -1,
 )
 
 /**
@@ -196,6 +226,78 @@ class ReaderViewModel(
         }
     }
 
+    /*
+     * Выделять ли основу слова.
+     *
+     * Флагом, а не чтением настроек изнутри: настройки — дело оболочки, а
+     * читалке нужно знать только «считать якоря или нет». Пересчёт идёт по
+     * уже прочитанной главе, поэтому переключение не перечитывает книгу.
+     */
+    private var emphasizeStems = false
+
+    /*
+     * Размер отрезка чтения в словах. Ноль — отрезки выключены.
+     *
+     * Хранится здесь, а не читается из настроек: читалке нужно знать только
+     * «какой длины подход», а откуда это число взялось — дело оболочки.
+     */
+    private var segmentWords = 0
+
+    /**
+     * Задаёт длину отрезка и пересчитывает текущий.
+     *
+     * Ноль убирает отрезок совсем: у главы остаётся только её собственный
+     * конец, как было до всякой помощи вниманию.
+     */
+    fun setSegmentWords(words: Int) {
+        if (segmentWords == words) return
+        segmentWords = words
+        if (words <= 0) {
+            _state.update { it.copy(segment = null) }
+        } else {
+            planSegment(from = _state.value.segment?.start ?: 0)
+        }
+    }
+
+    /**
+     * Просит ядро назначить отрезок, начиная с токена `from`.
+     *
+     * Пересчёт только при смене главы, при смене длины и по кнопке «ещё
+     * один»: отрезок, который сам ползёт вслед за читателем, — это снова
+     * книга без видимого конца.
+     */
+    fun planSegment(from: Int) {
+        val handle = handle ?: return
+        if (segmentWords <= 0) return
+        val index = _state.value.chapterIndex
+        viewModelScope.launch {
+            val found = withContext(Dispatchers.Default) {
+                runCatching { core.chapterSegment(handle, index, from, segmentWords) }.getOrNull()
+            }
+            // Отрезок мерили по главе `index`; если читатель успел уйти в
+            // другую, он описывает уже не тот текст.
+            _state.update { if (it.chapterIndex == index) it.copy(segment = found) else it }
+        }
+    }
+
+    fun setEmphasizeStems(on: Boolean) {
+        if (emphasizeStems == on) return
+        emphasizeStems = on
+        val blocks = _state.value.blocks
+        if (blocks.isEmpty()) return
+        val index = _state.value.chapterIndex
+        viewModelScope.launch {
+            val next = withContext(Dispatchers.Default) { blocks.withAnchors(core, on) }
+            // Абзацы взяты из главы `index`, а якоря считались по одному
+            // вызову ядра на абзац — за это время можно успеть перелистнуть.
+            // Записать их обратно вслепую значит показать текст прошлой главы
+            // под заголовком нынешней.
+            _state.update {
+                if (it.chapterIndex == index && emphasizeStems == on) it.copy(blocks = next) else it
+            }
+        }
+    }
+
     /** Читает главу и разбирает её текст. */
     fun loadChapter(index: Int) {
         val handle = handle ?: return
@@ -205,13 +307,14 @@ class ReaderViewModel(
             try {
                 val (title, blocks) = withContext(Dispatchers.Default) {
                     // Один тяжёлый переход вместо N токенизаций по блокам (§15)
-                    try {
+                    val (title, blocks) = try {
                         val prepared = core.preparedChapter(handle, index)
                         prepared.title to prepared.toReaderBlocks()
                     } catch (_: Throwable) {
                         val chapter = core.readChapter(handle, index)
                         chapter.title to chapter.toReaderBlocks(core)
                     }
+                    title to blocks.withAnchors(core, emphasizeStems)
                 }
                 _state.update {
                     it.copy(
@@ -219,9 +322,12 @@ class ReaderViewModel(
                         chapterIndex = index,
                         chapterTitle = title.orEmpty(),
                         blocks = blocks,
+                        // Новая глава — новый отрезок: старый мерил чужой текст.
+                        segment = null,
                         error = null,
                     )
                 }
+                planSegment(from = 0)
                 // Место в книге запоминается сразу, а не при выходе: приложение
                 // на телефоне закрывают свайпом, и «сохраню потом» означает
                 // «не сохраню».
@@ -508,6 +614,12 @@ class ReaderViewModel(
         bookId = null
         lastReportedPlace = null
         pendingPlace = null
+        // Место в книге изменилось — виджет на рабочем столе должен узнать об
+        // этом сейчас, а не через полчаса, когда система соберётся сама.
+        // Именно здесь, а не в flushPlace: тот зовётся раз в три секунды на
+        // всём протяжении чтения, и будить им виджет значило бы жечь батарею
+        // ради экрана, которого в этот момент никто не видит.
+        refreshBookNudge()
     }
 
     private companion object {
@@ -522,20 +634,49 @@ class ReaderViewModel(
     }
 }
 
+/**
+ * Досчитывает якоря полужирной основы для блоков главы.
+ *
+ * Один вызов ядра на абзац, а не на слово: якоря считаются по тексту целиком
+ * и приходят с той же нумерацией, что и токены абзаца.
+ *
+ * Считать нечего — возвращаем те же блоки, а не копии: лишняя копия списка
+ * заставила бы Compose перерисовать всю главу на пустом месте.
+ */
+private fun List<ReaderBlock>.withAnchors(core: WolfyCore, on: Boolean): List<ReaderBlock> {
+    if (!on) return if (none { it.anchors.isNotEmpty() }) this else map { it.copy(anchors = emptyList()) }
+    return map { block ->
+        if (block.parsed == null || block.text.isBlank()) {
+            block
+        } else {
+            block.copy(anchors = core.textAnchors(block.text).asList())
+        }
+    }
+}
+
 /** Переводит главу из ядра в блоки экрана, разбирая текст на токены. */
-private fun Chapter.toReaderBlocks(core: WolfyCore): List<ReaderBlock> =
-    blocks.map { block ->
+private fun Chapter.toReaderBlocks(core: WolfyCore): List<ReaderBlock> {
+    // Сквозной номер токена. Считается здесь, а не берётся из ядра, потому
+    // что этот путь разбирает главу по абзацам: нумерации главы целиком у
+    // него нет, и собрать её можно только накоплением.
+    var at = 0
+    return blocks.map { block ->
+        // Разбираем только то, по чему можно тапнуть: у разделителя и
+        // картинки текста нет, и звать ядро ради них незачем.
+        val parsed = block.text?.takeIf { it.isNotBlank() }?.let(core::tokenize)
+        val firstToken = if (parsed == null || parsed.tokens.isEmpty()) -1 else at
+        if (parsed != null) at += parsed.tokens.size
         ReaderBlock(
             kind = block.kind,
             text = block.text.orEmpty(),
             level = block.level,
-            // Разбираем только то, по чему можно тапнуть: у разделителя и
-            // картинки текста нет, и звать ядро ради них незачем.
-            parsed = block.text?.takeIf { it.isNotBlank() }?.let(core::tokenize),
+            parsed = parsed,
             imagePath = block.path,
             alt = block.alt,
+            firstToken = firstToken,
         )
     }
+}
 
 /**
  * Переводит подготовленную главу (один переход) в блоки экрана.
@@ -619,6 +760,7 @@ private fun PreparedChapter.toReaderBlocks(): List<ReaderBlock> {
                 parsed = parsed,
                 imagePath = block.path,
                 alt = block.alt,
+                firstToken = indices.firstOrNull() ?: -1,
             ),
         )
         at = blockEnd

@@ -44,6 +44,14 @@ internal interface CoreLibrary : Library {
     fun wolfy_book_metadata(handle: Long): Pointer?
     fun wolfy_book_chapter(handle: Long, index: Long): Pointer?
     fun wolfy_book_prepared_chapter(handle: Long, index: Long): Pointer?
+    fun wolfy_text_anchors(text: ByteArray): Pointer?
+    fun wolfy_book_chapter_anchors(handle: Long, index: Long): Pointer?
+    fun wolfy_book_chapter_segment(
+        handle: Long,
+        index: Long,
+        from: Long,
+        targetWords: Long,
+    ): Pointer?
     fun wolfy_inspect_word(word: ByteArray, sentence: ByteArray): Pointer?
     fun wolfy_book_close(handle: Long)
 
@@ -134,6 +142,55 @@ internal class JnaWolfyCore(private val library: CoreLibrary) : WolfyCore {
         return json.decodeFromString(raw)
     }
 
+    /*
+     * Новые функции ядра рядом со старой нативной библиотекой.
+     *
+     * JNA сообщает об отсутствующем символе `UnsatisfiedLinkError` — это
+     * `Error`, а не `Exception`, и поймать его надо явно. Оба вызова —
+     * украшение чтения, поэтому отсутствие символа значит «выключено», а не
+     * «книга не открылась».
+     */
+    override fun chapterAnchors(handle: Long, index: Int): IntArray {
+        val raw = try {
+            library.wolfy_book_chapter_anchors(handle, index.toLong())
+        } catch (error: UnsatisfiedLinkError) {
+            return IntArray(0)
+        }
+        val payload = raw.takeStringOrNull() ?: return IntArray(0)
+        return runCatching { json.decodeFromString<IntArray>(payload) }.getOrDefault(IntArray(0))
+    }
+
+    override fun textAnchors(text: String): IntArray {
+        if (text.isBlank()) return IntArray(0)
+        val raw = try {
+            library.wolfy_text_anchors(text.toUtf8())
+        } catch (error: UnsatisfiedLinkError) {
+            return IntArray(0)
+        }
+        val payload = raw.takeStringOrNull() ?: return IntArray(0)
+        return runCatching { json.decodeFromString<IntArray>(payload) }.getOrDefault(IntArray(0))
+    }
+
+    override fun chapterSegment(
+        handle: Long,
+        index: Int,
+        from: Int,
+        targetWords: Int,
+    ): ReadingSegment? {
+        val raw = try {
+            library.wolfy_book_chapter_segment(
+                handle,
+                index.toLong(),
+                from.toLong(),
+                targetWords.toLong(),
+            )
+        } catch (error: UnsatisfiedLinkError) {
+            return null
+        }
+        val payload = raw.takeStringOrNull() ?: return null
+        return runCatching { json.decodeFromString<ReadingSegment>(payload) }.getOrNull()
+    }
+
     override fun inspectWord(word: String, sentence: String): InspectResult {
         val raw = library.wolfy_inspect_word(word.toUtf8(), sentence.toUtf8())
             .takeString("inspectWord $word")
@@ -218,6 +275,22 @@ internal class JnaWolfyCore(private val library: CoreLibrary) : WolfyCore {
         if (this == null) {
             throw CoreException(lastError() ?: "ядро не смогло выполнить: $what")
         }
+        return try {
+            getString(0, "UTF-8")
+        } finally {
+            library.wolfy_string_free(this)
+        }
+    }
+
+    /**
+     * Строка ядра там, где её отсутствие — не ошибка.
+     *
+     * Отличается от [takeString] только этим: `null` возвращается как `null`,
+     * а не превращается в исключение. Нужно тем вызовам, у которых «ядро
+     * этого не умеет» — обычный ответ, а не сбой.
+     */
+    private fun Pointer?.takeStringOrNull(): String? {
+        if (this == null) return null
         return try {
             getString(0, "UTF-8")
         } finally {

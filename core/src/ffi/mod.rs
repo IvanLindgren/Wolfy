@@ -306,6 +306,83 @@ pub extern "C" fn wolfy_book_prepared_chapter(handle: i64, index: usize) -> *mut
     })
 }
 
+/// Якоря полужирного выделения для куска текста.
+///
+/// Нумерация совпадает с [`wolfy_tokenize`] того же текста: клиент, который
+/// разбирает книгу по абзацам, сопоставляет якоря со своими токенами по
+/// номеру, ничего не пересчитывая.
+///
+/// # Safety
+/// `text` — непустой указатель на UTF-8 строку с нулём на конце.
+#[no_mangle]
+pub unsafe extern "C" fn wolfy_text_anchors(text: *const c_char) -> *mut c_char {
+    guard(|| {
+        let text = unsafe { read_string(text) }?;
+        let anchors = crate::reading::text_anchors(crate::lexicon::Lexicon::embedded(), &text);
+        to_json(&anchors)
+    })
+}
+
+/// Якоря полужирного выделения для главы: по числу на токен.
+///
+/// Считается на всю главу разом — десять тысяч переходов через границу FFI
+/// ради десяти тысяч слов стоили бы дороже самого разбора. У всего, что не
+/// слово, якорь нулевой, поэтому номера якорей совпадают с номерами токенов
+/// подготовленной главы.
+///
+/// # Safety
+/// `handle` — номер, выданный [`wolfy_book_open`] и ещё не закрытый.
+#[no_mangle]
+pub extern "C" fn wolfy_book_chapter_anchors(handle: i64, index: usize) -> *mut c_char {
+    guard(|| {
+        with_book(handle, |book| match book.chapter(index) {
+            Ok(chapter) => {
+                let anchors = crate::reading::text_anchors(
+                    crate::lexicon::Lexicon::embedded(),
+                    &chapter.plain_text(),
+                );
+                to_json(&anchors)
+            }
+            Err(err) => {
+                set_error(&err.describe());
+                None
+            }
+        })?
+    })
+}
+
+/// Отрезок чтения главы: докуда честно читать за один подход.
+///
+/// `from` — номер токена, с которого читатель продолжает; `target_words` —
+/// сколько слов он готов прочитать. Конец отрезка подтягивается к границе
+/// предложения, поэтому вернувшееся число слов бывает больше заказанного.
+///
+/// # Safety
+/// `handle` — номер, выданный [`wolfy_book_open`] и ещё не закрытый.
+#[no_mangle]
+pub extern "C" fn wolfy_book_chapter_segment(
+    handle: i64,
+    index: usize,
+    from: usize,
+    target_words: usize,
+) -> *mut c_char {
+    guard(|| {
+        with_book(handle, |book| match book.chapter(index) {
+            Ok(chapter) => {
+                let text = chapter.plain_text();
+                let tokens = crate::tokenizer::tokenize(&text);
+                let sentences = crate::tokenizer::split(&tokens);
+                let segment = crate::reading::segment(&tokens, &sentences, from, target_words);
+                to_json(&crate::ffi::dto::SegmentDto::from(segment))
+            }
+            Err(err) => {
+                set_error(&err.describe());
+                None
+            }
+        })?
+    })
+}
+
 /// Всё локальное для карточки за один вызов.
 ///
 /// На вход: выбранное слово и предложение вокруг него. Возвращает анализ слова,

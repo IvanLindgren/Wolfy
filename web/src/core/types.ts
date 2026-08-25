@@ -120,6 +120,24 @@ export interface PreparedChapter {
   sentences: CompactSentence[]
 }
 
+/**
+ * Отрезок чтения: докуда честно читать за один подход.
+ *
+ * Считает ядро, потому что граница обязана совпадать между устройствами:
+ * отрезок, посчитанный в браузере иначе, чем на телефоне, разошёлся бы с
+ * закладкой при синхронизации.
+ */
+export interface ReadingSegment {
+  start: number
+  /** Полуинтервал: `end` не входит. */
+  end: number
+  /** Сколько в отрезке слов. По ним считается и время, и остаток. */
+  words: number
+  sentences: number
+  /** Кончился ли вместе с отрезком и сам текст главы. */
+  last: boolean
+}
+
 /** Граф предложения (из Rust, §16). */
 export interface GraphWord {
   text: string
@@ -368,6 +386,14 @@ export interface LibraryState {
 export type ThemeName = 'Paper' | 'Sepia' | 'Dark' | 'Oled'
 export type IntensityName = 'Gentle' | 'Normal' | 'Strong' | 'Extreme'
 
+/**
+ * Что притушить вокруг того места, где читатель сейчас.
+ *
+ * Именем, а не флагом: режимов будет больше, а `boolean` пришлось бы менять
+ * на строку ровно тогда, когда настройки уже лежат на устройствах.
+ */
+export type FocusMode = 'off' | 'sentence' | 'paragraph'
+
 export interface AppSettings {
   theme: string
   fontScale: number
@@ -375,6 +401,16 @@ export interface AppSettings {
   onboardingSeen: boolean
   lastSeenVersion: string
   reduceMotion: boolean
+  /** Набирать основу слова полужирным: якорь для беглого чтения. */
+  emphasizeStems: boolean
+  /** Прожектор: `off`, `sentence`, `paragraph`. */
+  focusMode: FocusMode
+  /** Темп ведущей строки, слов в минуту. Ноль — выключена. */
+  pacerWpm: number
+  /** Размер отрезка чтения в словах. Ноль — отрезки выключены. */
+  segmentWords: number
+  /** Разделы газеты, интересные читателю. Пустой список — весь номер. */
+  newspaperTopics: string[]
   demoAdded: boolean
   intensity: string
   /** Местный день последней тренировки: серия считается по календарю читателя. */
@@ -496,6 +532,11 @@ export type Command =
   | { op: 'setTheme'; theme: string }
   | { op: 'setFontScale'; scale: number }
   | { op: 'setLineScale'; scale: number }
+  | { op: 'setEmphasizeStems'; on: boolean }
+  | { op: 'setFocusMode'; mode: FocusMode }
+  | { op: 'setPacer'; wpm: number }
+  | { op: 'setSegmentWords'; words: number }
+  | { op: 'setNewspaperTopics'; topics: string[] }
   | { op: 'seenOnboarding' }
   | { op: 'seenVersion'; version: string }
   | { op: 'setReduceMotion'; on: boolean }

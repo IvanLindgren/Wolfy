@@ -54,6 +54,27 @@ fun ReaderParagraph(
     savedLemmaOf: (Token) -> String = { it.text.lowercase() },
     selected: Token? = null,
     selection: IntRange? = null,
+    /**
+     * Докуда набирать каждое слово полужирным — по числу на токен абзаца.
+     *
+     * Пустой список означает «не выделять»: проверять настройку здесь незачем,
+     * её уже проверил тот, кто решал, считать якоря или нет.
+     */
+    anchors: List<Int> = emptyList(),
+    /**
+     * Притушить абзац целиком: читатель сейчас не здесь.
+     *
+     * Притушивается цвет чернил, а не прозрачность всего элемента: элемент с
+     * прозрачностью Compose выносит в отдельный слой, и на главе в сотню
+     * абзацев это сотня слоёв на каждый кадр прокрутки.
+     */
+    dimmed: Boolean = false,
+    /**
+     * Единственный светлый кусок абзаца — в смещениях этого абзаца.
+     *
+     * Всё вне его притушивается. `null` — светлый весь абзац.
+     */
+    bright: IntRange? = null,
     onWordTap: (Token) -> Unit = {},
     onPhrase: (IntRange) -> Unit = {},
     onPhraseDone: (IntRange) -> Unit = {},
@@ -63,13 +84,40 @@ fun ReaderParagraph(
     // строки. Пока абзац не отрисован, её нет — и тапы просто игнорируются.
     var layout by remember(parsed) { mutableStateOf<TextLayoutResult?>(null) }
 
-    val text: AnnotatedString = remember(parsed, saved, selected, selection, colors) {
+    // Притушенные чернила: между бумагой и текстом, а не серый цвет из
+    // палитры — иначе на тёмной теме «притушено» оказалось бы светлее
+    // обычного текста.
+    val dim = colors.ink.copy(alpha = 0.3f)
+
+    val text: AnnotatedString =
+        remember(parsed, saved, selected, selection, anchors, dimmed, bright, colors) {
         buildAnnotatedString {
-            parsed.tokens.forEach { token ->
+            parsed.tokens.forEachIndexed { index, token ->
                 val start = length
                 append(token.text)
 
-                if (!token.tappable) return@forEach
+                /*
+                 * Полужирная основа.
+                 *
+                 * Ставится раньше всех прочих стилей и отдельным диапазоном:
+                 * это насыщенность, а не фон, и с подсветкой сохранённого
+                 * слова она не спорит — они складываются.
+                 *
+                 * Насыщенность умеренная (`W600`, а не `Bold`): на странице,
+                 * где выделено каждое слово, разница в двести единиц
+                 * превращает текст в сплошную черноту, и якорь перестаёт быть
+                 * якорем.
+                 */
+                val anchor = anchors.getOrElse(index) { 0 }
+                if (anchor in 1 until token.text.length) {
+                    addStyle(
+                        SpanStyle(fontWeight = FontWeight.W600),
+                        start,
+                        start + anchor,
+                    )
+                }
+
+                if (!token.tappable) return@forEachIndexed
 
                 val isSelected = selected != null &&
                     token.start == selected.start && token.end == selected.end
@@ -97,6 +145,21 @@ fun ReaderParagraph(
                         start,
                         length,
                     )
+                }
+            }
+
+            /*
+             * Окно чтения. Ставится последним и поверх всего: оно говорит не
+             * «это слово такое», а «сюда сейчас не смотрим», и должно
+             * перебивать и подсветку сохранённого слова, и полужирную основу.
+             */
+            when {
+                dimmed -> addStyle(SpanStyle(color = dim), 0, length)
+                bright != null -> {
+                    val from = bright.first.coerceIn(0, length)
+                    val to = (bright.last + 1).coerceIn(from, length)
+                    if (from > 0) addStyle(SpanStyle(color = dim), 0, from)
+                    if (to < length) addStyle(SpanStyle(color = dim), to, length)
                 }
             }
         }

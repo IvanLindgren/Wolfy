@@ -23,7 +23,7 @@ import { THEMES, applyTheme, motionFor } from '../app/theme'
 import { WordCard, type CardTarget } from '../card/WordCard'
 import * as bridge from '../core/bridge'
 import { session, useSession } from '../core/session'
-import type { LibraryBook, ThemeName } from '../core/types'
+import type { LibraryBook, ReadingSegment, ThemeName } from '../core/types'
 import { seconds } from '../theme/motion'
 import { Button } from '../widgets/Button'
 import {
@@ -40,6 +40,7 @@ import {
 import { WolfyCompanion } from '../widgets/Wolfy'
 import { ToolDock, lastPencilTone, savePencilTone, type StickerInfo, type Tool } from './annotate'
 import { toneColor, useAnnotations, type Tone } from './annotations'
+import { AttentionBar, usePacer } from './attention'
 import { ChapterView, savedRanges, textOf, type TokenRange } from './ChapterView'
 import { Paginator, type PagerHandle } from './Paginator'
 import { readerFont, readerMeasure, readingMode, setReaderFont, setReaderMeasure, setReadingMode, type ReaderFont, type ReadingMode } from './preferences'
@@ -336,6 +337,102 @@ export function ReaderScreen() {
     return set
   }, [cards])
 
+  /*
+   * Помощь вниманию: якоря основы, окно чтения, ведущая строка, отрезок.
+   *
+   * Всё три приёма выключены по умолчанию и живут в настройках, которые
+   * ездят между устройствами: включив окно на телефоне, читатель ждёт его и
+   * в браузере.
+   */
+  const [anchors, setAnchors] = useState<Uint16Array | undefined>(undefined)
+  useEffect(() => {
+    if (!settings.emphasizeStems || !opened || !chapter.tokens.length) {
+      setAnchors(undefined)
+      return
+    }
+    let alive = true
+    void bridge
+      .chapterAnchors(bookId, Math.max(0, chapterIndex))
+      .then((found) => {
+        // Пустой массив — ядро без этой функции. Тогда текст остаётся
+        // обычным: выделение основы украшает чтение, а не держит его.
+        if (alive && found.length > 0) setAnchors(found)
+      })
+      .catch(() => {
+        if (alive) setAnchors(undefined)
+      })
+    return () => {
+      alive = false
+    }
+  }, [settings.emphasizeStems, opened, bookId, chapterIndex, chapter.tokens.length])
+
+  // Ведущая строка: едет, только пока читатель этого хочет.
+  const [pacing, setPacing] = useState(false)
+  useEffect(() => setPacing(false), [chapterIndex, bookId])
+  useEffect(() => {
+    if (settings.pacerWpm <= 0) setPacing(false)
+  }, [settings.pacerWpm])
+
+  const wordsIn = useCallback(
+    (from: number, to: number) =>
+      chapter.tokens.slice(from, to).filter((token) => token.kind === 'word').length,
+    [chapter.tokens],
+  )
+
+  const pacer = usePacer(
+    chapter.sentences,
+    wordsIn,
+    settings.pacerWpm,
+    pacing,
+    0,
+  )
+  useEffect(() => {
+    if (pacer.done) setPacing(false)
+  }, [pacer.done])
+
+  /*
+   * Отрезок чтения: докуда читаем сейчас.
+   *
+   * Границу считает ядро — она обязана совпадать с телефоном, иначе одна и
+   * та же закладка дала бы на двух устройствах разные отрезки. Пересчёт
+   * только при смене главы и по кнопке «ещё один»: отрезок, который сам
+   * ползёт вслед за читателем, — это снова книга без конца.
+   */
+  const [segment, setSegment] = useState<ReadingSegment | null>(null)
+  const [segmentFrom, setSegmentFrom] = useState(0)
+  const [readToken, setReadToken] = useState(0)
+
+  useEffect(() => {
+    setSegmentFrom(0)
+    setReadToken(0)
+  }, [bookId, chapterIndex])
+
+  useEffect(() => {
+    if (settings.segmentWords <= 0 || !opened || !chapter.tokens.length) {
+      setSegment(null)
+      return
+    }
+    let alive = true
+    void bridge
+      .chapterSegment(bookId, Math.max(0, chapterIndex), segmentFrom, settings.segmentWords)
+      .then((found) => {
+        if (alive) setSegment(found)
+      })
+      .catch(() => {
+        if (alive) setSegment(null)
+      })
+    return () => {
+      alive = false
+    }
+  }, [
+    settings.segmentWords,
+    opened,
+    bookId,
+    chapterIndex,
+    segmentFrom,
+    chapter.tokens.length,
+  ])
+
   const [phraseMark, setPhraseMark] = useState<TokenRange | null>(null)
 
   /*
@@ -462,6 +559,10 @@ export function ReaderScreen() {
     (force = false) => {
       if (!book || !chapter.tokens.length) return
       const token = currentToken()
+      // Отрезок показывает, сколько слов пройдено, и место ему нужно чаще,
+      // чем оно уходит на диск. Обновляем только при настоящем сдвиге:
+      // перерисовка полосы на каждый тик таймера ей ничего не добавит.
+      setReadToken((known) => (Math.abs(known - token) > 2 ? token : known))
       const fraction = Math.min(1, Math.max(0, token / chapter.tokens.length))
       const now = Date.now()
       if (!force && now - savedAt.current < PROGRESS_DELAY) return
@@ -896,6 +997,10 @@ export function ReaderScreen() {
       dropCap
       images={images}
       mode={mode}
+      anchors={anchors}
+      focusMode={settings.focusMode}
+      sentences={chapter.sentences}
+      focusToken={pacing ? pacer.token : null}
       stickers={stickers}
       editingSticker={editingSticker}
       onStickerOpen={setEditingSticker}
@@ -994,6 +1099,19 @@ export function ReaderScreen() {
       <div className={styles.progress}>
         <div className={styles.progress__bar} style={{ width: `${progress}%` }} />
       </div>
+
+      <AttentionBar
+        segment={segment}
+        read={readToken}
+        wordsIn={wordsIn}
+        pacing={pacing}
+        pacerWpm={settings.pacerWpm}
+        onPace={setPacing}
+        onNextSegment={() => {
+          if (segment) setSegmentFrom(segment.end)
+        }}
+        onStopSegment={() => void session.setSegmentWords(0)}
+      />
 
       {recent.length > 0 && (
         <div className={styles.recent}>
