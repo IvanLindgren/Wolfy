@@ -139,7 +139,8 @@ async function addPlain(file: File, extension: string): Promise<ImportResult> {
     if (known) return { kind: 'known', book: known }
   }
 
-  const id = plan.plan === 'attach' && plan.bookId ? plan.bookId : newId()
+  const id =
+    (plan.plan === 'attach' || plan.plan === 'revive') && plan.bookId ? plan.bookId : newId()
   const opened = await bridge.importBook(id, file.name, bytes)
 
   if (plan.plan === 'attach' && plan.bookId) {
@@ -207,7 +208,8 @@ async function addPdf(file: File): Promise<ImportResult> {
     }
   }
 
-  const id = plan.plan === 'attach' && plan.bookId ? plan.bookId : newId()
+  const id =
+    (plan.plan === 'attach' || plan.plan === 'revive') && plan.bookId ? plan.bookId : newId()
   const title = titleOf(file.name)
   const opened = await bridge.importPages(id, title, pages)
 
