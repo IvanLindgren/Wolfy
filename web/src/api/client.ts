@@ -579,7 +579,7 @@ export async function pushBookAnnotations(
 /**
  * Скачивает EPUB через прокси сервера.
  *
- * Через прокси, а не напрямую: у Standard Ebooks нет CORS-заголовков для
+ * Через прокси, а не напрямую: у gutenberg.org нет CORS-заголовков для
  * нашего origin, и запрос из браузера просто не состоялся бы.
  */
 export async function downloadDiscoveryItem(id: string): Promise<{
@@ -611,6 +611,112 @@ export async function downloadDiscoveryItem(id: string): Promise<{
     author: header('X-Wolfy-Author'),
     sourceKey: header('X-Wolfy-Source') || id,
   }
+}
+
+// --- Открытая библиотека ----------------------------------------------------
+
+/** Находка поиска по Открытой библиотеке. */
+export interface CatalogueBook {
+  /** Номер работы в каталоге вида «OL267218W». */
+  id: string
+  title: string
+  author: string
+  year: number
+  /** Ссылки на скачивание по убыванию предпочтительности. */
+  urls: string[]
+}
+
+/**
+ * Ищет свободные книги в Открытой библиотеке.
+ *
+ * Через свой сервер, а не напрямую: у приложения один канал наружу, один
+ * ограничитель частоты и одно место, где ответ каталога превращается в поля,
+ * которые понимает клиент.
+ */
+export async function searchCatalogue(
+  query: string,
+  signal?: AbortSignal,
+): Promise<CatalogueBook[]> {
+  const found = await request<{ books?: CatalogueBook[] }>(
+    `/v1/library/catalogue?q=${encodeURIComponent(query.trim())}`,
+    { signal },
+  )
+  return found?.books ?? []
+}
+
+// --- Газета -----------------------------------------------------------------
+
+/** Заметка в номере. */
+export interface NewsArticle {
+  id: string
+  topic: string
+  title: string
+  summary: string
+  source: string
+  author: string
+  link: string
+  /** Когда вышла, в миллисекундах эпохи. Ноль — лента не сказала. */
+  published: number
+  imageUrl: string
+  words: number
+}
+
+/** Полоса номера. */
+export interface NewsSection {
+  topic: string
+  title: string
+  articles: NewsArticle[]
+}
+
+export interface NewsIssue {
+  date: string
+  sections: NewsSection[]
+  /** Все разделы, какие бывают, — из них читатель выбирает свои. */
+  topics: { code: string; title: string }[]
+}
+
+/** Заметка, распознанная для читалки. */
+export interface NewsReading {
+  title: string
+  author: string
+  source: string
+  link: string
+  paragraphs: string[]
+  words: number
+}
+
+/**
+ * Свежий номер.
+ *
+ * Пустой список разделов — весь номер: читатель, который ничего не выбирал,
+ * должен увидеть газету, а не приглашение сперва её настроить.
+ */
+export async function newspaper(
+  topics: string[],
+  perSection = 6,
+  signal?: AbortSignal,
+): Promise<NewsIssue> {
+  const query = new URLSearchParams()
+  if (topics.length) query.set('topics', topics.join(','))
+  query.set('limit', String(perSection))
+  return request<NewsIssue>(`/v1/newspaper?${query.toString()}`, { signal })
+}
+
+/**
+ * Полный текст заметки.
+ *
+ * Ходит только по нашим же источникам — список хостов проверяет сервер.
+ * Браузер туда всё равно не сходил бы: чужая редакция CORS не открывает.
+ */
+export async function newspaperArticle(
+  link: string,
+  signal?: AbortSignal,
+): Promise<NewsReading> {
+  return request<NewsReading>('/v1/newspaper/article', {
+    method: 'POST',
+    body: { url: link },
+    signal,
+  })
 }
 
 // --- Книга по ссылке -------------------------------------------------------

@@ -1,0 +1,256 @@
+/*
+ * Газетная полоса.
+ *
+ * Приёмы взяты у бумаги и работают ровно потому, что читатель их узнаёт:
+ * название во всю ширину, двойная линейка под ним, выходные данные строкой,
+ * врезка первой заметки и колонки под ней. Ни одного из них нет ради
+ * украшения — каждый говорит глазу, куда идти дальше.
+ *
+ * Колонки сделаны `column-count`, а не гридом: заметки разной длины, и
+ * колоночная вёрстка сама разложит их так, чтобы столбцы кончились вровень.
+ * Грид дал бы ступеньку внизу — на бумаге такого не бывает.
+ */
+
+.paper {
+  --news-rule: color-mix(in srgb, var(--ink) 65%, transparent);
+}
+
+/* --- Название ---------------------------------------------------------- */
+
+.masthead {
+  margin-bottom: 1.5rem;
+}
+
+.masthead__rule {
+  height: 4px;
+  border-top: 1px solid var(--news-rule);
+  border-bottom: 1px solid var(--news-rule);
+}
+
+.masthead__rule[data-thin='true'] {
+  height: 0;
+  border-bottom: none;
+  margin-top: 0.5rem;
+}
+
+.masthead__name {
+  margin: 0.85rem 0 0.5rem;
+  font-family: var(--serif), 'Playfair Fallback';
+  font-size: clamp(2.2rem, 7vw, 4.2rem);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  text-align: center;
+}
+
+/*
+ * Выходные данные. На бумаге это три колонки мелким шрифтом: слева — что за
+ * издание, по центру — дата, справа — служебное. Повторяем расстановку, а не
+ * содержание: содержание у нас своё.
+ */
+.masthead__line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--rule);
+  font-family: var(--sans), 'Inter Fallback';
+  font-size: 0.72rem;
+  color: var(--ink-muted);
+}
+
+.masthead__date {
+  font-weight: 600;
+  color: var(--ink);
+  text-align: center;
+}
+
+/* --- Разделы ----------------------------------------------------------- */
+
+.topics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 1.5rem;
+}
+
+.topic {
+  padding: 0.22rem 0.7rem;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink-muted);
+  font-family: var(--sans), 'Inter Fallback';
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: border-color var(--quick, 180ms) ease, color var(--quick, 180ms) ease;
+}
+
+.topic:hover {
+  border-color: var(--ink-muted);
+  color: var(--ink);
+}
+
+.topic[data-active='true'] {
+  border-color: var(--ink);
+  background: var(--inverse);
+  color: var(--on-inverse);
+}
+
+/* --- Полоса ------------------------------------------------------------ */
+
+.sheet__head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.8rem;
+  margin-bottom: 1rem;
+}
+
+.sheet__title {
+  font-family: var(--sans), 'Inter Fallback';
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.sheet__rule {
+  flex: 1;
+  height: 2px;
+  border-top: 1px solid var(--news-rule);
+  border-bottom: 1px solid var(--news-rule);
+}
+
+/* --- Врезка: первая заметка полосы -------------------------------------- */
+
+.lead {
+  padding-bottom: 1.25rem;
+  margin-bottom: 1.25rem;
+  border-bottom: 1px solid var(--news-rule);
+}
+
+.lead__title {
+  font-family: var(--serif), 'Playfair Fallback';
+  font-size: clamp(1.6rem, 4.2vw, 2.6rem);
+  font-weight: 700;
+  line-height: 1.08;
+  letter-spacing: -0.015em;
+  text-wrap: balance;
+}
+
+/*
+ * Подзаголовок врезки — в две колонки на широком экране: так он читается
+ * строкой нормальной длины, а не через весь разворот.
+ */
+.lead__text {
+  margin-top: 0.6rem;
+  font-family: var(--serif), 'Playfair Fallback';
+  font-size: 1.05rem;
+  line-height: 1.55;
+  text-wrap: pretty;
+  columns: 2;
+  column-gap: 2rem;
+  column-rule: 1px solid var(--rule);
+}
+
+@media (max-width: 46rem) {
+  .lead__text {
+    columns: 1;
+  }
+}
+
+.byline {
+  margin-top: 0.35rem;
+  font-family: var(--sans), 'Inter Fallback';
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+  color: var(--ink-muted);
+}
+
+/* --- Колонки ------------------------------------------------------------ */
+
+.columns {
+  columns: 3;
+  column-gap: 1.9rem;
+  column-rule: 1px solid var(--rule);
+}
+
+@media (max-width: 62rem) {
+  .columns {
+    columns: 2;
+  }
+}
+
+@media (max-width: 40rem) {
+  .columns {
+    columns: 1;
+  }
+}
+
+/*
+ * Заметка не должна разрываться между колонками: половина заголовка внизу
+ * одного столбца и половина вверху другого — это не вёрстка, это опечатка.
+ */
+.story {
+  break-inside: avoid;
+  margin-bottom: 1.4rem;
+}
+
+.story__title {
+  font-family: var(--serif), 'Playfair Fallback';
+  font-size: 1.12rem;
+  font-weight: 700;
+  line-height: 1.2;
+  text-wrap: pretty;
+}
+
+.story__text {
+  margin-top: 0.4rem;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: color-mix(in srgb, var(--ink) 88%, var(--ink-muted));
+  text-wrap: pretty;
+}
+
+/*
+ * «Читать целиком» — не кнопка, а строка: на полосе, где таких строк
+ * двадцать, двадцать кнопок перебили бы собой все заголовки.
+ */
+.read {
+  margin-top: 0.45rem;
+  padding: 0;
+  border: none;
+  border-bottom: 1px solid currentcolor;
+  background: none;
+  color: var(--accent);
+  font-family: var(--sans), 'Inter Fallback';
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.read:disabled {
+  color: var(--ink-muted);
+  cursor: default;
+}
+
+/* --- Перелистывание ----------------------------------------------------- */
+
+.turn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-top: 2rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--news-rule);
+}
+
+.turn__count {
+  font-family: var(--sans), 'Inter Fallback';
+  font-size: 0.78rem;
+  color: var(--ink-muted);
+}

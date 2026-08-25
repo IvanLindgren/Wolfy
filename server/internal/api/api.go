@@ -25,6 +25,7 @@ import (
 	"github.com/wolfy/server/internal/dictionary"
 	"github.com/wolfy/server/internal/discovery"
 	"github.com/wolfy/server/internal/library"
+	"github.com/wolfy/server/internal/newspaper"
 	"github.com/wolfy/server/internal/ocr"
 	"github.com/wolfy/server/internal/openlibrary"
 	"github.com/wolfy/server/internal/remotebook"
@@ -47,6 +48,7 @@ type Server struct {
 	dictionary        *dictionary.Service
 	remoteBooks       *remotebook.Service
 	catalogue         *openlibrary.Service
+	newspaper         *newspaper.Service
 	updates           *updates.Service
 	log               *slog.Logger
 	webOrigin         string
@@ -60,6 +62,9 @@ type Server struct {
 	bookLimit *rateLimiter
 	// Поиск по каталогу дешёвый, но ходит наружу: щедрее загрузки, сдержаннее перевода.
 	catalogueLimit *rateLimiter
+	// Газета: номер отдаётся из кэша, а вот полный текст заметки — поход
+	// в чужую сеть, и стоит он столько же, сколько загрузка по ссылке.
+	newspaperLimit *rateLimiter
 	// OCR — дорогой vision-вызов, ограничен глобально и per-user.
 	ocrLimit *rateLimiter
 }
@@ -96,6 +101,7 @@ func NewServer(
 		account: a, google: g, discovery: d, dictionary: dict,
 		remoteBooks: remotebook.New(30 * time.Second),
 		catalogue:   openlibrary.New(10 * time.Second),
+		newspaper:   newspaper.New(12 * time.Second),
 		updates:     updater, log: log,
 		// Двести переводов залпом и один в секунду сверху: страница книги
 		// редко даёт больше двухсот незнакомых слов, а секунда — это дольше,
@@ -106,6 +112,9 @@ func NewServer(
 		authLimit:      newRateLimiter(8, 0.1, 30*time.Minute),
 		bookLimit:      newRateLimiter(8, 0.05, 30*time.Minute),
 		catalogueLimit: newRateLimiter(30, 0.5, 15*time.Minute),
+		// Номер листают часто, полный текст открывают редко: общий лимит
+		// щедрый, а тяжёлый маршрут прикрыт отдельно gate-ом чтения.
+		newspaperLimit: newRateLimiter(40, 0.5, 15*time.Minute),
 		// OCR: дорогой vision, не более 6 залпом и 1 в 5 секунд на пользователя.
 		// Глобальный конкурентный лимит 4 — в gate.OCR.
 		ocrLimit: newRateLimiter(6, 0.2, 15*time.Minute),
@@ -179,6 +188,15 @@ func (s *Server) Handler() http.Handler {
 	// чтению, а значит и аккаунту. Сам файл качает тот же /v1/library/fetch.
 	mux.Handle("GET /v1/library/catalogue", s.catalogueLimit.withRateLimit(
 		http.HandlerFunc(s.getCatalogue),
+	))
+	// Газета: свежие заметки на английском из открытых лент. Без входа —
+	// как и библиотека: читать можно до всякого аккаунта. Полный текст
+	// заметки берётся только с наших же источников, список — в newspaper.
+	mux.Handle("GET /v1/newspaper", s.newspaperLimit.withRateLimit(
+		http.HandlerFunc(s.getNewspaper),
+	))
+	mux.Handle("POST /v1/newspaper/article", s.newspaperLimit.withRateLimit(
+		http.HandlerFunc(s.postNewspaperArticle),
 	))
 	// Манифест и сами пакеты публичны: проверка обновлений начинается до
 	// входа в аккаунт. Целостность пакета клиент отдельно сверяет по SHA-256.
@@ -537,7 +555,11 @@ func (s *Server) postDiscoveryAdd(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.PathEscape(download.FileName))
 	w.Header().Set("X-Wolfy-Title", url.QueryEscape(download.Item.Title))
 	w.Header().Set("X-Wolfy-Author", url.QueryEscape(download.Item.Author))
-	w.Header().Set("X-Wolfy-Source", url.QueryEscape(download.Item.ID))
+	// Отпечаток книги из ленты называет источник, а не только номер: по нему
+	// §5 сводит одну и ту же книгу, добавленную на телефоне и в браузере, к
+	// одному номеру. Собирать его на каждом клиенте отдельно уже пробовали —
+	// Kotlin и веб собирали по-разному, и книга двоилась.
+	w.Header().Set("X-Wolfy-Source", url.QueryEscape("gutenberg:"+download.Item.ID))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(download.Bytes)
 }
