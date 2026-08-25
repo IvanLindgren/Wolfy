@@ -291,31 +291,64 @@ impl WolfySession {
             "library": self.inner.library_dirty,
             "settings": self.inner.settings_dirty,
             "practice": self.inner.practice_dirty,
+            "libraryGeneration": self.inner.library_generation,
+            "settingsGeneration": self.inner.settings_generation,
+            "practiceGeneration": self.inner.practice_generation,
+            "librarySavedGeneration": self.inner.library_saved_generation,
+            "settingsSavedGeneration": self.inner.settings_saved_generation,
+            "practiceSavedGeneration": self.inner.practice_saved_generation,
         }))
     }
 
-    /// Подтверждает запись.
+    /// Текущие поколения (§17).
+    pub fn generations(&self) -> Result<String, JsError> {
+        json(&serde_json::json!({
+            "library": self.inner.library_generation,
+            "settings": self.inner.settings_generation,
+            "practice": self.inner.practice_generation,
+            "librarySaved": self.inner.library_saved_generation,
+            "settingsSaved": self.inner.settings_saved_generation,
+            "practiceSaved": self.inner.practice_saved_generation,
+        }))
+    }
+
+    /// Подтверждает запись (legacy, без поколений — подтверждает текущее поколение).
     pub fn saved(&mut self, library: bool, settings: bool) {
         if library {
-            self.inner.library_dirty = false;
+            let g = self.inner.library_generation;
+            self.inner.ack_saved(Some(g), None, None);
         }
         if settings {
-            self.inner.settings_dirty = false;
+            let g = self.inner.settings_generation;
+            self.inner.ack_saved(None, Some(g), None);
         }
     }
 
-    /// Подтверждает запись, включая practice по §6.
+    /// Подтверждает запись, включая practice по §6 (legacy).
     #[wasm_bindgen(js_name = savedWithPractice)]
     pub fn saved_with_practice(&mut self, library: bool, settings: bool, practice: bool) {
         if library {
-            self.inner.library_dirty = false;
+            let g = self.inner.library_generation;
+            self.inner.ack_saved(Some(g), None, None);
         }
         if settings {
-            self.inner.settings_dirty = false;
+            let g = self.inner.settings_generation;
+            self.inner.ack_saved(None, Some(g), None);
         }
         if practice {
-            self.inner.practice_dirty = false;
+            let g = self.inner.practice_generation;
+            self.inner.ack_saved(None, None, Some(g));
         }
+    }
+
+    /// Generation-aware подтверждение (§17): `ackSaved(N)` снимает dirty только до N.
+    /// Передавайте поколения снапшотов, которые успешно записаны. `-1` = не подтверждать.
+    #[wasm_bindgen(js_name = ackSaved)]
+    pub fn ack_saved(&mut self, library_gen: i64, settings_gen: i64, practice_gen: i64) {
+        let lib = if library_gen >= 0 { Some(library_gen) } else { None };
+        let set = if settings_gen >= 0 { Some(settings_gen) } else { None };
+        let prac = if practice_gen >= 0 { Some(practice_gen) } else { None };
+        self.inner.ack_saved(lib, set, prac);
     }
 
     /// Кладёт офлайн-словарь, скачанный по согласию читателя.

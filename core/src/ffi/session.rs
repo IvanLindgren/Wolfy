@@ -49,6 +49,18 @@ pub struct Session {
     pub library_dirty: bool,
     pub settings_dirty: bool,
     pub practice_dirty: bool,
+    /// Поколения dirty-состояния (§17 Persist performance).
+    ///
+    /// Инкрементятся при каждой мутации, которая делает domain грязным.
+    /// `*_saved_generation` — последнее поколение, успешно записанное на диск
+    /// и подтверждённое `ack_saved`. `dirty = generation != saved_generation`.
+    /// Позволяет не терять mutation 6, пока пишется snapshot 5.
+    pub library_generation: i64,
+    pub settings_generation: i64,
+    pub practice_generation: i64,
+    pub(crate) library_saved_generation: i64,
+    pub(crate) settings_saved_generation: i64,
+    pub(crate) practice_saved_generation: i64,
     /// Скачанный словарь держится открытым между тапами. Путь хранится рядом,
     /// чтобы новый файл после обновления можно было открыть без перезапуска
     /// приложения.
@@ -354,6 +366,15 @@ pub struct Outcome {
     /// Текущая тренировка (§6) — для `GetPractice`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub practice: Option<PracticeState>,
+    /// Поколения dirty-состояния (§17 Persist performance).
+    /// Клиент получает снапшот JSON + поколение N, а после успешной атомарной
+    /// записи зовёт `ackSaved(N)`; ядро снимает dirty только до N.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub library_generation: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub settings_generation: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub practice_generation: Option<i64>,
 }
 
 impl Session {
@@ -426,7 +447,13 @@ impl Session {
         settings: Option<&str>,
         practice: Option<&str>,
     ) -> Result<Session, String> {
-        let library = Self::parse_optional(library, "library")?;
+        let library_raw: crate::library::book::LibraryState =
+            Self::parse_optional(library, "library")?;
+        // §5 Variant A: автоматическая каноникализация на открытии (идемпотентна).
+        // Книги с source_key, где id != canonical(source_key), перепривязываются
+        // вместе с карточками. Пустой source_key не трогается.
+        let library = crate::library::merge::migrate_to_canonical(&library_raw);
+        let library_dirty = library != library_raw;
         let settings: AppSettings = Self::parse_optional(settings, "settings")?;
         let mut practice: PracticeState = Self::parse_optional(practice, "practice")?;
         // §6 migration: старые поля settings -> practice (идемпотентно).
@@ -447,9 +474,15 @@ impl Session {
                 library,
                 settings,
                 practice,
-                library_dirty: false,
+                library_dirty,
                 settings_dirty: false,
                 practice_dirty: true,
+                library_generation: if library_dirty { 1 } else { 0 },
+                settings_generation: 0,
+                practice_generation: 1,
+                library_saved_generation: 0,
+                settings_saved_generation: 0,
+                practice_saved_generation: 0,
                 ..Session::default()
             });
         }
@@ -458,9 +491,15 @@ impl Session {
             library,
             settings,
             practice,
-            library_dirty: false,
+            library_dirty,
             settings_dirty: false,
             practice_dirty: false,
+            library_generation: if library_dirty { 1 } else { 0 },
+            settings_generation: 0,
+            practice_generation: 0,
+            library_saved_generation: 0,
+            settings_saved_generation: 0,
+            practice_saved_generation: 0,
             ..Session::default()
         })
     }
@@ -683,7 +722,7 @@ impl Session {
                 // раз и в карточку, и в календарь (§6 CRDT).
                 self.practice
                     .record_answer(&device_id, right, now, offset_minutes);
-                self.practice_dirty = true;
+                self.mark_practice_dirty();
                 // Dual-write для переходного периода: старый клиент читает
                 // streak/answers из settings.json, и пока он не обновлён,
                 // данные должны оставаться там же.
@@ -701,7 +740,7 @@ impl Session {
                     .unwrap_or(0);
                 self.settings.streak_days =
                     self.practice.current_streak(now, offset_minutes) as i32;
-                self.settings_dirty = true;
+                self.mark_settings_dirty();
 
                 let card = self
                     .library
@@ -799,55 +838,55 @@ impl Session {
 
             Command::SetTheme { theme } => {
                 self.settings.theme = theme;
-                self.settings_dirty = true;
+                self.mark_settings_dirty();
                 self.done(Outcome::default())
             }
 
             Command::SetFontScale { scale } => {
                 self.settings = self.settings.with_font_scale(scale);
-                self.settings_dirty = true;
+                self.mark_settings_dirty();
                 self.done(Outcome::default())
             }
 
             Command::SetLineScale { scale } => {
                 self.settings = self.settings.with_line_scale(scale);
-                self.settings_dirty = true;
+                self.mark_settings_dirty();
                 self.done(Outcome::default())
             }
 
             Command::SeenOnboarding => {
                 self.settings.onboarding_seen = true;
-                self.settings_dirty = true;
+                self.mark_settings_dirty();
                 self.done(Outcome::default())
             }
 
             Command::SeenVersion { version } => {
                 self.settings.last_seen_version = version;
-                self.settings_dirty = true;
+                self.mark_settings_dirty();
                 self.done(Outcome::default())
             }
 
             Command::SetReduceMotion { on } => {
                 self.settings.reduce_motion = on;
-                self.settings_dirty = true;
+                self.mark_settings_dirty();
                 self.done(Outcome::default())
             }
 
             Command::SetIntensity { intensity } => {
                 self.settings.intensity = intensity;
-                self.settings_dirty = true;
+                self.mark_settings_dirty();
                 self.done(Outcome::default())
             }
 
             Command::MarkDemoAdded => {
                 self.settings.demo_added = true;
-                self.settings_dirty = true;
+                self.mark_settings_dirty();
                 self.done(Outcome::default())
             }
 
             Command::ReplaceSettings { settings } => {
                 self.settings = self.settings.replaced_by(&settings);
-                self.settings_dirty = true;
+                self.mark_settings_dirty();
                 self.done(Outcome::default())
             }
 
@@ -893,11 +932,11 @@ impl Session {
                 let before = self.practice.clone();
                 self.practice.migrate_from_legacy(&self.settings);
                 if self.practice != before {
-                    self.practice_dirty = true;
+                    self.mark_practice_dirty();
                 }
                 if self.settings.has_legacy_training() {
                     self.settings = self.settings.cleared_legacy();
-                    self.settings_dirty = true;
+                    self.mark_settings_dirty();
                 }
                 self.done(Outcome::default())
             }
@@ -912,7 +951,7 @@ impl Session {
                 self.practice.merge_inplace(&practice);
                 self.practice.normalize();
                 if self.practice != before {
-                    self.practice_dirty = true;
+                    self.mark_practice_dirty();
                     // Dual-write для старого клиента
                     self.settings.answers =
                         self.practice.total_answers().min(i32::MAX as u64) as i32;
@@ -923,7 +962,7 @@ impl Session {
                         self.practice.days.iter().next_back().copied().unwrap_or(0);
                     // без now нельзя точно посчитать current_streak, берём longest_run как аппроксимацию
                     self.settings.streak_days = self.practice.longest_run() as i32;
-                    self.settings_dirty = true;
+                    self.mark_settings_dirty();
                 }
                 self.done(Outcome {
                     practice: Some(self.practice.clone()),
@@ -1015,9 +1054,91 @@ impl Session {
     /// Записывает новое состояние и запоминает, изменилось ли оно.
     fn change_library(&mut self, next: LibraryState) {
         if next.revision != self.library.revision {
-            self.library_dirty = true;
+            self.mark_library_dirty();
         }
         self.library = next;
+    }
+
+    pub fn mark_library_dirty(&mut self) {
+        self.library_generation = self.library_generation.wrapping_add(1);
+        self.library_dirty = true;
+    }
+
+    pub fn mark_settings_dirty(&mut self) {
+        self.settings_generation = self.settings_generation.wrapping_add(1);
+        self.settings_dirty = true;
+    }
+
+    pub fn mark_practice_dirty(&mut self) {
+        self.practice_generation = self.practice_generation.wrapping_add(1);
+        self.practice_dirty = true;
+    }
+
+    /// Текущие поколения dirty-состояния (§17).
+    pub fn generations(&self) -> (i64, i64, i64) {
+        (
+            self.library_generation,
+            self.settings_generation,
+            self.practice_generation,
+        )
+    }
+
+    /// Поколения, до которых состояние считается сохранённым.
+    pub fn saved_generations(&self) -> (i64, i64, i64) {
+        (
+            self.library_saved_generation,
+            self.settings_saved_generation,
+            self.practice_saved_generation,
+        )
+    }
+
+    /// Generation-aware подтверждение записи (§17).
+    ///
+    /// Снимает dirty только до поколения N. Если текущее поколение уже N+1,
+    /// dirty остаётся true. `saved = max(saved, min(N, current))`.
+    /// Передача `None` / отрицательного значения означает «не подтверждать».
+    pub fn ack_saved(
+        &mut self,
+        library_gen: Option<i64>,
+        settings_gen: Option<i64>,
+        practice_gen: Option<i64>,
+    ) {
+        if let Some(g) = library_gen {
+            if g >= 0 {
+                let ack = g.min(self.library_generation);
+                if ack > self.library_saved_generation {
+                    self.library_saved_generation = ack;
+                }
+                // dirty = generation != saved (generation > saved)
+                self.library_dirty = self.library_generation != self.library_saved_generation;
+            }
+        }
+        if let Some(g) = settings_gen {
+            if g >= 0 {
+                let ack = g.min(self.settings_generation);
+                if ack > self.settings_saved_generation {
+                    self.settings_saved_generation = ack;
+                }
+                self.settings_dirty = self.settings_generation != self.settings_saved_generation;
+            }
+        }
+        if let Some(g) = practice_gen {
+            if g >= 0 {
+                let ack = g.min(self.practice_generation);
+                if ack > self.practice_saved_generation {
+                    self.practice_saved_generation = ack;
+                }
+                self.practice_dirty = self.practice_generation != self.practice_saved_generation;
+            }
+        }
+    }
+
+    /// Удобный ack по трём поколениям (None = не трогать).
+    pub fn ack_saved_generations(&mut self, lib: i64, set: i64, prac: i64) {
+        let lib_opt = if lib >= 0 { Some(lib) } else { None };
+        let set_opt = if set >= 0 { Some(set) } else { None };
+        let prac_opt = if prac >= 0 { Some(prac) } else { None };
+        self.ack_saved(lib_opt, set_opt, prac_opt);
     }
 
     /// Отмечает в ответе, что состояние изменилось.
@@ -1027,6 +1148,9 @@ impl Session {
             library_changed: self.library_dirty,
             settings_changed: self.settings_dirty,
             practice_changed: self.practice_dirty,
+            library_generation: Some(self.library_generation),
+            settings_generation: Some(self.settings_generation),
+            practice_generation: Some(self.practice_generation),
             ..outcome
         }
     }
@@ -1192,7 +1316,10 @@ mod tests {
         let команда_слова = r#"{"op":"saveWord","bookId":"b1","surface":"library",
             "lemma":"library","id":"c1","now":1700000000000}"#;
         session.run(команда(команда_слова));
-        session.library_dirty = false;
+        // Симулируем успешную запись поколения 1 (§17)
+        let g = session.library_generation;
+        session.ack_saved(Some(g), None, None);
+        assert!(!session.library_dirty);
 
         let outcome = session.run(команда(команда_слова));
         assert!(!outcome.changed, "запись на диск заказана зря");
@@ -1483,7 +1610,7 @@ mod tests {
         for i in 0..100 {
             phone.practice.record_answer("phone", true, NOW + i, 0);
         }
-        phone.practice_dirty = true;
+        phone.mark_practice_dirty();
         assert_eq!(phone.practice.total_answers(), 100);
 
         let mut laptop = сессия();
@@ -1541,7 +1668,7 @@ mod tests {
         for i in 0..100 {
             session.practice.record_answer("phone", true, NOW + i, 0);
         }
-        session.practice_dirty = true;
+        session.mark_practice_dirty();
         session.settings.answers = 100; // legacy mirror
 
         // приехавшие старые настройки с answers 80 не должны откатить
@@ -1574,5 +1701,133 @@ mod tests {
         let a_bc = a.merge(&b.merge(&c));
         assert_eq!(ab_c, a_bc, "associative");
         assert_eq!(ab_c.best_streak(), a_bc.best_streak());
+    }
+
+    // --- §17 Persist performance: generation-aware ack ---
+
+    #[test]
+    fn generation_increments_on_library_mutation() {
+        let mut s = сессия();
+        assert_eq!(s.library_generation, 0);
+        assert!(!s.library_dirty);
+        s.run(команда(r#"{"op":"addBook","book":{"id":"b1","title":"T","addedAt":1}}"#));
+        assert_eq!(s.library_generation, 1);
+        assert!(s.library_dirty);
+        let g1 = s.library_generation;
+        s.run(команда(r#"{"op":"addBook","book":{"id":"b2","title":"T2","addedAt":2}}"#));
+        assert_eq!(s.library_generation, 2);
+        assert!(s.library_dirty);
+        assert!(g1 < s.library_generation);
+    }
+
+    #[test]
+    fn ack_saved_only_up_to_n() {
+        let mut s = сессия();
+        s.run(команда(r#"{"op":"addBook","book":{"id":"b1","title":"T","addedAt":1}}"#));
+        let gen5 = s.library_generation;
+        assert_eq!(gen5, 1);
+        // SimulatePersist job took snapshot gen 1 and started writing
+        // While writing, another mutation arrives -> gen 2
+        s.run(команда(r#"{"op":"addBook","book":{"id":"b2","title":"T2","addedAt":2}}"#));
+        assert_eq!(s.library_generation, 2);
+        // Ack old snapshot (gen 1) should NOT clear dirty, because current is 2
+        s.ack_saved(Some(gen5), None, None);
+        assert!(s.library_dirty, "dirty must stay true after ack of old generation while newer exists");
+        assert_eq!(s.library_saved_generation, 1);
+        // Now ack current generation => dirty cleared
+        s.ack_saved(Some(s.library_generation), None, None);
+        assert!(!s.library_dirty);
+        assert_eq!(s.library_saved_generation, s.library_generation);
+    }
+
+    #[test]
+    fn ack_with_monotonic_saved() {
+        let mut s = сессия();
+        s.run(команда(r#"{"op":"setTheme","theme":"Dark"}"#));
+        assert_eq!(s.settings_generation, 1);
+        s.ack_saved(None, Some(1), None);
+        assert!(!s.settings_dirty);
+        // Old ack should be ignored (saved stays at 1)
+        s.run(команда(r#"{"op":"setTheme","theme":"Sepia"}"#));
+        assert_eq!(s.settings_generation, 2);
+        assert!(s.settings_dirty);
+        s.ack_saved(None, Some(1), None); // stale
+        assert!(s.settings_dirty, "stale ack must not clear newer dirty");
+        assert_eq!(s.settings_saved_generation, 1);
+        s.ack_saved(None, Some(2), None);
+        assert!(!s.settings_dirty);
+    }
+
+    #[test]
+    fn conflation_writing_20_queue_21_24() {
+        let mut s = сессия();
+        // Simulate generation 20 as current saved =20, next mutation 21..24 while writing 20
+        // Start with gen 20 already acked, then mutate to 21..24
+        // For test, manually set generations to mimic.
+        s.library_generation = 20;
+        s.library_saved_generation = 20;
+        s.library_dirty = false;
+        // Mutate to 21
+        s.run(команда(r#"{"op":"addBook","book":{"id":"b1","title":"T","addedAt":1}}"#));
+        assert_eq!(s.library_generation, 21);
+        // Simulate writer took snapshot 21 and started writing; queue receives 22,23,24
+        // We do those mutations:
+        s.run(команда(r#"{"op":"addBook","book":{"id":"b2","title":"T2","addedAt":2}}"#));
+        assert_eq!(s.library_generation, 22);
+        s.run(команда(r#"{"op":"addBook","book":{"id":"b3","title":"T3","addedAt":3}}"#));
+        assert_eq!(s.library_generation, 23);
+        s.run(команда(r#"{"op":"addBook","book":{"id":"b4","title":"T4","addedAt":4}}"#));
+        assert_eq!(s.library_generation, 24);
+        assert!(s.library_dirty);
+        // Writer finishes 21, ack 21 -> dirty must stay true (because 24 pending)
+        s.ack_saved(Some(21), None, None);
+        assert!(s.library_dirty, "after ack 21, dirty must stay because 24 pending");
+        assert_eq!(s.library_saved_generation, 21);
+        // Coalesce: we don't need to write 22,23 separately, just 24.
+        // Simulate writing 24 directly (skipping 22,23)
+        s.ack_saved(Some(24), None, None);
+        assert!(!s.library_dirty, "after ack 24, dirty cleared");
+        assert_eq!(s.library_saved_generation, 24);
+        // Ensure we didn't delete snapshot 24 before written: we acked 24 after writing, not before.
+        // If we had cleared pending incorrectly, we would have lost data — test passes if dirty cleared only after ack.
+    }
+
+    #[test]
+    fn outcome_carries_generations() {
+        let mut s = сессия();
+        let out = s.run(команда(r#"{"op":"setTheme","theme":"Dark"}"#));
+        assert!(out.settings_changed);
+        assert_eq!(out.settings_generation, Some(1));
+        assert_eq!(s.settings_generation, 1);
+        // second change
+        let out2 = s.run(команда(r#"{"op":"setTheme","theme":"Sepia"}"#));
+        assert_eq!(out2.settings_generation, Some(2));
+    }
+
+    #[test]
+    fn practice_generation_ack() {
+        let mut s = сессия();
+        s.run(команда(r#"{"op":"saveWord","bookId":"b1","surface":"w","lemma":"w","id":"c1","now":1}"#));
+        // need a card to review
+        let before = s.practice_generation;
+        s.run(команда(r#"{"op":"review","cardId":"c1","right":true,"now":1000,"offsetMinutes":0,"deviceId":"d1"}"#));
+        assert!(s.practice_generation > before);
+        assert!(s.practice_dirty);
+        let g = s.practice_generation;
+        // mutate again
+        s.run(команда(r#"{"op":"saveWord","bookId":"b1","surface":"w2","lemma":"w2","id":"c2","now":2}"#));
+        // Ack old practice gen should not clear current
+        s.ack_saved(None, None, Some(g));
+        // Since we acked up to g, but current generation may have advanced? Need to check.
+        // In this scenario second mutation didn't affect practice (saveWord only affects library), so practice gen still g
+        // So dirty should still be true until we ack g again? Actually second mutation didn't bump practice, so still g.
+        // Let's bump practice again
+        s.run(команда(r#"{"op":"review","cardId":"c2","right":true,"now":2000,"offsetMinutes":0,"deviceId":"d1"}"#));
+        let g2 = s.practice_generation;
+        assert!(g2 > g);
+        s.ack_saved(None, None, Some(g));
+        assert!(s.practice_dirty, "old ack must not clear newer");
+        s.ack_saved(None, None, Some(g2));
+        assert!(!s.practice_dirty);
     }
 }

@@ -3,10 +3,13 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/wolfy/server/internal/annotations"
 )
 
 // Book — книга библиотеки так, как её хранит сервер.
@@ -94,8 +97,33 @@ func (s *Store) NextRev(ctx context.Context, tx pgx.Tx, userID string) (int64, e
 // прогресс», присланный с копии, не знавшей об удалении, — разные вещи, и
 // различает их ревизия, которую устройство видело. Книга возвращается к жизни
 // только когда пришедшая версия подтверждает, что tombstone был виден.
+//
+// §5 Variant A: детерминированный canonical id из source_key (Rust).
+// Две офлайн-книги (id=A, id=B, один HASH) обязаны сойтись к одному
+// логическому id = canonical(HASH). Сервер хранит unique (user_id, source_key)
+// и не может иметь два id на один HASH. При конфликте source_key с разным id
+// выполняется alias-merge: карточки, аннотации и устройства перепривязываются
+// к пришедшему canonical id, старая книга удаляется. Без этого вторая офлайн-
+// отправка падала бы на unique violation с потерей прогресса.
 func (s *Store) SaveBooks(ctx context.Context, tx pgx.Tx, userID string, rev int64, books []Book) error {
 	for _, book := range books {
+		// §5 alias: если такой source_key уже есть под другим id — сливаем к пришедшему id
+		if book.SourceKey != "" {
+			var oldID string
+			err := tx.QueryRow(ctx, `
+                SELECT id::text FROM wolfy.books
+                 WHERE user_id = $1 AND source_key = $2 AND source_key <> '' AND id <> $3::uuid`,
+				userID, book.SourceKey, book.ID).Scan(&oldID)
+			if err == nil {
+				// Перепривязка зависимостей к новому canonical id
+				if err := s.rebindBookAlias(ctx, tx, userID, oldID, book.ID); err != nil {
+					return fmt.Errorf("перепривязка книги %s -> %s: %w", oldID, book.ID, err)
+				}
+			} else if !errors.Is(err, pgx.ErrNoRows) {
+				return fmt.Errorf("проверка source_key %s: %w", book.SourceKey, err)
+			}
+		}
+
 		var deletedAt any
 		if book.Deleted {
 			deletedAt = time.Now()
@@ -133,13 +161,145 @@ func (s *Store) SaveBooks(ctx context.Context, tx pgx.Tx, userID string, rev int
 	return nil
 }
 
+// rebindBookAlias перепривязывает карточки, аннотации и устройства со старого
+// book id к новому canonical id, разрешая конфликты без потери данных.
+// Вызывается внутри транзакции Sync до вставки новой книги.
+func (s *Store) rebindBookAlias(ctx context.Context, tx pgx.Tx, userID, oldID, newID string) error {
+	// Карточки: удалить дубликаты по (kind, lemma) где lemma непуст и not deleted,
+	// чтобы последующий UPDATE не словил unique violation
+	if _, err := tx.Exec(ctx, `
+        DELETE FROM wolfy.cards AS old
+        USING wolfy.cards AS nw
+        WHERE old.user_id = $1 AND old.book_id = $2::uuid
+          AND nw.user_id = $1 AND nw.book_id = $3::uuid
+          AND old.kind = nw.kind AND old.lemma = nw.lemma
+          AND old.lemma <> '' AND old.deleted_at IS NULL AND nw.deleted_at IS NULL`,
+		userID, oldID, newID); err != nil {
+		return fmt.Errorf("чистка дублей карточек: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+        UPDATE wolfy.cards SET book_id = $3::uuid
+         WHERE user_id = $1 AND book_id = $2::uuid`,
+		userID, oldID, newID); err != nil {
+		return fmt.Errorf("перепривязка карточек: %w", err)
+	}
+
+	// Устройства аннотаций: удалить дубликаты по device_id
+	if _, err := tx.Exec(ctx, `
+        DELETE FROM wolfy.book_annotations_devices AS old
+        USING wolfy.book_annotations_devices AS nw
+        WHERE old.user_id = $1 AND old.book_id = $2
+          AND nw.user_id = $1 AND nw.book_id = $3 AND nw.device_id = old.device_id`,
+		userID, oldID, newID); err != nil {
+		return fmt.Errorf("чистка дублей устройств: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+        UPDATE wolfy.book_annotations_devices SET book_id = $3
+         WHERE user_id = $1 AND book_id = $2`,
+		userID, oldID, newID); err != nil {
+		return fmt.Errorf("перепривязка устройств: %w", err)
+	}
+
+	// Аннотации: слить items по правилам annotations.Merge
+	var oldRaw, newRaw []byte
+	var oldGen, newGen int64
+	var oldExists, newExists bool
+
+	err := tx.QueryRow(ctx, `SELECT items, generation FROM wolfy.book_annotations WHERE user_id=$1 AND book_id=$2`, userID, oldID).Scan(&oldRaw, &oldGen)
+	if err == nil {
+		oldExists = true
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("чтение старых аннотаций: %w", err)
+	}
+	err = tx.QueryRow(ctx, `SELECT items, generation FROM wolfy.book_annotations WHERE user_id=$1 AND book_id=$2`, userID, newID).Scan(&newRaw, &newGen)
+	if err == nil {
+		newExists = true
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("чтение новых аннотаций: %w", err)
+	}
+
+	if oldExists {
+		if newExists {
+			var oldItems, newItems []annotations.Item
+			if len(oldRaw) > 0 {
+				if err := json.Unmarshal(oldRaw, &oldItems); err != nil {
+					return fmt.Errorf("разбор старых аннотаций: %w", err)
+				}
+			}
+			if len(newRaw) > 0 {
+				if err := json.Unmarshal(newRaw, &newItems); err != nil {
+					return fmt.Errorf("разбор новых аннотаций: %w", err)
+				}
+			}
+			merged := annotations.Merge(oldItems, newItems)
+			payload, err := json.Marshal(merged)
+			if err != nil {
+				return fmt.Errorf("сериализация аннотаций: %w", err)
+			}
+			mergedGen := oldGen
+			if newGen > mergedGen {
+				mergedGen = newGen
+			}
+			// Поколение штампуется заново, если было слияние
+			mergedGen++
+			for i := range merged {
+				merged[i].Generation = mergedGen
+			}
+			// Перезаписать merged под newID
+			payload, _ = json.Marshal(merged)
+			if _, err := tx.Exec(ctx, `UPDATE wolfy.book_annotations SET items=$3, generation=$4, updated_at=now() WHERE user_id=$1 AND book_id=$2`, userID, newID, payload, mergedGen); err != nil {
+				return fmt.Errorf("обновление слитых аннотаций: %w", err)
+			}
+			if _, err := tx.Exec(ctx, `DELETE FROM wolfy.book_annotations WHERE user_id=$1 AND book_id=$2`, userID, oldID); err != nil {
+				return fmt.Errorf("удаление старых аннотаций: %w", err)
+			}
+		} else {
+			// Просто перепривязать старую строку к новому id
+			if _, err := tx.Exec(ctx, `UPDATE wolfy.book_annotations SET book_id=$3 WHERE user_id=$1 AND book_id=$2`, userID, oldID, newID); err != nil {
+				return fmt.Errorf("перепривязка аннотаций: %w", err)
+			}
+		}
+	}
+	// Удалить старую книгу (если осталась пустая строка после перепривязки)
+	if _, err := tx.Exec(ctx, `DELETE FROM wolfy.books WHERE user_id=$1 AND id=$2::uuid`, userID, oldID); err != nil {
+		return fmt.Errorf("удаление старой книги: %w", err)
+	}
+	return nil
+}
+
 // SaveCards записывает карточки. Книги обязаны быть записаны раньше: у карточки
 // внешний ключ на книгу, и порядок здесь не украшение.
 //
 // Защита от воскрешения та же, что у книг: устаревшая живая копия не снимает
 // пометку удаления, если ревизия, которую устройство видело, старше.
+//
+// §5: если две офлайн-книги слились к canonical, их карточки с одним lemma
+// тоже схлопываются. Дубликат по (kind, lemma, book_id) не должен падать на
+// unique violation: второй сохраняется как обновление первого (last writer wins).
 func (s *Store) SaveCards(ctx context.Context, tx pgx.Tx, userID string, rev int64, cards []Card) error {
 	for _, card := range cards {
+		// §5 dedup дубля lemma после каноникализации книги
+		if card.Lemma != "" && !card.Deleted {
+			var dupID string
+			// book_id может быть пустым (общая колода) — сравниваем через COALESCE
+			var qBookID any
+			if card.BookID != "" {
+				qBookID = card.BookID
+			}
+			errDup := tx.QueryRow(ctx, `
+                SELECT id::text FROM wolfy.cards
+                 WHERE user_id=$1 AND kind=$2 AND lemma=$3
+                   AND COALESCE(book_id::text,'') = COALESCE($4::text,'')
+                   AND deleted_at IS NULL AND id <> $5::uuid`,
+				userID, kindOr(card.Kind), card.Lemma, qBookID, card.ID).Scan(&dupID)
+			if errDup == nil {
+				// Переписываем id на существующий, чтобы ON CONFLICT (id) обновил его
+				card.ID = dupID
+			} else if !errors.Is(errDup, pgx.ErrNoRows) {
+				return fmt.Errorf("проверка дубля карточки %s: %w", card.ID, errDup)
+			}
+		}
+
 		var deletedAt any
 		if card.Deleted {
 			deletedAt = time.Now()

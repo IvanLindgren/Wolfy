@@ -524,6 +524,7 @@ export interface Outcome {
   changed: boolean
   libraryChanged: boolean
   settingsChanged: boolean
+  practiceChanged?: boolean
   /** Что делать с добавляемой книгой: `known`, `attach`, `revive` или `fresh`. */
   plan?: 'known' | 'attach' | 'revive' | 'fresh'
   bookId?: string
@@ -547,9 +548,21 @@ export interface Outcome {
    * втором случае нужен сетевой fallback.
    */
   dictionaryAvailable?: boolean
+  /** Поколения §17 Persist performance — для generation-aware ack. */
+  libraryGeneration?: number
+  settingsGeneration?: number
+  practiceGeneration?: number
+  practice?: unknown
 }
 
 export interface DirtyFlags {
   library: boolean
   settings: boolean
+  practice?: boolean
+  libraryGeneration?: number
+  settingsGeneration?: number
+  practiceGeneration?: number
+  librarySavedGeneration?: number
+  settingsSavedGeneration?: number
+  practiceSavedGeneration?: number
 }

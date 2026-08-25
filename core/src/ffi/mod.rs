@@ -658,9 +658,12 @@ pub extern "C" fn wolfy_session_settings(handle: i64) -> *mut c_char {
 
 /// Что изменилось с последней записи на диск.
 ///
-/// Отвечает `{"library":bool,"settings":bool,"practice":bool}`. Считает ядро, а не клиент:
+/// Отвечает `{"library":bool,"settings":bool,"practice":bool,"libraryGeneration":i64,"settingsGeneration":i64,"practiceGeneration":i64}`.
+/// Считает ядро, а не клиент:
 /// только оно знает, изменила ли команда хоть что-нибудь, — повторное
 /// сохранение слова, которое уже в колоде, не меняет ничего.
+/// Генерации нужны для §17 Persist performance: клиент сохраняет снапшот
+/// поколения N и подтверждает `ackSaved(N)`, чтобы не потерять мутацию N+1.
 ///
 /// # Safety
 /// `handle` — номер, выданный [`wolfy_session_open`] и ещё не закрытый.
@@ -672,6 +675,12 @@ pub extern "C" fn wolfy_session_dirty(handle: i64) -> *mut c_char {
                 "library": session.library_dirty,
                 "settings": session.settings_dirty,
                 "practice": session.practice_dirty,
+                "libraryGeneration": session.library_generation,
+                "settingsGeneration": session.settings_generation,
+                "practiceGeneration": session.practice_generation,
+                "librarySavedGeneration": session.library_saved_generation,
+                "settingsSavedGeneration": session.settings_saved_generation,
+                "practiceSavedGeneration": session.practice_saved_generation,
             }))
         })?
     })
@@ -683,6 +692,10 @@ pub extern "C" fn wolfy_session_dirty(handle: i64) -> *mut c_char {
 /// «файл лёг на диск» запись может не удаться, и снимать пометку до того, как
 /// это подтвердилось, значит однажды потерять главу.
 ///
+/// §17 Generation-aware: старый API без поколений подтверждает текущее поколение
+/// (синхронный клиент без гонки). Для гонки с фоновой записью используйте
+/// `wolfy_session_ack_saved` с конкретным поколением снапшота.
+///
 /// # Safety
 /// `handle` — номер, выданный [`wolfy_session_open`] и ещё не закрытый.
 #[no_mangle]
@@ -690,10 +703,12 @@ pub extern "C" fn wolfy_session_saved(handle: i64, library: bool, settings: bool
     let _ = catch_unwind(AssertUnwindSafe(|| {
         with_session(handle, |session| {
             if library {
-                session.library_dirty = false;
+                let g = session.library_generation;
+                session.ack_saved(Some(g), None, None);
             }
             if settings {
-                session.settings_dirty = false;
+                let g = session.settings_generation;
+                session.ack_saved(None, Some(g), None);
             }
         });
     }));
@@ -703,6 +718,7 @@ pub extern "C" fn wolfy_session_saved(handle: i64, library: bool, settings: bool
 ///
 /// Новый клиент должен звать эту функцию (3 флага), а не `wolfy_session_saved`.
 /// Старая `wolfy_session_saved` оставлена для совместимости.
+/// Для §17 используйте `wolfy_session_ack_saved` с поколениями.
 ///
 /// # Safety
 /// `handle` — номер, выданный [`wolfy_session_open`] и ещё не закрытый.
@@ -716,16 +732,67 @@ pub extern "C" fn wolfy_session_saved_with_practice(
     let _ = catch_unwind(AssertUnwindSafe(|| {
         with_session(handle, |session| {
             if library {
-                session.library_dirty = false;
+                let g = session.library_generation;
+                session.ack_saved(Some(g), None, None);
             }
             if settings {
-                session.settings_dirty = false;
+                let g = session.settings_generation;
+                session.ack_saved(None, Some(g), None);
             }
             if practice {
-                session.practice_dirty = false;
+                let g = session.practice_generation;
+                session.ack_saved(None, None, Some(g));
             }
         });
     }));
+}
+
+/// Generation-aware подтверждение записи (§17).
+///
+/// `library_gen`, `settings_gen`, `practice_gen` — поколения снапшотов,
+/// которые успешно записаны на диск. `-1` означает «не подтверждать этот домен».
+/// Dirty снимается только до N: если текущее поколение уже N+1, dirty остаётся true.
+///
+/// # Safety
+/// `handle` — номер, выданный [`wolfy_session_open`] и ещё не закрытый.
+#[no_mangle]
+pub extern "C" fn wolfy_session_ack_saved(
+    handle: i64,
+    library_gen: i64,
+    settings_gen: i64,
+    practice_gen: i64,
+) {
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        with_session(handle, |session| {
+            let lib = if library_gen >= 0 { Some(library_gen) } else { None };
+            let set = if settings_gen >= 0 { Some(settings_gen) } else { None };
+            let prac = if practice_gen >= 0 { Some(practice_gen) } else { None };
+            session.ack_saved(lib, set, prac);
+        });
+    }));
+}
+
+/// Текущие поколения dirty-состояния (§17).
+///
+/// Отвечает `{"library":i64,"settings":i64,"practice":i64,
+/// "librarySaved":i64,"settingsSaved":i64,"practiceSaved":i64}`.
+///
+/// # Safety
+/// `handle` — номер, выданный [`wolfy_session_open`] и ещё не закрытый.
+#[no_mangle]
+pub extern "C" fn wolfy_session_generations(handle: i64) -> *mut c_char {
+    guard(|| {
+        with_session(handle, |session| {
+            to_json(&serde_json::json!({
+                "library": session.library_generation,
+                "settings": session.settings_generation,
+                "practice": session.practice_generation,
+                "librarySaved": session.library_saved_generation,
+                "settingsSaved": session.settings_saved_generation,
+                "practiceSaved": session.practice_saved_generation,
+            }))
+        })?
+    })
 }
 
 /// Практика целиком — то, что клиент пишет на диск как `practice.json`.

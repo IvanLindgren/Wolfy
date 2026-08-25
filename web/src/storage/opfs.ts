@@ -162,8 +162,10 @@ export async function readBook(path: string): Promise<Uint8Array | null> {
 
 export const LIBRARY_PATH = `${STATE}/library.json`
 export const SETTINGS_PATH = `${STATE}/settings.json`
+export const PRACTICE_PATH = `${STATE}/practice.json`
 export const LIBRARY_BACKUP = `${LIBRARY_PATH}.bak`
 export const SETTINGS_BACKUP = `${SETTINGS_PATH}.bak`
+export const PRACTICE_BACKUP = `${PRACTICE_PATH}.bak`
 
 /**
  * Атомарная запись маленького состояния (library/settings/practice).
@@ -207,7 +209,7 @@ function isValidJsonText(s: string | null): boolean {
 /**
  * Читает сырые primary + backup для восстановления.
  *
- * Возвращает все четыре строки; выбор лучшего делает вызывающий через
+ * Возвращает все шесть строк; выбор лучшего делает вызывающий через
  * strict-открытие Rust (чтобы проверка была канонической, а не дублированной
  * в JS). Для быстрой предпроверки можно использовать `isValidJsonText`.
  */
@@ -216,15 +218,32 @@ export async function readStateRaw(): Promise<{
   libraryBackup: string | null
   settingsPrimary: string | null
   settingsBackup: string | null
+  practicePrimary: string | null
+  practiceBackup: string | null
 }> {
-  const [libraryPrimary, libraryBackup, settingsPrimary, settingsBackup] =
-    await Promise.all([
-      readText(LIBRARY_PATH),
-      readText(LIBRARY_BACKUP),
-      readText(SETTINGS_PATH),
-      readText(SETTINGS_BACKUP),
-    ])
-  return { libraryPrimary, libraryBackup, settingsPrimary, settingsBackup }
+  const [
+    libraryPrimary,
+    libraryBackup,
+    settingsPrimary,
+    settingsBackup,
+    practicePrimary,
+    practiceBackup,
+  ] = await Promise.all([
+    readText(LIBRARY_PATH),
+    readText(LIBRARY_BACKUP),
+    readText(SETTINGS_PATH),
+    readText(SETTINGS_BACKUP),
+    readText(PRACTICE_PATH),
+    readText(PRACTICE_BACKUP),
+  ])
+  return {
+    libraryPrimary,
+    libraryBackup,
+    settingsPrimary,
+    settingsBackup,
+    practicePrimary,
+    practiceBackup,
+  }
 }
 
 /**
@@ -237,13 +256,15 @@ export async function readStateRaw(): Promise<{
 export async function readStateWithRecovery(): Promise<{
   library: string | null
   settings: string | null
+  practice: string | null
   recoveredFromBackup: boolean
-  backupUsedFor: ('library' | 'settings')[]
+  backupUsedFor: ('library' | 'settings' | 'practice')[]
 }> {
   const raw = await readStateRaw()
   let library = raw.libraryPrimary
   let settings = raw.settingsPrimary
-  const backupUsedFor: ('library' | 'settings')[] = []
+  let practice = raw.practicePrimary
+  const backupUsedFor: ('library' | 'settings' | 'practice')[] = []
 
   if (!isValidJsonText(library) && isValidJsonText(raw.libraryBackup)) {
     library = raw.libraryBackup
@@ -257,9 +278,15 @@ export async function readStateWithRecovery(): Promise<{
     backupUsedFor.push('settings')
   }
 
+  if (!isValidJsonText(practice) && isValidJsonText(raw.practiceBackup)) {
+    practice = raw.practiceBackup
+    backupUsedFor.push('practice')
+  }
+
   return {
     library,
     settings,
+    practice,
     recoveredFromBackup: backupUsedFor.length > 0,
     backupUsedFor,
   }
@@ -268,10 +295,11 @@ export async function readStateWithRecovery(): Promise<{
 export async function readState(): Promise<{
   library: string | null
   settings: string | null
+  practice: string | null
 }> {
   // Для совместимости: старый readState теперь делает recovery.
   const recovered = await readStateWithRecovery()
-  return { library: recovered.library, settings: recovered.settings }
+  return { library: recovered.library, settings: recovered.settings, practice: recovered.practice }
 }
 
 // --- Место -----------------------------------------------------------------

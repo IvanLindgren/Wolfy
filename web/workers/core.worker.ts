@@ -55,6 +55,7 @@ import {
 } from '../src/storage/assets'
 import {
   LIBRARY_PATH,
+  PRACTICE_PATH,
   SETTINGS_PATH,
   bookPath,
   readBook,
@@ -105,11 +106,15 @@ async function ensure(): Promise<void> {
       // Try strict open with primary first, then fallback to backup combos.
       // At startup: primary valid -> primary, primary broken + backup valid -> backup,
       // оба broken -> explicit error/recovery UI, а не молчаливый Default.
-      const candidates: Array<{ lib: string | null; set: string | null }> = [
-        { lib: raw.libraryPrimary, set: raw.settingsPrimary },
-        { lib: raw.libraryBackup, set: raw.settingsPrimary },
-        { lib: raw.libraryPrimary, set: raw.settingsBackup },
-        { lib: raw.libraryBackup, set: raw.settingsBackup },
+      const candidates: Array<{ lib: string | null; set: string | null; prac: string | null }> = [
+        { lib: raw.libraryPrimary, set: raw.settingsPrimary, prac: raw.practicePrimary },
+        { lib: raw.libraryBackup, set: raw.settingsPrimary, prac: raw.practicePrimary },
+        { lib: raw.libraryPrimary, set: raw.settingsBackup, prac: raw.practicePrimary },
+        { lib: raw.libraryPrimary, set: raw.settingsPrimary, prac: raw.practiceBackup },
+        { lib: raw.libraryBackup, set: raw.settingsBackup, prac: raw.practicePrimary },
+        { lib: raw.libraryBackup, set: raw.settingsPrimary, prac: raw.practiceBackup },
+        { lib: raw.libraryPrimary, set: raw.settingsBackup, prac: raw.practiceBackup },
+        { lib: raw.libraryBackup, set: raw.settingsBackup, prac: raw.practiceBackup },
       ]
 
       // Быстрый путь: если primary не битый по JSON-синтаксису, пробуем его сначала.
@@ -121,10 +126,10 @@ async function ensure(): Promise<void> {
         try {
           // WolfySession.tryNew отсутствует в старых сборках wasm — падаем в lenient.
           const tryNew = (WolfySession as unknown as {
-            tryNew?: (lib?: string, set?: string) => WolfySession
+            tryNew?: (lib?: string, set?: string, prac?: string) => WolfySession
           }).tryNew
           if (typeof tryNew === 'function') {
-            session = tryNew.call(WolfySession, c.lib ?? undefined, c.set ?? undefined)
+            session = tryNew.call(WolfySession, c.lib ?? undefined, c.set ?? undefined, c.prac ?? undefined)
           } else {
             // Fallback для старой wasm без strict: пробуем lenient только если
             // primary не был битым по нашей JS-проверке (чтобы не маскировать битый).
@@ -132,10 +137,12 @@ async function ensure(): Promise<void> {
               c.lib !== null && c.lib.trim() !== '' && !isValidJson(c.lib)
             const isSetCorrupted =
               c.set !== null && c.set.trim() !== '' && !isValidJson(c.set)
-            if (isLibCorrupted || isSetCorrupted) continue
-            session = new WolfySession(c.lib ?? undefined, c.set ?? undefined)
+            const isPracCorrupted =
+              c.prac !== null && c.prac.trim() !== '' && !isValidJson(c.prac)
+            if (isLibCorrupted || isSetCorrupted || isPracCorrupted) continue
+            session = new WolfySession(c.lib ?? undefined, c.set ?? undefined, c.prac ?? undefined)
           }
-          if (c.lib !== raw.libraryPrimary || c.set !== raw.settingsPrimary) {
+          if (c.lib !== raw.libraryPrimary || c.set !== raw.settingsPrimary || c.prac !== raw.practicePrimary) {
             console.warn('Session recovered from backup slot', c)
             recoveredFromBackup = true
           }
@@ -151,6 +158,15 @@ async function ensure(): Promise<void> {
               }
               if (c.set !== raw.settingsPrimary) {
                 await writeStateAtomic(SETTINGS_PATH, cur.settings())
+              }
+              if (c.prac !== raw.practicePrimary) {
+                // practice может отсутствовать в старой сессии — проверяем наличие метода
+                const maybePractice = (cur as unknown as { practice?: () => string }).practice
+                if (typeof maybePractice === 'function') {
+                  try {
+                    await writeStateAtomic(PRACTICE_PATH, maybePractice.call(cur))
+                  } catch {}
+                }
               }
             } catch (e) {
               console.warn('Failed to heal primary from backup', e)
@@ -169,6 +185,8 @@ async function ensure(): Promise<void> {
           raw.libraryBackup,
           raw.settingsPrimary,
           raw.settingsBackup,
+          raw.practicePrimary,
+          raw.practiceBackup,
         ].some((v) => v !== null && v.trim() !== '')
         if (hasAnyData) {
           throw new Error(
@@ -177,12 +195,12 @@ async function ensure(): Promise<void> {
         }
         // Совсем нет данных — первый запуск, открываем пустую сессию.
         const tryNew = (WolfySession as unknown as {
-          tryNew?: (lib?: string, set?: string) => WolfySession
+          tryNew?: (lib?: string, set?: string, prac?: string) => WolfySession
         }).tryNew
         if (typeof tryNew === 'function') {
-          session = tryNew.call(WolfySession, undefined, undefined)
+          session = tryNew.call(WolfySession, undefined, undefined, undefined)
         } else {
-          session = new WolfySession(undefined, undefined)
+          session = new WolfySession(undefined, undefined, undefined)
         }
       }
     })()
@@ -219,11 +237,45 @@ function current(): WolfySession {
 async function persist(outcome: Outcome): Promise<void> {
   if (!outcome.changed) return
   const core = current()
-  const writes: Promise<unknown>[] = []
-  if (outcome.libraryChanged) writes.push(writeStateAtomic(LIBRARY_PATH, core.library()))
-  if (outcome.settingsChanged) writes.push(writeStateAtomic(SETTINGS_PATH, core.settings()))
+  // Generation-aware (§17): snapshot generation N + ackSaved(N) — не теряем N+1 пока пишется N.
+  const libGen = outcome.libraryGeneration ?? -1
+  const setGen = outcome.settingsGeneration ?? -1
+  const pracGen = outcome.practiceGeneration ?? -1
+
+  const writes: Promise<void>[] = []
+  if (outcome.libraryChanged) {
+    // Сериализация уже на воркере, не на главном потоке — приемлемо.
+    const libJson = core.library()
+    writes.push(writeStateAtomic(LIBRARY_PATH, libJson))
+  }
+  if (outcome.settingsChanged) {
+    const setJson = core.settings()
+    writes.push(writeStateAtomic(SETTINGS_PATH, setJson))
+  }
+  if (outcome.practiceChanged) {
+    const maybePractice = (core as unknown as { practice?: () => string }).practice
+    if (typeof maybePractice === 'function') {
+      try {
+        const pracJson = maybePractice.call(core)
+        writes.push(writeStateAtomic(PRACTICE_PATH, pracJson))
+      } catch {}
+    }
+  }
   await Promise.all(writes)
-  core.saved(outcome.libraryChanged, outcome.settingsChanged)
+  // Ack только те домены, которые действительно записали, с их поколением.
+  // Если за время записи пришло новое изменение (generation N+1), ack(N) оставит dirty true.
+  const ack = (core as unknown as { ackSaved?: (l: number, s: number, p: number) => void; saved?: (l: boolean, s: boolean) => void; savedWithPractice?: (l: boolean, s: boolean, p: boolean) => void })
+  if (typeof ack.ackSaved === 'function') {
+    ack.ackSaved(
+      outcome.libraryChanged ? libGen : -1,
+      outcome.settingsChanged ? setGen : -1,
+      outcome.practiceChanged ? pracGen : -1,
+    )
+  } else if (typeof ack.savedWithPractice === 'function' && outcome.practiceChanged) {
+    ack.savedWithPractice(!!outcome.libraryChanged, !!outcome.settingsChanged, !!outcome.practiceChanged)
+  } else if (typeof ack.saved === 'function') {
+    ack.saved(!!outcome.libraryChanged, !!outcome.settingsChanged)
+  }
 }
 
 const api = {

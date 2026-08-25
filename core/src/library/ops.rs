@@ -111,7 +111,22 @@ pub fn revive_book(state: &LibraryState, id: &str, path: &str, fingerprint: &str
 }
 
 /// Кладёт в библиотеку готовую запись книги.
+///
+/// Если у книги есть `source_key`, её id заменяется на детерминированный
+/// canonical id (§5 Variant A): один и тот же файл на двух офлайн-устройствах
+/// получает один id, и серверный unique (user_id, source_key) не ловит конфликт.
+/// Kotlin/TS по-прежнему шлют случайный id, но Rust его переопределяет.
+/// Пустой source_key не канонизируется — это «отпечаток снять не удалось».
 pub fn add_book(state: &LibraryState, book: LibraryBook) -> LibraryState {
+    let mut book = book;
+    if let Some(canonical) = super::book::canonical_book_id(&book.source_key) {
+        book.id = canonical;
+    }
+    // Если такая книга уже есть (гонка plan_add vs фактическая вставка, или
+    // повторный add после синхронизации), не заводим дубликат — считаем attach.
+    if state.books.iter().any(|b| b.id == book.id) {
+        return state.clone();
+    }
     let mut books = state.books.clone();
     books.push(book);
     LibraryState {

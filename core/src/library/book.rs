@@ -129,6 +129,72 @@ impl LibraryBook {
     }
 }
 
+/// Канонический ID книги по source_key — Variant A §5.
+///
+/// Rust — единственный владелец бизнес-правил, поэтому именно Rust определяет
+/// канонический ID из source_key, а не Kotlin/TS. Один и тот же файл,
+/// добавленный офлайн на двух устройствах с разными случайными id (A и B, один
+/// HASH), после синхронизации должен сойтись к одному логическому id.
+///
+/// Выбор: детерминированный UUID v5-ish из source_key (FNV-1a 128 -> UUID).
+/// Пустой source_key не канонизируется — это «отпечаток снять не удалось», и
+/// склеивать по нему нельзя. Для существующих случайных id нужна миграция
+/// old->canonical с перепривязкой cards (см. `crate::library::merge::migrate_to_canonical`).
+/// Сервер при этом не дропает unique index и не делает ON CONFLICT DO NOTHING;
+/// он хранит unique (user_id, source_key) и при конфликте — canonical-alias
+/// обработка в `server/internal/store/sync.go`.
+///
+/// Альтернатива Variant B — server alias — потребовала бы протокол oldId->canonicalId
+/// и атомарную переписку ссылок на клиенте для всех связанных сущностей (cards,
+/// annotations, path-local). При детерминированном ID достаточно локальной
+/// миграции и серверного merge без расширения протокола, что меньше и безопаснее.
+///
+/// UUID форматируется как 8-4-4-4-12 hex, версия 5 (0101) и вариант 10xx, чтобы
+/// пройти серверный `uuidPattern` и отличаться от случайных v4.
+pub fn canonical_book_id(source_key: &str) -> Option<String> {
+    if source_key.is_empty() {
+        return None;
+    }
+    // FNV-1a 64-bit x2 -> 128 bit, детерминировано и без зависимостей.
+    fn fnv1a_64(data: &[u8], mut hash: u64) -> u64 {
+        const PRIME: u64 = 1099511628211;
+        for b in data {
+            hash ^= *b as u64;
+            hash = hash.wrapping_mul(PRIME);
+        }
+        hash
+    }
+    let h1 = fnv1a_64(source_key.as_bytes(), 14695981039346656037);
+    // второй хеш с другим seed чтобы получить независимые 64 бита
+    let h2 = fnv1a_64(source_key.as_bytes(), 1099511628211 ^ 14695981039346656037);
+    let mut bytes = [0u8; 16];
+    bytes[0..8].copy_from_slice(&h1.to_be_bytes());
+    bytes[8..16].copy_from_slice(&h2.to_be_bytes());
+    // версия 5
+    bytes[6] = (bytes[6] & 0x0f) | 0x50;
+    // вариант 10xx
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Some(format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15]
+    ))
+}
+
 /// Полка: имя, под которым читатель сложил несколько книг вместе.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

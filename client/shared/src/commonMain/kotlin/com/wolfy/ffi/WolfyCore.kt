@@ -151,6 +151,27 @@ interface WolfyCore {
      */
     fun sessionSaved(handle: Long, library: Boolean, settings: Boolean)
 
+    /** Тоже, включая practice (§6). */
+    fun sessionSavedWithPractice(handle: Long, library: Boolean, settings: Boolean, practice: Boolean)
+
+    /** Практика целиком — отдельный файл practice.json (§6). */
+    fun sessionPractice(handle: Long): String
+
+    /** Что изменилось + поколения (§17). JSON {"library":bool,"settings":bool,"practice":bool,"libraryGeneration":...} */
+    fun sessionDirty(handle: Long): String
+
+    /** Текущие поколения (§17). JSON {"library":i64,"settings":i64,"practice":i64,"librarySaved":...} */
+    fun sessionGenerations(handle: Long): String
+
+    /** Generation-aware ack (§17): -1 = не подтверждать домен. */
+    fun sessionAckSaved(handle: Long, libraryGen: Long, settingsGen: Long, practiceGen: Long)
+
+    /** Открывает сессию с явным practice (отдельный файл). */
+    fun openSessionWithPractice(library: String?, settings: String?, practice: String?): Long
+
+    /** Строгое открытие с practice. */
+    fun openSessionStrictWithPractice(library: String?, settings: String?, practice: String?): Long
+
     /** Закрывает сессию. Несохранённое теряется. */
     fun closeSession(handle: Long)
 }

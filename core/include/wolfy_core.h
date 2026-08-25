@@ -171,7 +171,10 @@ char *wolfy_session_settings(int64_t handle);
 /*
  * Что изменилось с последней записи на диск.
  *
- * Ответ: {"library":true,"settings":false}
+ * Ответ: {"library":true,"settings":false,"practice":false,
+ *         "libraryGeneration":5,"settingsGeneration":2,"practiceGeneration":3,
+ *         "librarySavedGeneration":4,...}
+ * Генерации нужны для §17: снапшот N подтверждается ackSaved(N).
  */
 char *wolfy_session_dirty(int64_t handle);
 
@@ -181,8 +184,29 @@ char *wolfy_session_dirty(int64_t handle);
  * Отдельным вызовом, а не внутри чтения: между «отдай мне библиотеку» и «файл
  * лёг на диск» запись может не удаться, и снимать пометку до того, как это
  * подтвердилось, значит однажды потерять главу.
+ * Legacy без поколений — подтверждает текущее поколение (для синхронного клиента).
  */
 void wolfy_session_saved(int64_t handle, bool library, bool settings);
+
+/* То же, включая practice (§6). */
+void wolfy_session_saved_with_practice(int64_t handle, bool library, bool settings, bool practice);
+
+/*
+ * Generation-aware подтверждение (§17).
+ * library_gen/settings_gen/practice_gen — поколения успешно записанных снапшотов.
+ * -1 означает «не подтверждать этот домен». Dirty снимается только до N.
+ */
+void wolfy_session_ack_saved(int64_t handle, int64_t library_gen, int64_t settings_gen, int64_t practice_gen);
+
+/* Текущие поколения (§17). Ответ: {"library":5,"settings":2,"practice":3,"librarySaved":4,...} */
+char *wolfy_session_generations(int64_t handle);
+
+/* Практика целиком — отдельный файл practice.json (§6). */
+char *wolfy_session_practice(int64_t handle);
+
+/* Открытие с явным practice (отдельный файл). */
+int64_t wolfy_session_open_with_practice(const char *library, const char *settings, const char *practice);
+int64_t wolfy_session_open_strict_with_practice(const char *library, const char *settings, const char *practice);
 
 /* Закрывает сессию. Несохранённое теряется. */
 void wolfy_session_close(int64_t handle);

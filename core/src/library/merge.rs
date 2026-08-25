@@ -7,7 +7,7 @@
 
 use super::book::{LibraryBook, LibraryState, Shelf};
 use crate::srs::Card;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Снимок отправки: что ушло на сервер и в каком состоянии была библиотека.
 ///
@@ -136,6 +136,123 @@ pub fn apply_server(
         }
     }
 
+    // §5 dedup по source_key (§5 Variant A).
+    // После слияния по id может остаться дубликат: локальная старая A и
+    // приехавшая каноническая C с одним source_key но разными id (офлайн
+    // два устройства, старый клиент, или миграция ещё не прошла).
+    // Без схлопывания получилось бы две записи одной логической книги.
+    {
+        use super::book::canonical_book_id;
+        // Группировка по каноническому ключу (canonical id) или по самому source_key если каноники нет
+        let mut source_to_indices: HashMap<String, Vec<usize>> = HashMap::new();
+        for (idx, book) in merged_books.iter().enumerate() {
+            if book.source_key.is_empty() {
+                continue;
+            }
+            let key = canonical_book_id(&book.source_key)
+                .unwrap_or_else(|| book.source_key.clone());
+            source_to_indices.entry(key).or_default().push(idx);
+        }
+        let mut to_remove: HashSet<usize> = HashSet::new();
+        let mut book_rebind: HashMap<String, String> = HashMap::new(); // oldId -> survivorId
+        for (canonical, indices) in source_to_indices {
+            if indices.len() <= 1 {
+                continue;
+            }
+            // Выбор survivor: предпочтём книгу с id == canonical (детерминированная), иначе max rev
+            let mut survivor_idx = indices[0];
+            for &idx in &indices[1..] {
+                let a = &merged_books[survivor_idx];
+                let b = &merged_books[idx];
+                let a_is_canonical = a.id == canonical;
+                let b_is_canonical = b.id == canonical;
+                let choose_b = if b_is_canonical && !a_is_canonical {
+                    true
+                } else if !b_is_canonical && a_is_canonical {
+                    false
+                } else if b.rev != a.rev {
+                    b.rev > a.rev
+                } else {
+                    b.progress.opened_at > a.progress.opened_at
+                };
+                if choose_b {
+                    survivor_idx = idx;
+                }
+            }
+            let survivor_id = merged_books[survivor_idx].id.clone();
+            // Если у survivor нет файла, украсть у дубликата
+            let survivor_path_empty = merged_books[survivor_idx].path.trim().is_empty();
+            if survivor_path_empty {
+                for &idx in &indices {
+                    if idx == survivor_idx {
+                        continue;
+                    }
+                    if !merged_books[idx].path.trim().is_empty() {
+                        merged_books[survivor_idx].path = merged_books[idx].path.clone();
+                        break;
+                    }
+                }
+            }
+            for &idx in &indices {
+                if idx == survivor_idx {
+                    continue;
+                }
+                let old_id = merged_books[idx].id.clone();
+                book_rebind.insert(old_id, survivor_id.clone());
+                to_remove.insert(idx);
+            }
+        }
+        if !to_remove.is_empty() {
+            let mut new_books = Vec::new();
+            for (idx, book) in merged_books.into_iter().enumerate() {
+                if !to_remove.contains(&idx) {
+                    new_books.push(book);
+                }
+            }
+            merged_books = new_books;
+            for card in &mut merged_cards {
+                if let Some(new_id) = book_rebind.get(&card.book_id) {
+                    card.book_id = new_id.clone();
+                }
+            }
+            // Дедупликация карточек после перепривязки: один и тот же lemma в одной книге не должен дублироваться
+            let mut card_groups: HashMap<(String, String, String), Vec<usize>> = HashMap::new();
+            for (i, card) in merged_cards.iter().enumerate() {
+                if card.lemma.is_empty() || card.deleted {
+                    continue;
+                }
+                let key = (card.book_id.clone(), card.kind.clone(), card.lemma.clone());
+                card_groups.entry(key).or_default().push(i);
+            }
+            let mut card_remove: HashSet<usize> = HashSet::new();
+            for (_, indices) in card_groups {
+                if indices.len() <= 1 {
+                    continue;
+                }
+                let mut survivor = indices[0];
+                for &idx in &indices[1..] {
+                    if merged_cards[idx].rev > merged_cards[survivor].rev {
+                        survivor = idx;
+                    }
+                }
+                for &idx in &indices {
+                    if idx != survivor {
+                        card_remove.insert(idx);
+                    }
+                }
+            }
+            if !card_remove.is_empty() {
+                let mut new_cards = Vec::new();
+                for (i, card) in merged_cards.into_iter().enumerate() {
+                    if !card_remove.contains(&i) {
+                        new_cards.push(card);
+                    }
+                }
+                merged_cards = new_cards;
+            }
+        }
+    }
+
     merged_books.sort_by_key(|book| book.added_at);
     merged_cards.sort_by_key(|card| card.added_at);
 
@@ -167,16 +284,22 @@ pub fn apply_server(
 
 /// Приводит прочитанное состояние к нынешнему виду.
 ///
-/// Пока нужна одна поправка: до синхронизации номера книг придумывались как
-/// попало, а на сервере под них колонка uuid. Книга со старым номером
-/// получает новый — вместе со своими карточками, иначе колода потеряет
-/// хозяина.
+/// Две поправки:
+/// 1. Старые не-UUID номера -> случайные свежие (legacy).
+/// 2. Детерминированный канонический ID из source_key (§5 Variant A): один и
+///    тот же файл на двух офлайн-устройствах (id=A, id=B, source_key=HASH)
+///    обязан сойтись к одному логическому id = canonical(source_key).
 ///
-/// Новые номера приходят снаружи: своего источника случайности у ядра нет, и
-/// заводить его ради одной миграции незачем. Ожидается по одному номеру на
-/// каждую книгу с непригодным номером; если их не хватит, такая книга
-/// остаётся как есть и попробует переехать в следующий раз.
+/// Новые номера для (1) приходят снаружи: своего RNG у ядра нет.
+/// Для (2) RNG не нужен — id детерминирован.
+/// Если нужных свежих номеров не хватит, книга остаётся и попробует переехать
+/// в следующий раз. Каноническая миграция идемпотентна.
 pub fn migrate(state: &LibraryState, fresh_ids: &mut impl Iterator<Item = String>) -> LibraryState {
+    let after_uuid = migrate_uuid(state, fresh_ids);
+    migrate_to_canonical(&after_uuid)
+}
+
+fn migrate_uuid(state: &LibraryState, fresh_ids: &mut impl Iterator<Item = String>) -> LibraryState {
     let mut renamed: Vec<(String, String)> = Vec::new();
     let books: Vec<LibraryBook> = state
         .books
@@ -227,6 +350,156 @@ pub fn migrate(state: &LibraryState, fresh_ids: &mut impl Iterator<Item = String
         cards,
         ..state.clone()
     }
+    .touched()
+}
+
+/// Миграция к детерминированному каноническому ID (§5 Variant A).
+///
+/// Детектирует книги с непустым source_key, где id != canonical(source_key),
+/// и перепривязывает их и их карточки к canonical. Дубликаты (две книги с
+/// одним source_key, разными id) схлопываются в одну с canonical id, карточки
+/// перепривязываются, дубликаты карточек по (book_id, kind, lemma) тоже
+/// схлопываются (оставшийся — с максимальным rev).
+///
+/// Идемпотентна: повторный вызов ничего не меняет.
+/// Path книги: если у survivor путь пустой, берётся путь из другого дубликата
+/// с непустым путём. Прогресс/полка/название берётся у survivor (max rev).
+pub fn migrate_to_canonical(state: &LibraryState) -> LibraryState {
+    use super::book::canonical_book_id;
+    use std::collections::HashMap;
+
+    // Группировка по canonical id
+    let mut groups: HashMap<String, Vec<LibraryBook>> = HashMap::new();
+    let mut without_canonical: Vec<LibraryBook> = Vec::new();
+    for book in &state.books {
+        if let Some(canonical) = canonical_book_id(&book.source_key) {
+            groups.entry(canonical).or_default().push(book.clone());
+        } else {
+            without_canonical.push(book.clone());
+        }
+    }
+
+    let mut renamed: Vec<(String, String)> = Vec::new(); // old -> canonical
+    let mut merged_books: Vec<LibraryBook> = Vec::new();
+    let mut needs_migration = false;
+
+    for (canonical, mut books) in groups {
+        if books.len() == 1 {
+            let book = &books[0];
+            if book.id != canonical {
+                renamed.push((book.id.clone(), canonical.clone()));
+                let mut migrated = book.clone();
+                migrated.id = canonical.clone();
+                migrated.rev = 0;
+                migrated.dirty = true;
+                merged_books.push(migrated);
+                needs_migration = true;
+            } else {
+                merged_books.push(book.clone());
+            }
+        } else {
+            // Дубликаты: несколько книг с одним source_key -> схлопываем
+            for b in &books {
+                renamed.push((b.id.clone(), canonical.clone()));
+            }
+            needs_migration = true;
+            // Выбор survivor: не-удалённые предпочтительнее, затем max rev, затем max opened_at, затем max added_at
+            books.sort_by(|a, b| {
+                // удалённые в конец
+                match (a.deleted, b.deleted) {
+                    (false, true) => std::cmp::Ordering::Less,
+                    (true, false) => std::cmp::Ordering::Greater,
+                    _ => {
+                        let ord = b.rev.cmp(&a.rev);
+                        if ord != std::cmp::Ordering::Equal {
+                            return ord;
+                        }
+                        let ord = b.progress.opened_at.cmp(&a.progress.opened_at);
+                        if ord != std::cmp::Ordering::Equal {
+                            return ord;
+                        }
+                        b.added_at.cmp(&a.added_at)
+                    }
+                }
+            });
+            let mut survivor = books.remove(0);
+            // Если у survivor нет файла, но у другого есть — взять его
+            if survivor.path.trim().is_empty() {
+                if let Some(other) = books.iter().find(|b| !b.path.trim().is_empty()) {
+                    survivor.path = other.path.clone();
+                }
+            }
+            // Если у survivor пустое название/автор, попробовать взять из других
+            if survivor.title.trim().is_empty() {
+                if let Some(other) = books.iter().find(|b| !b.title.trim().is_empty()) {
+                    survivor.title = other.title.clone();
+                }
+            }
+            if survivor.author.is_none() {
+                if let Some(other) = books.iter().find(|b| b.author.is_some()) {
+                    survivor.author = other.author.clone();
+                }
+            }
+            survivor.id = canonical.clone();
+            survivor.rev = 0;
+            survivor.dirty = true;
+            // Если был удалён, но другой дубликат живой — оставить живым (выбрали живого как survivor), иначе survivor уже правильный
+            merged_books.push(survivor);
+        }
+    }
+
+    if !needs_migration {
+        return state.clone();
+    }
+
+    // Перепривязка карточек к canonical + дедупликация по (book_id, kind, lemma)
+    let mut rebound_cards: Vec<Card> = Vec::new();
+    for mut card in state.cards.clone() {
+        if let Some((_, canonical)) = renamed.iter().find(|(old, _)| *old == card.book_id) {
+            card.book_id = canonical.clone();
+            card.rev = 0;
+            card.dirty = true;
+        }
+        rebound_cards.push(card);
+    }
+
+    // Дедупликация карточек: один и тот же lemma из одной книги (после каноникализации) не должен дублироваться разными id
+    let mut card_groups: HashMap<(String, String, String), Vec<Card>> = HashMap::new();
+    let mut deduped_cards: Vec<Card> = Vec::new();
+    for card in rebound_cards {
+        if card.lemma.is_empty() || card.deleted {
+            deduped_cards.push(card);
+            continue;
+        }
+        let key = (card.book_id.clone(), card.kind.clone(), card.lemma.clone());
+        card_groups.entry(key).or_default().push(card);
+    }
+    for (_, mut group) in card_groups {
+        if group.len() == 1 {
+            deduped_cards.push(group.remove(0));
+        } else {
+            group.sort_by(|a, b| {
+                let ord = b.rev.cmp(&a.rev);
+                if ord != std::cmp::Ordering::Equal {
+                    return ord;
+                }
+                b.due_at.cmp(&a.due_at)
+            });
+            deduped_cards.push(group.remove(0));
+        }
+    }
+    deduped_cards.sort_by_key(|c| c.added_at);
+
+    let mut deduped_books = without_canonical;
+    deduped_books.extend(merged_books);
+    deduped_books.sort_by_key(|b| b.added_at);
+
+    LibraryState {
+        books: deduped_books,
+        cards: deduped_cards,
+        ..state.clone()
+    }
+    .touched()
 }
 
 /// Похож ли номер на UUID: тридцать шесть знаков и четыре дефиса.
@@ -599,5 +872,136 @@ mod tests {
         assert!(!looks_like_uuid(""));
         // Тридцать шесть знаков, но дефисов не столько.
         assert!(!looks_like_uuid(&"x".repeat(36)));
+    }
+
+    // --- §5 Variant A: детерминированный canonical id ---
+
+    #[test]
+    fn canonical_детерминирован_и_проходит_uuid_проверку() {
+        let a = crate::library::book::canonical_book_id("abc123").unwrap();
+        let b = crate::library::book::canonical_book_id("abc123").unwrap();
+        assert_eq!(a, b, "один HASH обязан давать один id на всех устройствах");
+        assert!(looks_like_uuid(&a), "canonical обязан пройти серверный uuidPattern: {a}");
+        assert_ne!(a, "abc123");
+        let c = crate::library::book::canonical_book_id("другой").unwrap();
+        assert_ne!(a, c);
+        assert!(crate::library::book::canonical_book_id("").is_none(), "пустой отпечаток не каноникализируется");
+    }
+
+    #[test]
+    fn две_офлайн_книги_с_одним_hash_схлопываются_при_миграции() {
+        // Телефон офлайн: id=A, source_key=HASH; десктоп офлайн: id=B, source_key=HASH
+        let hash = "deadbeefcafe123";
+        let canonical = crate::library::book::canonical_book_id(hash).unwrap();
+        let mut a = книга("11111111-1111-1111-1111-111111111111", "A", NOW);
+        a.source_key = hash.to_string();
+        a.progress = crate::library::book::Progress { chapter: 1, within_chapter: 0.2, opened_at: NOW };
+        a.rev = 1;
+        a.dirty = true;
+        let mut b = книга("22222222-2222-2222-2222-222222222222", "B", NOW + 10);
+        b.source_key = hash.to_string();
+        b.progress = crate::library::book::Progress { chapter: 3, within_chapter: 0.5, opened_at: NOW + 100 };
+        b.rev = 2;
+        b.dirty = true;
+
+        // Карточки привязаны к разным id, один и тот же логос на разных устройствах
+        let mut card_a = Card::new("c1", "s", "lemma");
+        card_a.book_id = a.id.clone();
+        card_a.lemma = "hello".to_string();
+        let mut card_b = Card::new("c2", "s", "lemma2");
+        card_b.book_id = b.id.clone();
+        card_b.lemma = "world".to_string();
+
+        // Также дубликат леммы hello с другим card id (то же слово сохранено на обоих устройствах)
+        let mut card_dup = Card::new("c3", "s", "lemma");
+        card_dup.book_id = b.id.clone();
+        card_dup.lemma = "hello".to_string();
+
+        let state = LibraryState {
+            books: vec![a, b],
+            cards: vec![card_a, card_b, card_dup],
+            ..Default::default()
+        };
+
+        let migrated = migrate_to_canonical(&state);
+        // Должна остаться одна книга с canonical id
+        assert_eq!(migrated.books.len(), 1, "две офлайн книги обязаны схлопнуться в одну: {:?}", migrated.books);
+        assert_eq!(migrated.books[0].id, canonical);
+        assert_eq!(migrated.books[0].source_key, hash);
+        assert!(migrated.books[0].dirty);
+        assert_eq!(migrated.books[0].rev, 0);
+        // Все карточки перепривязаны к canonical
+        for card in &migrated.cards {
+            assert_eq!(card.book_id, canonical, "карточка не перепривязалась: {:?}", card);
+        }
+        // Дубликат hello схлопнулся: hello один раз, world один раз => 2 карточки, а не 3
+        let hello_count = migrated.cards.iter().filter(|c| c.lemma == "hello" && !c.deleted).count();
+        assert_eq!(hello_count, 1, "дубликат карточки по lemma не схлопнулся");
+        assert_eq!(migrated.cards.len(), 2);
+    }
+
+    #[test]
+    fn add_book_каноникализируется() {
+        let state = состояние(vec![]);
+        let hash = "hash123";
+        let canonical = crate::library::book::canonical_book_id(hash).unwrap();
+        // Клиент прислал случайный id, но Rust должен заменить на canonical
+        let mut incoming = книга("99999999-9999-9999-9999-999999999999", "Новая", NOW);
+        incoming.source_key = hash.to_string();
+        let after = crate::library::ops::add_book(&state, incoming);
+        assert_eq!(after.books.len(), 1);
+        assert_eq!(after.books[0].id, canonical, "add_book обязан заменить id на canonical");
+    }
+
+    #[test]
+    fn apply_server_схлопывает_дубликат_source_key_после_офлайн_сценария() {
+        // Локально старая случайная книга A с HASH, сервер присылает canonical C с тем же HASH
+        let hash = "same-hash-sync";
+        let canonical = crate::library::book::canonical_book_id(hash).unwrap();
+        let state = LibraryState { books: vec![{
+            let mut b = книга("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "Локальная", NOW);
+            b.source_key = hash.to_string();
+            b.path = "books/a.epub".to_string();
+            b.rev = 1;
+            b.dirty = false;
+            b
+        }], revision: 5, ..Default::default() };
+
+        // Сервер присылает каноническую книгу с тем же hash
+        let mut incoming = книга(&canonical, "Серверная", NOW);
+        incoming.source_key = hash.to_string();
+        incoming.rev = 5;
+        let after = apply_server(&state, 5, &[incoming], &[], &Sent::nothing(&state), NOW);
+        assert_eq!(after.books.len(), 1, "после sync должна остаться одна логическая книга, а не две: {:?}", after.books);
+        assert_eq!(after.books[0].id, canonical);
+        assert_eq!(after.books[0].source_key, hash);
+        // Путь не затирается
+        assert_eq!(after.books[0].path, "books/a.epub", "path-local состояние потерялось");
+    }
+
+    #[test]
+    fn migrate_to_canonical_идемпотентна() {
+        let hash = "idem-hash";
+        let canonical = crate::library::book::canonical_book_id(hash).unwrap();
+        let mut book = книга(&canonical, "Уже канон", NOW);
+        book.source_key = hash.to_string();
+        book.rev = 5;
+        book.dirty = false;
+        let state = LibraryState { books: vec![book], ..Default::default() };
+        let once = migrate_to_canonical(&state);
+        let twice = migrate_to_canonical(&once);
+        assert_eq!(once, twice, "повторная миграция не должна менять состояние");
+    }
+
+    #[test]
+    fn migrate_to_canonical_сохраняет_книги_без_source_key() {
+        let state = LibraryState {
+            books: vec![книга("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "Без хеша", NOW)],
+            ..Default::default()
+        };
+        let after = migrate_to_canonical(&state);
+        assert_eq!(after.books.len(), 1);
+        assert_eq!(after.books[0].id, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+        assert_eq!(after, state, "книги без source_key не должны трогаться");
     }
 }

@@ -49,10 +49,17 @@ internal interface CoreLibrary : Library {
 
     fun wolfy_session_open(library: ByteArray?, settings: ByteArray?): Long
     fun wolfy_session_open_strict(library: ByteArray?, settings: ByteArray?): Long
+    fun wolfy_session_open_with_practice(library: ByteArray?, settings: ByteArray?, practice: ByteArray?): Long
+    fun wolfy_session_open_strict_with_practice(library: ByteArray?, settings: ByteArray?, practice: ByteArray?): Long
     fun wolfy_session_run(handle: Long, command: ByteArray): Pointer?
     fun wolfy_session_library(handle: Long): Pointer?
     fun wolfy_session_settings(handle: Long): Pointer?
+    fun wolfy_session_practice(handle: Long): Pointer?
+    fun wolfy_session_dirty(handle: Long): Pointer?
+    fun wolfy_session_generations(handle: Long): Pointer?
     fun wolfy_session_saved(handle: Long, library: Boolean, settings: Boolean)
+    fun wolfy_session_saved_with_practice(handle: Long, library: Boolean, settings: Boolean, practice: Boolean)
+    fun wolfy_session_ack_saved(handle: Long, libraryGen: Long, settingsGen: Long, practiceGen: Long)
     fun wolfy_session_close(handle: Long)
 }
 
@@ -163,8 +170,37 @@ internal class JnaWolfyCore(private val library: CoreLibrary) : WolfyCore {
     override fun sessionSettings(handle: Long): String =
         library.wolfy_session_settings(handle).takeString("настройки")
 
+    override fun sessionPractice(handle: Long): String =
+        (library.wolfy_session_practice(handle) ?: throw CoreException(lastError() ?: "практика не прочиталась")).takeString("практика")
+
+    override fun sessionDirty(handle: Long): String =
+        library.wolfy_session_dirty(handle).takeString("dirty")
+
+    override fun sessionGenerations(handle: Long): String =
+        library.wolfy_session_generations(handle).takeString("поколения")
+
     override fun sessionSaved(handle: Long, library: Boolean, settings: Boolean) {
         this.library.wolfy_session_saved(handle, library, settings)
+    }
+
+    override fun sessionSavedWithPractice(handle: Long, library: Boolean, settings: Boolean, practice: Boolean) {
+        this.library.wolfy_session_saved_with_practice(handle, library, settings, practice)
+    }
+
+    override fun sessionAckSaved(handle: Long, libraryGen: Long, settingsGen: Long, practiceGen: Long) {
+        library.wolfy_session_ack_saved(handle, libraryGen, settingsGen, practiceGen)
+    }
+
+    override fun openSessionWithPractice(library: String?, settings: String?, practice: String?): Long {
+        val handle = this.library.wolfy_session_open_with_practice(library?.toUtf8(), settings?.toUtf8(), practice?.toUtf8())
+        if (handle == 0L) throw CoreException(lastError() ?: "сессия не открылась (with practice)")
+        return handle
+    }
+
+    override fun openSessionStrictWithPractice(library: String?, settings: String?, practice: String?): Long {
+        val handle = this.library.wolfy_session_open_strict_with_practice(library?.toUtf8(), settings?.toUtf8(), practice?.toUtf8())
+        if (handle == 0L) throw CoreException(lastError() ?: "сессия не открылась (strict with practice)")
+        return handle
     }
 
     override fun closeSession(handle: Long) {
