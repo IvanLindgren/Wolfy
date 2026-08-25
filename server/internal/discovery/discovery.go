@@ -1,13 +1,12 @@
 // Package discovery формирует персональную вертикальную ленту материалов.
-// Источник отделён от ранжирования: сегодня это книги Standard Ebooks, позже
-// тем же контрактом добавятся статьи и журналы.
+// Источник отделён от ранжирования: сегодня это книги Project Gutenberg,
+// позже тем же контрактом добавятся статьи и журналы.
 package discovery
 
 import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
-	"encoding/xml"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -20,7 +19,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 	"unicode"
 
@@ -32,7 +30,7 @@ var (
 	ErrOnboarding  = errors.New("сначала выберите уровень английского и жанры")
 	ErrNotFound    = errors.New("материал не найден")
 	ErrTooLarge    = errors.New("файл книги слишком большой")
-	ErrInvalidBook = errors.New("Standard Ebooks вернул не EPUB")
+	ErrInvalidBook = errors.New("источник вернул не EPUB")
 	ErrBusy        = errors.New("сервер уже загружает другую книгу; попробуйте ещё раз")
 )
 
@@ -188,14 +186,14 @@ func (s *Service) DownloadAndAdd(ctx context.Context, userID, itemID string) (Do
 	if err != nil {
 		return Download{}, fmt.Errorf("подготовка загрузки: %w", err)
 	}
-	req.Header.Set("User-Agent", "Wolfy/1.0 (Standard Ebooks reader)")
+	req.Header.Set("User-Agent", catalogueUserAgent)
 	response, err := s.http.Do(req)
 	if err != nil {
 		return Download{}, fmt.Errorf("загрузка книги: %w", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return Download{}, fmt.Errorf("Standard Ebooks ответил %d", response.StatusCode)
+		return Download{}, fmt.Errorf("Гутенберг ответил %d", response.StatusCode)
 	}
 	if response.ContentLength > maxBookBytes {
 		return Download{}, ErrTooLarge
@@ -387,10 +385,44 @@ func cleanGenres(genres []string) []string {
 	return result
 }
 
+// catalogueUserAgent — кто мы для чужого сервиса.
+//
+// Гутенберг и Gutendex просят представляться: анонимный поток запросов они
+// вправе считать выкачиванием и закрыть. Адрес в подписи — чтобы было куда
+// написать, если мы им мешаем.
+const catalogueUserAgent = "Wolfy/1.0 (+https://wolfy.citavuk.ru)"
+
+// trustedDownload — куда позволено ходить за файлом книги.
+//
+// Список хостов, а не проверка «это https»: адрес приходит из чужого каталога,
+// и без него ответ Gutendex превращал бы наш сервер в загрузчик чего угодно по
+// чужому указанию. Файлы Гутенберга живут на www.gutenberg.org, а сам домен
+// используется для перенаправления с коротких адресов вида /ebooks/84.epub3.
 func trustedDownload(raw string) error {
 	u, err := url.Parse(raw)
-	if err != nil || u.Scheme != "https" || !strings.EqualFold(u.Hostname(), "standardebooks.org") {
+	if err != nil || u.Scheme != "https" {
 		return errors.New("небезопасный адрес загрузки")
+	}
+	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+	if host != "gutenberg.org" && host != "www.gutenberg.org" {
+		return errors.New("небезопасный адрес загрузки")
+	}
+	return nil
+}
+
+// trustedCatalogue — куда позволено ходить за списком книг.
+//
+// Отдельно от загрузки: метаданные отдаёт Gutendex, а файлы — Гутенберг, и
+// смешивать эти списки значит разрешить каждому из них то, что нужно только
+// другому.
+func trustedCatalogue(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" {
+		return errors.New("небезопасный адрес каталога")
+	}
+	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+	if host != "gutendex.com" && host != "www.gutendex.com" {
+		return errors.New("небезопасный адрес каталога")
 	}
 	return nil
 }
@@ -400,9 +432,22 @@ func trustedHTTPClient(timeout time.Duration) *http.Client {
 		Timeout: timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
-				return errors.New("слишком много перенаправлений Standard Ebooks")
+				return errors.New("слишком много перенаправлений при загрузке книги")
 			}
 			return trustedDownload(req.URL.String())
+		},
+	}
+}
+
+// catalogueHTTPClient ходит за метаданными и не умеет качать книги.
+func catalogueHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return errors.New("слишком много перенаправлений каталога")
+			}
+			return trustedCatalogue(req.URL.String())
 		},
 	}
 }
@@ -422,198 +467,19 @@ func safeName(title string) string {
 	return strings.TrimSpace(name)
 }
 
-// AtomSource читает официальный каталог Standard Ebooks и держит короткий
-// кэш, чтобы пользовательская прокрутка не превращалась в нагрузку на проект.
-type AtomSource struct {
-	feedURL string
-	user    string
-	pass    string
-	http    *http.Client
-	mu      sync.Mutex
-	cached  []Item
-	until   time.Time
-}
-
-func NewAtomSource(feedURL, user, pass string, timeout time.Duration) *AtomSource {
-	return &AtomSource{
-		feedURL: strings.TrimSpace(feedURL), user: user, pass: pass,
-		http: trustedHTTPClient(timeout),
-	}
-}
-
-func (s *AtomSource) Items(ctx context.Context) ([]Item, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if time.Now().Before(s.until) && len(s.cached) > 0 {
-		return append([]Item(nil), s.cached...), nil
-	}
-	items, err := s.fetch(ctx)
-	if err != nil {
-		// Устаревшая лента лучше пустого раздела при коротком сбое источника.
-		if len(s.cached) > 0 {
-			return append([]Item(nil), s.cached...), nil
-		}
-		return nil, err
-	}
-	s.cached = items
-	s.until = time.Now().Add(30 * time.Minute)
-	return append([]Item(nil), items...), nil
-}
-
-type atomFeed struct {
-	Entries []atomEntry `xml:"entry"`
-	Links   []atomLink  `xml:"link"`
-}
-
-type atomEntry struct {
-	ID      string       `xml:"id"`
-	Title   string       `xml:"title"`
-	Summary string       `xml:"summary"`
-	Content string       `xml:"content"`
-	Authors []atomAuthor `xml:"author"`
-	Links   []atomLink   `xml:"link"`
-	Genres  []atomGenre  `xml:"category"`
-	Thumbs  []atomThumb  `xml:"thumbnail"`
-}
-
-type atomAuthor struct {
-	Name string `xml:"name"`
-}
-type atomLink struct {
-	Href  string `xml:"href,attr"`
-	Rel   string `xml:"rel,attr"`
-	Type  string `xml:"type,attr"`
-	Title string `xml:"title,attr"`
-}
-type atomGenre struct {
-	Scheme string `xml:"scheme,attr"`
-	Term   string `xml:"term,attr"`
-}
-type atomThumb struct {
-	URL string `xml:"url,attr"`
-}
-
-func (s *AtomSource) fetch(ctx context.Context) ([]Item, error) {
-	next := s.feedURL
-	if next == "" {
-		return nil, errors.New("адрес каталога Standard Ebooks не настроен")
-	}
-	seen := map[string]bool{}
-	items := make([]Item, 0, 256)
-	for page := 0; next != "" && page < 100; page++ {
-		feed, err := s.fetchPage(ctx, next)
-		if err != nil {
-			return nil, err
-		}
-		for _, entry := range feed.Entries {
-			item := itemOf(entry)
-			if item.ID == "" || item.DownloadURL == "" || seen[item.ID] {
-				continue
-			}
-			seen[item.ID] = true
-			items = append(items, item)
-		}
-		next = ""
-		for _, link := range feed.Links {
-			if link.Rel == "next" {
-				next = link.Href
-				break
-			}
-		}
-	}
-	if len(items) == 0 {
-		return nil, errors.New("каталог Standard Ebooks пуст")
-	}
-	return items, nil
-}
-
-func (s *AtomSource) fetchPage(ctx context.Context, address string) (atomFeed, error) {
-	if err := trustedDownload(address); err != nil {
-		return atomFeed{}, fmt.Errorf("адрес каталога: %w", err)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
-	if err != nil {
-		return atomFeed{}, fmt.Errorf("подготовка каталога: %w", err)
-	}
-	req.Header.Set("Accept", "application/atom+xml, application/xml")
-	req.Header.Set("User-Agent", "Wolfy/1.0 (Standard Ebooks reader)")
-	if s.user != "" {
-		req.SetBasicAuth(s.user, s.pass)
-	}
-	response, err := s.http.Do(req)
-	if err != nil {
-		return atomFeed{}, fmt.Errorf("получение каталога: %w", err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return atomFeed{}, fmt.Errorf("Standard Ebooks ответил %d", response.StatusCode)
-	}
-	var feed atomFeed
-	if err := xml.NewDecoder(io.LimitReader(response.Body, 16<<20)).Decode(&feed); err != nil {
-		return atomFeed{}, fmt.Errorf("разбор каталога: %w", err)
-	}
-	return feed, nil
-}
-
 var tags = regexp.MustCompile(`<[^>]+>`)
-
-func itemOf(entry atomEntry) Item {
-	authors := make([]string, 0, len(entry.Authors))
-	for _, author := range entry.Authors {
-		if name := strings.TrimSpace(author.Name); name != "" {
-			authors = append(authors, name)
-		}
-	}
-	genres := make([]string, 0)
-	for _, genre := range entry.Genres {
-		if genre.Scheme == "https://standardebooks.org/vocab/subjects" {
-			genres = append(genres, genre.Term)
-		}
-	}
-	item := Item{
-		ID: stableID(strings.TrimSpace(entry.ID)), ContentType: "book",
-		Title: strings.TrimSpace(entry.Title), Author: strings.Join(authors, ", "),
-		Summary: cleanHTML(firstNonBlank(entry.Summary, entry.Content)),
-		Genres:  cleanGenres(genres),
-	}
-	if len(entry.Thumbs) > 0 {
-		item.CoverURL = entry.Thumbs[0].URL
-	}
-	for _, link := range entry.Links {
-		switch {
-		case link.Rel == "alternate" && link.Type == "application/xhtml+xml":
-			item.PageURL = link.Href
-		case link.Rel == "enclosure" && link.Type == "application/epub+zip" &&
-			!strings.Contains(strings.ToLower(link.Title), "advanced"):
-			if item.DownloadURL == "" {
-				item.DownloadURL = link.Href
-			}
-		}
-	}
-	item.Level = estimatedLevel(item.Summary)
-	return item
-}
 
 func stableID(sourceID string) string {
 	if sourceID == "" {
 		return ""
 	}
 	sum := sha256.Sum256([]byte(sourceID))
-	return fmt.Sprintf("se-%x", sum[:12])
+	return fmt.Sprintf("bk-%x", sum[:12])
 }
 
 func cleanHTML(value string) string {
 	value = html.UnescapeString(tags.ReplaceAllString(value, " "))
 	return strings.Join(strings.Fields(value), " ")
-}
-
-func firstNonBlank(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func estimatedLevel(summary string) string {

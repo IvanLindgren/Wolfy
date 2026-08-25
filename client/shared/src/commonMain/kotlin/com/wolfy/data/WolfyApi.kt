@@ -15,6 +15,7 @@ import io.ktor.client.request.setBody
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
+import io.ktor.http.decodeURLQueryComponent
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.Serializable
 import com.wolfy.platform.PickedPhoto
@@ -272,6 +273,13 @@ class WolfyApi(
                 HttpStatusCode.OK -> DownloadResult.Ready(
                     bytes = response.body(),
                     fileName = safeFileName(item.title) + ".epub",
+                    // Отпечаток даёт сервер: тот же, что получит веб. Своя
+                    // сборка ключа разошлась бы с чужой, и §5 перестал бы
+                    // узнавать одну и ту же книгу на двух устройствах.
+                    sourceKey = response.headers["X-Wolfy-Source"]
+                        ?.let { runCatching { it.decodeURLQueryComponent(plusIsSpace = true) }.getOrNull() }
+                        ?.takeIf { it.isNotBlank() }
+                        ?: "gutenberg:${item.id}",
                 )
                 HttpStatusCode.Unauthorized -> DownloadResult.SignedOut
                 else -> DownloadResult.Failed("Не получилось скачать книгу.")
@@ -706,7 +714,11 @@ sealed interface ActionResult {
 }
 
 sealed interface DownloadResult {
-    data class Ready(val bytes: ByteArray, val fileName: String) : DownloadResult
+    data class Ready(
+        val bytes: ByteArray,
+        val fileName: String,
+        val sourceKey: String,
+    ) : DownloadResult
     data object SignedOut : DownloadResult
     data class Failed(val message: String) : DownloadResult
 }

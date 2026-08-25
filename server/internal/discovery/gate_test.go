@@ -67,8 +67,8 @@ func TestDiscoveryDownloadRespectsGlobalGate(t *testing.T) {
 		DownloadURL: server.URL + "/book.epub",
 	}}
 	svc := NewWithGate(repo, src, 5*time.Second, customGate)
-	// also need http client that points to server (New uses trustedHTTPClient but our server host is not standardebooks.org)
-	// trustedDownload checks host == standardebooks.org, so this will fail.
+	// Свой http-сервер сюда не подставить: trustedDownload пускает только
+	// gutenberg.org, и это ровно то, что проверяет соседний тест.
 	// Use non-standard gate test directly
 	if err := svc.gate.TryAcquire(); err != true {
 		// we already occupied, second try should fail
@@ -84,11 +84,12 @@ func TestDiscoveryBusyOnFullGate(t *testing.T) {
 	g := gate.New(1)
 	repo := &fakeRepo{}
 	// need item with valid download URL that passes trustedDownload
-	// Use standardebooks.org URL but we won't actually fetch because gate blocks before network
+	// Адрес настоящего источника: сеть всё равно не тронем — gate закрывает
+	// путь раньше, — но проверка хоста проходит до него.
 	src := &fakeSource{item: Item{
 		ID:          "se-busy",
 		Title:       "Busy Book",
-		DownloadURL: "https://standardebooks.org/ebooks/test.epub",
+		DownloadURL: "https://www.gutenberg.org/ebooks/84.epub3.images",
 	}}
 	svc := NewWithGate(repo, src, 5*time.Second, g)
 	// occupy gate

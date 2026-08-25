@@ -139,7 +139,7 @@ class DiscoveryViewModel(
                             fileName = result.fileName,
                             title = item.title,
                             author = item.author.takeIf(String::isNotBlank),
-                            sourceKey = "standardebooks:${item.id}",
+                            sourceKey = result.sourceKey,
                         )
                     }
                     change { state ->

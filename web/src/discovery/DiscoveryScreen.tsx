@@ -32,7 +32,7 @@ export function DiscoveryScreen() {
   if (!account.data) return <div className={page.page}><WolfyCompanion mood="kind" title="Лента открывается после входа"><p className={page.muted}>Войдите, чтобы сохранить <strong>уровень и любимые жанры</strong>.</p><Link to="/account"><Button variant="primary">Войти</Button></Link></WolfyCompanion></div>
   if (profile && !profile.onboardingComplete) return <ProfileForm initial={profile} onSaved={(saved) => { setProfile(saved); void load() }} />
 
-  return <div className={page.page}><header className={page.head}><div><div className={page.kicker}>Standard Ebooks</div><h1 className={page.title}>Открытые издания</h1><p className={page.subtitle}>Классика в аккуратной вёрстке, подобранная по уровню и жанрам.</p></div><div className={page.headActions}><Button small disabled={busy} onClick={() => void load()}>Обновить</Button></div></header>
+  return <div className={page.page}><header className={page.head}><div><div className={page.kicker}>Project Gutenberg</div><h1 className={page.title}>Открытые издания</h1><p className={page.subtitle}>Книги в общественном достоянии, подобранные по уровню и жанрам.</p></div><div className={page.headActions}><Button small disabled={busy} onClick={() => void load()}>Обновить</Button></div></header>
     {message && <p className={page.notice}>{message}</p>}
     <div className={styles.feed}>{items.map((item) => <DiscoveryCard key={item.id} item={item} onChanged={(changed) => setItems((all) => all.map((entry) => entry.id === changed.id ? changed : entry))} onMessage={setMessage} />)}</div>
     {!busy && !items.length && <WolfyCompanion mood="calm" title="В ленте пока тихо"><p className={page.muted}>Попробуйте обновить её немного позже.</p></WolfyCompanion>}

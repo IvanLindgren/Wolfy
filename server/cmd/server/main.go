@@ -95,12 +95,7 @@ func run() error {
 	}
 	discoveryService := discovery.New(
 		db,
-		discovery.NewAtomSource(
-			cfg.StandardEbooksFeedURL,
-			cfg.StandardEbooksUser,
-			cfg.StandardEbooksPass,
-			cfg.RequestTimeout,
-		),
+		discovery.NewGutenbergSource(cfg.GutendexURL, cfg.RequestTimeout),
 		cfg.RequestTimeout,
 	)
 	dictionaryService, err := dictionary.Open(cfg.DictionaryPath)
