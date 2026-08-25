@@ -174,6 +174,14 @@ export const PencilIcon = icon(
   </>,
 )
 
+export const NewspaperIcon = icon(
+  <>
+    <path d="M3 6.5h13v13H4.5A1.5 1.5 0 0 1 3 18z" />
+    <path d="M16 9h3.5A1.5 1.5 0 0 1 21 10.5V18a1.5 1.5 0 0 1-1.5 1.5H16" />
+    <path d="M5.5 9.5h8M5.5 13h8M5.5 16h5" />
+  </>,
+)
+
 export const StickerIcon = icon(
   <>
     <path d="M5 4.5h10.5l3.5 3.5V19.5H5z" />

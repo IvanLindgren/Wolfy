@@ -42,6 +42,12 @@ const libraryRoute = createRoute({
   component: screen(() => import('../library/LibraryScreen'), 'LibraryScreen'),
 })
 
+const catalogRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/library/catalogue',
+  component: screen(() => import('../library/CatalogScreen'), 'CatalogScreen'),
+})
+
 const allWordsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/library/words',
@@ -108,6 +114,12 @@ const articleRoute = createRoute({
   component: screen(() => import('../grammar/ArticleScreen'), 'ArticleScreen'),
 })
 
+const newspaperRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/newspaper',
+  component: screen(() => import('../news/NewspaperScreen'), 'NewspaperScreen'),
+})
+
 const discoveryRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/discovery',
@@ -148,6 +160,7 @@ const photoRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   homeRoute,
   libraryRoute,
+  catalogRoute,
   allWordsRoute,
   bookWordsRoute,
   bookNotesRoute,
@@ -157,6 +170,7 @@ const routeTree = rootRoute.addChildren([
   trainingRoute,
   grammarRoute,
   articleRoute,
+  newspaperRoute,
   discoveryRoute,
   settingsRoute,
   accountRoute,

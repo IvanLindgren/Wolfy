@@ -22,6 +22,7 @@ import {
   DecksIcon,
   DiscoveryIcon,
   GrammarIcon,
+  NewspaperIcon,
   ReaderIcon,
   SettingsIcon,
 } from '../widgets/icons'
@@ -36,16 +37,17 @@ import { SyncController } from '../sync/sync'
 import { ReminderController } from '../decks/notifications'
 
 /**
- * Разделы в том же порядке, в каком их выбирает `Ctrl+1…5`.
+ * Разделы в том же порядке, в каком их выбирает `Ctrl+1…6`.
  *
  * Порядок не алфавитный и не по частоте: он повторяет путь читателя —
- * библиотека, чтение, повторение, объяснение, поиск нового.
+ * библиотека, чтение, повторение, объяснение, сегодняшний язык, поиск нового.
  */
 const SECTIONS = [
   { to: '/library', title: 'Книги', Icon: BooksIcon },
   { to: '/reader', title: 'Читалка', Icon: ReaderIcon },
   { to: '/decks', title: 'Колоды', Icon: DecksIcon },
   { to: '/grammar', title: 'Грамматика', Icon: GrammarIcon },
+  { to: '/newspaper', title: 'Газета', Icon: NewspaperIcon },
   { to: '/discovery', title: 'Лента', Icon: DiscoveryIcon },
 ] as const
 
@@ -321,7 +323,6 @@ function Tab({
       aria-current={active ? 'page' : undefined}
       title={`${title} · Ctrl+${index + 1}`}
     >
-      {active && <m.span layoutId="section-marker" className={styles.marker} />}
       <span className={styles.tab__glyph} ref={glyph}>
         <Icon size={21} />
         {badge > 0 && (

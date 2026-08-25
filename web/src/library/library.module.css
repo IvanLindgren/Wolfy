@@ -50,6 +50,12 @@
 .importer__prompt > :last-child {
   margin-left: auto;
 }
+.importer__ways {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
 
 .importer__url {
   display: grid;

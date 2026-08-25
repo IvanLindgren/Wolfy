@@ -158,7 +158,7 @@ function WordTile({
         params={{ bookId: card.bookId }}
         className={styles.bookLink}
       >
-        {bookTitle} →
+        {bookTitle}
       </Link>
     </Appear>
   )

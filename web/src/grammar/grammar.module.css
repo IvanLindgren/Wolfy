@@ -1,26 +1,399 @@
-.catalog { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: 1rem; }
-.topic { --topic-tone: var(--accent); border: 1px solid color-mix(in srgb, var(--topic-tone) 28%, var(--rule)); border-top: 3px solid var(--topic-tone); border-radius: var(--radius-lg); background: var(--surface); padding: 1rem; transition: transform var(--quick, 180ms) var(--paper-curve, ease), box-shadow var(--quick, 180ms) ease; }
-.topic:nth-child(2) { --topic-tone: var(--pos-noun); }
-.topic:nth-child(3) { --topic-tone: var(--pos-pron); }
-.topic:nth-child(4) { --topic-tone: var(--pos-adj); }
-.topic:nth-child(5) { --topic-tone: var(--pos-adv); }
-.topic:nth-child(6) { --topic-tone: var(--gold); }
-.topic:hover { transform: translateY(-3px); box-shadow: 0 1rem 2rem rgb(17 17 17 / 8%); }
-.topicTitle { font-size: 1.25rem; margin-bottom: .75rem; color: color-mix(in srgb, var(--topic-tone) 74%, var(--ink)); }
-.articleLink { display: block; padding: .65rem 0; border-top: 1px solid var(--rule); text-decoration: none; transition: color var(--quick, 180ms) ease, transform var(--quick, 180ms) var(--paper-curve, ease); }
-.articleLink:hover { color: var(--topic-tone); transform: translateX(4px); }
-.articleLink:first-of-type { border-top: 0; }
-.articleLink span { display: block; color: color-mix(in srgb, var(--topic-tone) 55%, var(--ink-muted)); font-size: .78rem; font-family: var(--mono); margin-top: .15rem; }
-.article { max-width: 48rem; }
-.formula { padding: .8rem 1rem; background: var(--inverse); color: var(--on-inverse); border-radius: var(--radius); font-family: var(--mono); margin: 1rem 0; }
-.prose { font-family: var(--serif), 'Playfair Fallback'; font-size: 1.08rem; line-height: 1.7; }
-.example { margin: 1.2rem 0; padding: 1rem 1.1rem; border-left: 3px solid var(--accent); background: var(--surface); }
-.example strong, .example span { display: block; }
-.example span { color: var(--ink-muted); margin-top: .35rem; }
-.exercise { margin-top: 2rem; padding: 1.1rem; border: 1px solid var(--rule); border-radius: var(--radius-lg); background: var(--surface); }
-.question { font-family: var(--serif), 'Playfair Fallback'; font-size: 1.2rem; margin: .6rem 0 1rem; }
-.options { display: grid; gap: .45rem; }
-.option { padding: .65rem .8rem; border: 1px solid var(--rule); border-radius: var(--radius); text-align: left; background: var(--paper); }
-.option[data-state='right'] { border-color: var(--pos-adj); background: color-mix(in srgb, var(--pos-adj) 12%, transparent); }
-.option[data-state='wrong'] { border-color: var(--wrong); background: color-mix(in srgb, var(--wrong) 12%, transparent); }
-.filter { min-width: min(20rem, 100%); }
+/*
+ * Справочник грамматики.
+ *
+ * Здесь нет ни одного моноширинного знака, и это правило, а не вкус.
+ * Моноширинный шрифт на странице, набранной антиквой и гротеском, читается
+ * как вставка из терминала: он говорит «это код», тогда как `have/has + V3` —
+ * это фраза английского языка, разложенная на части. Формула набрана тем же
+ * гротеском, что и весь интерфейс, а собрана из отдельных кирпичиков —
+ * порядок и границы частей держит вёрстка, а не ширина знакоместа.
+ */
+
+/* --- Список правил ---------------------------------------------------------- */
+
+.catalog {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr));
+  gap: 0.9rem;
+}
+
+.count {
+  font-family: var(--sans), 'Inter Fallback';
+  font-size: 0.75rem;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+
+.rule {
+  display: flex;
+}
+
+.rule__link {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  width: 100%;
+  padding: 1rem 1.05rem 1.05rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: inherit;
+  text-decoration: none;
+  transition:
+    border-color var(--quick, 180ms) ease,
+    box-shadow var(--quick, 180ms) ease,
+    transform var(--quick, 180ms) var(--paper-curve, ease);
+}
+
+.rule__link:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--rule));
+  box-shadow: 0 0.7rem 1.6rem rgb(17 17 17 / 8%);
+  transform: translateY(-2px);
+}
+
+.rule__link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.rule__title {
+  font-family: var(--serif), 'Playfair Fallback';
+  font-size: 1.22rem;
+  line-height: 1.2;
+}
+
+/*
+ * Пример отделён от формулы линейкой, а не отступом: формула — это схема, а
+ * пример — живая фраза, и глаз должен видеть, где кончается одно и начинается
+ * другое, даже не читая.
+ */
+.rule__example {
+  margin-top: 0.15rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--rule);
+  font-family: var(--serif), 'Playfair Fallback';
+  font-size: 1rem;
+  line-height: 1.45;
+  text-wrap: pretty;
+}
+
+.rule__translation {
+  color: var(--ink-muted);
+  font-size: 0.85rem;
+  line-height: 1.4;
+  text-wrap: pretty;
+}
+
+/* --- Формула ---------------------------------------------------------------- */
+
+.formula {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 0.1rem;
+  font-family: var(--sans), 'Inter Fallback';
+}
+
+.formula__clause,
+.formula__step {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 0.1rem;
+}
+
+/* Плюс и запятая — служебные знаки схемы, а не её части. */
+.formula__plus,
+.formula__comma,
+.formula__or {
+  color: var(--ink-muted);
+  font-size: 0.78em;
+}
+
+.formula__plus {
+  padding: 0 0.28rem;
+}
+
+.formula__comma {
+  padding-right: 0.35rem;
+  margin-left: -0.1rem;
+}
+
+.formula__or {
+  padding: 0 0.3rem;
+  font-size: 0.62em;
+  letter-spacing: 0.02em;
+}
+
+.formula__piece {
+  display: inline-flex;
+  align-items: baseline;
+  padding: 0.22rem 0.5rem;
+  border: 1px solid var(--rule);
+  border-radius: 0.4rem;
+  background: var(--surface-sunken);
+  font-size: 0.86rem;
+  font-weight: 550;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+/* Знак глагола: у него есть расшифровка, и пунктир об этом сообщает. */
+.formula__piece[data-kind='symbol'] {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--rule));
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface));
+  color: color-mix(in srgb, var(--accent) 72%, var(--ink));
+  text-decoration: underline dotted currentcolor;
+  text-underline-offset: 0.2em;
+  cursor: help;
+}
+
+/* Пропуск: читатель ставит сюда своё слово, поэтому кирпичик пустой. */
+.formula__piece[data-kind='slot'] {
+  border-style: dashed;
+  background: transparent;
+  color: var(--ink-muted);
+  font-weight: 450;
+}
+
+.formula[data-size='large'] {
+  gap: 0.45rem 0.15rem;
+}
+
+.formula[data-size='large'] .formula__piece {
+  padding: 0.4rem 0.75rem;
+  border-radius: 0.5rem;
+  font-size: 1.05rem;
+}
+
+/* --- Расшифровка знаков ----------------------------------------------------- */
+
+.legend {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 1rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--rule);
+}
+
+.legend__row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.65rem;
+}
+
+.legend__code {
+  flex: none;
+  min-width: 3.1rem;
+  font-family: var(--sans), 'Inter Fallback';
+  font-size: 0.82rem;
+  font-weight: 650;
+  color: color-mix(in srgb, var(--accent) 72%, var(--ink));
+}
+
+.legend__text {
+  color: var(--ink-muted);
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
+.legend__hint {
+  margin-left: 0.4rem;
+  font-family: var(--serif), 'Playfair Fallback';
+  font-style: italic;
+  color: color-mix(in srgb, var(--ink) 70%, var(--ink-muted));
+}
+
+/* --- Статья ----------------------------------------------------------------- */
+
+.article {
+  max-width: 48rem;
+}
+
+.back {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--ink-muted);
+  font-family: var(--sans), 'Inter Fallback';
+  font-size: 0.875rem;
+  text-decoration: none;
+  transition: color var(--quick, 180ms) ease;
+}
+
+.back:hover {
+  color: var(--accent);
+}
+
+.build {
+  margin-bottom: 1.5rem;
+  padding: 1.15rem 1.25rem 1.25rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.build__title {
+  margin-bottom: 0.75rem;
+  font-family: var(--sans), 'Inter Fallback';
+  font-size: 0.75rem;
+  font-weight: 650;
+  color: var(--ink-muted);
+}
+
+/*
+ * Пример — самое крупное на странице.
+ *
+ * Правило запоминается фразой, а не схемой: схема нужна, чтобы понять фразу,
+ * а не наоборот. Поэтому пример набран антиквой и крупнее заголовков разделов.
+ */
+.example {
+  margin: 0 0 2rem;
+  padding: 1.1rem 0 1.1rem 1.15rem;
+  border-left: 3px solid var(--accent);
+}
+
+.example__sentence {
+  font-family: var(--serif), 'Playfair Fallback';
+  font-size: clamp(1.25rem, 2.6vw, 1.55rem);
+  line-height: 1.35;
+  text-wrap: pretty;
+}
+
+.example__translation {
+  margin-top: 0.5rem;
+  color: var(--ink-muted);
+  font-size: 0.95rem;
+  line-height: 1.45;
+}
+
+.prose {
+  font-family: var(--serif), 'Playfair Fallback';
+  font-size: 1.08rem;
+  line-height: 1.7;
+  text-wrap: pretty;
+}
+
+/* --- Упражнение ------------------------------------------------------------- */
+
+.exercise {
+  margin-top: 2rem;
+  padding: 1.15rem 1.25rem 1.35rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.exercise__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.exercise__sentence {
+  font-family: var(--serif), 'Playfair Fallback';
+  font-size: 1.25rem;
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+/* Пропуск виден строкой, а не тремя подчёркиваниями, слипающимися со шрифтом. */
+.exercise__gap {
+  display: inline-block;
+  width: 3.4rem;
+  height: 0.12em;
+  margin: 0 0.12rem 0.28em;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 65%, var(--rule));
+  vertical-align: baseline;
+}
+
+.exercise__translation {
+  margin-top: 0.4rem;
+  color: var(--ink-muted);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.question {
+  margin: 1.1rem 0 0.7rem;
+  font-family: var(--sans), 'Inter Fallback';
+  font-size: 0.9rem;
+  font-weight: 550;
+}
+
+.options {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--paper);
+  font-size: 0.95rem;
+  text-align: left;
+  transition:
+    border-color var(--quick, 180ms) ease,
+    background var(--quick, 180ms) ease;
+}
+
+.option:not(:disabled):hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--rule));
+  background: color-mix(in srgb, var(--accent) 6%, var(--paper));
+}
+
+.option__key {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 999px;
+  background: var(--surface-sunken);
+  color: var(--ink-muted);
+  font-family: var(--sans), 'Inter Fallback';
+  font-size: 0.72rem;
+  font-weight: 650;
+}
+
+.option[data-state='right'] {
+  border-color: var(--pos-adj);
+  background: color-mix(in srgb, var(--pos-adj) 12%, transparent);
+}
+
+.option[data-state='right'] .option__key {
+  background: var(--pos-adj);
+  color: var(--on-accent);
+}
+
+.option[data-state='wrong'] {
+  border-color: var(--wrong);
+  background: color-mix(in srgb, var(--wrong) 12%, transparent);
+}
+
+.option[data-state='wrong'] .option__key {
+  background: var(--wrong);
+  color: var(--on-accent);
+}
+
+.verdict {
+  margin: 1rem 0;
+  padding: 0.8rem 0.95rem;
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--wrong);
+  border-radius: var(--radius);
+  background: var(--surface-sunken);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.verdict[data-right='true'] {
+  border-left-color: var(--pos-adj);
+}

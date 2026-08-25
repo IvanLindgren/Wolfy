@@ -21,6 +21,38 @@ import { extractPdfPages } from './pdf'
 /** Что умеет читать ядро. Остальное отвергается с внятным объяснением. */
 export const ACCEPTED = '.epub,.txt,.pdf,application/epub+zip,application/pdf,text/plain'
 
+/**
+ * Лимиты — те же, что в Rust `parser/limits.rs`.
+ *
+ * Ядро всё равно откажется разбирать слишком большой файл, но к тому времени
+ * гигабайт уже будет прочитан в память вкладки: `arrayBuffer()` аллоцирует
+ * целиком, и на телефоне вкладка падает раньше, чем ядро успевает ответить.
+ * Поэтому размер проверяется дважды: по `file.size` — до чтения, и по
+ * фактической длине буфера — после, на случай, если `size` соврал.
+ */
+const MAX_SOURCE_BYTES = 80 * 1024 * 1024
+const MAX_TXT_BYTES = 10 * 1024 * 1024
+const TOO_LARGE_MSG = 'Книга слишком велика для безопасной обработки'
+
+function checkSourceSize(size: number, detail?: string): string | null {
+  if (size > MAX_SOURCE_BYTES) {
+    return `${TOO_LARGE_MSG}: ${detail ?? `${size} байт`} превышает ${MAX_SOURCE_BYTES} байт`
+  }
+  return null
+}
+
+function checkTxtSize(size: number): string | null {
+  if (size > MAX_TXT_BYTES) {
+    return `${TOO_LARGE_MSG}: TXT ${size} байт превышает ${MAX_TXT_BYTES} байт`
+  }
+  return checkSourceSize(size, `TXT ${size} байт`)
+}
+
+/** Размер файла, если браузер его сообщил. Ноль — «не знаю», а не «пусто». */
+function sizeOf(file: File): number {
+  return (file as unknown as { size?: number }).size ?? 0
+}
+
 export type ImportResult =
   | { kind: 'added'; book: LibraryBook }
   /** Такая книга уже есть — открываем её, а не заводим вторую. */
@@ -57,6 +89,12 @@ export async function addFile(file: File): Promise<ImportResult> {
       kind: 'refused',
       message: `Формат «${extension || 'без расширения'}» пока не поддерживается. Wolfy читает EPUB, TXT и PDF.`,
     }
+  }
+  // Проверяем `file.size` до `arrayBuffer()`: не аллоцируем гигабайт впустую.
+  const size = sizeOf(file)
+  if (size > 0) {
+    const refusal = extension === 'txt' ? checkTxtSize(size) : checkSourceSize(size)
+    if (refusal) return { kind: 'refused', message: refusal }
   }
 
   try {
@@ -96,7 +134,19 @@ export async function addURL(address: string): Promise<ImportResult> {
 }
 
 async function addPlain(file: File, extension: string): Promise<ImportResult> {
+  // Повторно — на случай прямого вызова в обход `addFile`.
+  const declared = sizeOf(file)
+  if (declared > 0) {
+    const refusal = extension === 'txt' ? checkTxtSize(declared) : checkSourceSize(declared)
+    if (refusal) throw new Error(refusal)
+  }
   const bytes = await file.arrayBuffer()
+  // Буфер мог оказаться больше объявленного размера.
+  const actual =
+    extension === 'txt'
+      ? checkTxtSize(bytes.byteLength)
+      : checkSourceSize(bytes.byteLength)
+  if (actual) throw new Error(actual)
   // Отпечаток считается здесь, до передачи в воркер: буфер уходит `transfer`
   // и после этого на главном потоке пуст.
   const fingerprint = await fingerprintOf(bytes)
@@ -131,7 +181,12 @@ async function addPlain(file: File, extension: string): Promise<ImportResult> {
       progress: { chapter: 0, withinChapter: 0, openedAt: 0 },
       shelf: null,
     })
-    if (added.book) id = added.book.id
+    // Ядро могло заменить номер на канонический — переносим уже разобранную
+    // книгу под него, иначе она останется висеть в памяти воркера под старым.
+    if (added.book && added.book.id !== id) {
+      await bridge.rekeyBook(id, added.book.id)
+      id = added.book.id
+    }
   }
 
   await session.describe(
@@ -156,7 +211,14 @@ async function addPlain(file: File, extension: string): Promise<ImportResult> {
  * после первой же иллюстрации.
  */
 async function addPdf(file: File): Promise<ImportResult> {
+  const declared = sizeOf(file)
+  if (declared > 0) {
+    const refusal = checkSourceSize(declared)
+    if (refusal) throw new Error(refusal)
+  }
   const bytes = await file.arrayBuffer()
+  const actual = checkSourceSize(bytes.byteLength)
+  if (actual) throw new Error(actual)
   const fingerprint = await fingerprintOf(bytes)
 
   const plan = await session.planAdd(fingerprint)
@@ -198,7 +260,12 @@ async function addPdf(file: File): Promise<ImportResult> {
       progress: { chapter: 0, withinChapter: 0, openedAt: 0 },
       shelf: null,
     })
-    if (added.book) id = added.book.id
+    // Ядро могло заменить номер на канонический — переносим уже разобранную
+    // книгу под него, иначе она останется висеть в памяти воркера под старым.
+    if (added.book && added.book.id !== id) {
+      await bridge.rekeyBook(id, added.book.id)
+      id = added.book.id
+    }
   }
 
   await session.describe(id, title, null, opened.chapters.length)
@@ -216,6 +283,8 @@ export async function addDownloaded(
   author: string,
   sourceKey: string,
 ): Promise<ImportResult> {
+  const refusal = checkSourceSize(bytes.byteLength)
+  if (refusal) return { kind: 'refused', message: refusal }
   const plan = await session.planAdd(sourceKey)
   if (plan.bookId) {
     const known = session.book(plan.bookId)
@@ -242,7 +311,12 @@ export async function addDownloaded(
       progress: { chapter: 0, withinChapter: 0, openedAt: 0 },
       shelf: null,
     })
-    if (added.book) id = added.book.id
+    // Ядро могло заменить номер на канонический — переносим уже разобранную
+    // книгу под него, иначе она останется висеть в памяти воркера под старым.
+    if (added.book && added.book.id !== id) {
+      await bridge.rekeyBook(id, added.book.id)
+      id = added.book.id
+    }
   }
 
   await session.describe(

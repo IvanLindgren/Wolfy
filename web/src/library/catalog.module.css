@@ -1,0 +1,104 @@
+/*
+ * Каталог Открытой библиотеки.
+ *
+ * Находка — это карточка книги, а не строка списка: у неё есть набранная
+ * обложка, потому что двадцать одинаковых строк с названиями различаются
+ * только чтением, а двадцать корешков — узнаванием.
+ */
+
+.search {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.5rem;
+}
+
+.results {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(21rem, 1fr));
+  gap: 0.9rem;
+  list-style: none;
+}
+
+.found {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.9rem;
+  padding: 0.9rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+/* Набранная обложка: та же пластика, что у полки библиотеки. */
+.found__cover {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.35rem;
+  flex: none;
+  width: 4.5rem;
+  aspect-ratio: 2 / 3;
+  padding: 0.6rem 0.5rem;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  background: var(--paper);
+  box-shadow: 0 0.35rem 0.9rem rgb(0 0 0 / 8%);
+  overflow: hidden;
+}
+
+.found__coverRule {
+  height: 2px;
+  background: var(--ink);
+  opacity: 0.85;
+}
+
+.found__coverTitle {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-family: var(--serif), 'Playfair Fallback';
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.found__coverAuthor {
+  overflow: hidden;
+  color: var(--ink-muted);
+  font-size: 0.58rem;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.found__body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.found__title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-family: var(--serif), 'Playfair Fallback';
+  font-size: 1.05rem;
+  line-height: 1.25;
+}
+
+.found__meta {
+  color: var(--ink-muted);
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.found__body > :last-child {
+  margin-top: 0.25rem;
+}

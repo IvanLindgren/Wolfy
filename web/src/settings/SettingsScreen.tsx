@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import { ACCENTS, accent, applyAccent, onDarkPaper, THEMES, type AccentName } from '../app/theme'
 import * as bridge from '../core/bridge'
 import { session, useSession } from '../core/session'
-import type { IntensityName, ThemeName } from '../core/types'
+import type { FocusMode, IntensityName, ThemeName } from '../core/types'
 import { readerFont, readerMeasure, readingMode, setReaderFont, setReaderMeasure, setReadingMode, type ReaderFont, type ReadingMode } from '../reader/preferences'
 import { clearAssets, DICTIONARY_URL, forget } from '../storage/assets'
 import { clearEverything, storageUsage, type StorageUsage } from '../storage/opfs'
@@ -17,6 +17,46 @@ import { enableReviewNotifications, notificationPermission } from '../decks/noti
 const INTENSITIES: { name: IntensityName; title: string }[] = [
   { name: 'Gentle', title: 'Легко' }, { name: 'Normal', title: 'Обычно' },
   { name: 'Strong', title: 'Плотно' }, { name: 'Extreme', title: 'Экстремально' },
+]
+
+/*
+ * Режимы окна чтения.
+ *
+ * Предложение — единица смысла, абзац — единица мысли. Что из них подходит,
+ * зависит от человека и от книги, поэтому выбор оставлен читателю, а не
+ * назначен нами.
+ */
+const FOCUS_MODES: { mode: FocusMode; title: string }[] = [
+  { mode: 'off', title: 'Без окна' },
+  { mode: 'sentence', title: 'Предложение' },
+  { mode: 'paragraph', title: 'Абзац' },
+]
+
+/*
+ * Темп ведущей строки.
+ *
+ * Числа не круглые и не произвольные: 160 — спокойное чтение вслух, 220 —
+ * обычное чтение про себя на неродном языке, 300 — быстро, но ещё с
+ * пониманием. Ползунок здесь был бы хуже: он предлагает подбирать число,
+ * которого читатель про себя не знает.
+ */
+const PACES: { wpm: number; title: string }[] = [
+  { wpm: 0, title: 'Выключена' },
+  { wpm: 160, title: 'Спокойно' },
+  { wpm: 220, title: 'Обычно' },
+  { wpm: 300, title: 'Быстро' },
+]
+
+/*
+ * Размер отрезка. В словах, а не в минутах: минуты пришлось бы переводить в
+ * слова по скорости, которой мы не знаем, и обещание «пять минут» оказалось
+ * бы неверным ровно для того, кто читает медленнее.
+ */
+const SEGMENTS: { words: number; title: string }[] = [
+  { words: 0, title: 'Без отрезков' },
+  { words: 150, title: 'Короткий' },
+  { words: 400, title: 'Средний' },
+  { words: 900, title: 'Длинный' },
 ]
 
 export function SettingsScreen() {
@@ -55,6 +95,10 @@ export function SettingsScreen() {
     <Setting title="Режим чтения" hint="Настройка только этого устройства"><div className={styles.choices}>{(['pages', 'scroll'] as ReadingMode[]).map((value) => <button key={value} className={styles.choice} data-active={mode === value} onClick={() => { setMode(value); setReadingMode(value) }}>{value === 'pages' ? 'Страницы' : 'Лента'}</button>)}</div></Setting>
     <Setting title="Шрифт книги" hint="Можно менять и прямо над страницей"><div className={styles.choices}>{(['serif', 'sans'] as ReaderFont[]).map((value) => <button key={value} className={styles.choice} data-active={font === value} onClick={() => { setFont(value); setReaderFont(value) }}>{value === 'serif' ? 'Книжный' : 'Простой'}</button>)}</div></Setting>
     <Setting title="Ширина колонки" hint={`${measure} знаков`}><input type="range" min="54" max="80" step="2" value={measure} onChange={(event) => { const value = Number(event.target.value); setMeasure(value); setReaderMeasure(value) }} aria-label="Ширина колонки" /></Setting>
+    <Setting title="Полужирная основа" hint="Взгляд цепляется за начало слова, а окончание достраивает сам"><label className={styles.switch}><input type="checkbox" checked={settings.emphasizeStems} onChange={(event) => void session.setEmphasizeStems(event.target.checked)} /> Выделять основу</label></Setting>
+    <Setting title="Окно чтения" hint="Притушить всё, кроме того места, где вы сейчас. Окно ведёт указатель — как бумажную линейку водят пальцем"><div className={styles.choices}>{FOCUS_MODES.map((item) => <button key={item.mode} className={styles.choice} data-active={settings.focusMode === item.mode} onClick={() => void session.setFocusMode(item.mode)}>{item.title}</button>)}</div></Setting>
+    <Setting title="Ведущая строка" hint={settings.pacerWpm > 0 ? `${settings.pacerWpm} слов в минуту · включается кнопкой в читалке` : 'Выключена: окно ведёте вы сами'}><div className={styles.choices}>{PACES.map((item) => <button key={item.wpm} className={styles.choice} data-active={settings.pacerWpm === item.wpm} onClick={() => void session.setPacer(item.wpm)}>{item.title}</button>)}</div></Setting>
+    <Setting title="Отрезок чтения" hint={settings.segmentWords > 0 ? `Подход примерно в ${settings.segmentWords} слов, конец подтягивается к точке` : 'Выключен: у главы остаётся только её собственный конец'}><div className={styles.choices}>{SEGMENTS.map((item) => <button key={item.words} className={styles.choice} data-active={settings.segmentWords === item.words} onClick={() => void session.setSegmentWords(item.words)}>{item.title}</button>)}</div></Setting>
     <Setting title="Интенсивность повторений" hint="Новые сроки рассчитывает ядро"><div className={styles.choices}>{INTENSITIES.map((item) => <button key={item.name} className={styles.choice} data-active={settings.intensity === item.name} onClick={() => void session.setIntensity(item.name)}>{item.title}</button>)}</div></Setting>
     <Setting title="Напоминания" hint={notify === 'granted' ? 'Браузер покажет уведомление по личному графику забывания' : notify === 'denied' ? 'Уведомления запрещены в настройках браузера; Wolfy напомнит внутри приложения' : 'Разрешение спрашивается только по этой кнопке'}><Button disabled={notify === 'granted' || notify === 'unavailable'} onClick={async () => setNotify(await enableReviewNotifications())}>{notify === 'granted' ? 'Разрешены' : notify === 'unavailable' ? 'Не поддерживаются' : 'Разрешить'}</Button></Setting>
     <Setting title="Меньше движения" hint="Отключает перелёты, пружины и плавную прокрутку"><label className={styles.switch}><input type="checkbox" checked={settings.reduceMotion} onChange={(event) => void session.setReduceMotion(event.target.checked)} /> Без анимаций</label></Setting>

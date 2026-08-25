@@ -45,7 +45,7 @@ import { session, useSession } from '../core/session'
 import type { LibraryBook } from '../core/types'
 import { Appear } from '../widgets/Appear'
 import { Button, buttonClassName } from '../widgets/Button'
-import { CameraIcon, DecksIcon, ImageIcon, PlusIcon, TrashIcon } from '../widgets/icons'
+import { CameraIcon, DecksIcon, ImageIcon, PlusIcon, SearchIcon, TrashIcon } from '../widgets/icons'
 import page from '../widgets/Page.module.css'
 import { WolfyCompanion } from '../widgets/Wolfy'
 import { BookCover, fraction } from './BookCover'
@@ -253,9 +253,19 @@ export function LibraryScreen() {
         <div className={styles.importer__prompt}>
           <span className={styles.importer__formats}>EPUB · PDF · TXT</span>
           <strong>{fileOver ? 'Отпускайте — добавим в библиотеку' : 'Перетащите книгу сюда'}</strong>
-          <Button small variant="quiet" onClick={() => setURLOpen((open) => !open)}>
-            {urlOpen ? 'Скрыть ссылку' : 'Добавить по ссылке'}
-          </Button>
+          <div className={styles.importer__ways}>
+            {/*
+              Каталог — третий способ пополнить библиотеку: без файла на руках
+              и без готовой ссылки. Стоит здесь же, рядом с двумя другими, а не
+              отдельным разделом: все три отвечают на один вопрос.
+            */}
+            <Link to="/library/catalogue" className={buttonClassName({ variant: 'quiet', small: true })}>
+              <SearchIcon size={15} /> Открытая библиотека
+            </Link>
+            <Button small variant="quiet" onClick={() => setURLOpen((open) => !open)}>
+              {urlOpen ? 'Скрыть ссылку' : 'Добавить по ссылке'}
+            </Button>
+          </div>
         </div>
         {urlOpen && (
           <form className={styles.importer__url} onSubmit={(event) => void submitURL(event)}>

@@ -183,6 +183,15 @@
   font-size: 1.25rem;
 }
 
+.wordForm__from {
+  margin: 0 0.4rem;
+  font-family: var(--sans), 'Inter Fallback';
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
 .wordForm__lemma {
   color: var(--ink-muted);
 }
@@ -785,113 +794,4 @@
   .phrasePrimary {
     padding: 0.75rem 0.8rem;
   }
-}
-
-/* --- Маркер и заметка ---------------------------------------------------- */
-
-.highlighter {
-  display: grid;
-  gap: 0.6rem;
-  margin-top: 0.9rem;
-  padding-top: 0.85rem;
-  border-top: 1px solid var(--rule);
-}
-
-.highlighter__row {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  flex-wrap: wrap;
-}
-
-.highlighter__sticker {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  max-width: 100%;
-  padding: 0.35rem 0.6rem;
-  border-radius: 3px 3px 8px 3px;
-  background: linear-gradient(180deg, #ffe9a8, #ffdc7d);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
-  color: #3c3008;
-  font-size: 0.82rem;
-  line-height: 1.3;
-  overflow: hidden;
-}
-
-.highlighter__stickerButton {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.35rem 0.7rem;
-  border: 1px dashed color-mix(in srgb, var(--ink) 30%, transparent);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--ink);
-  font: inherit;
-  font-size: 0.82rem;
-  cursor: pointer;
-  transition: background 160ms ease, border-color 160ms ease;
-}
-
-.highlighter__stickerButton:hover {
-  background: color-mix(in srgb, #ffdc7d 30%, transparent);
-  border-color: color-mix(in srgb, var(--ink) 55%, transparent);
-}
-
-.highlighter__remove {
-  display: grid;
-  place-items: center;
-  width: 1.9rem;
-  height: 1.9rem;
-  margin-left: auto;
-  border: none;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--ink-muted);
-  cursor: pointer;
-  transition: background 160ms ease, color 160ms ease;
-}
-
-.highlighter__remove:hover {
-  background: color-mix(in srgb, #a33a2b 14%, transparent);
-  color: #a33a2b;
-}
-
-.highlighter__label {
-  font-family: var(--sans), 'Inter Fallback';
-  font-size: 0.75rem;
-  font-weight: 650;
-  color: var(--ink-muted);
-}
-
-.tones {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.3rem;
-}
-
-/*
- * Кружок краски.
- *
- * Кромка чернилами появляется у выбранного: десять пастельных кружков подряд
- * различаются слабо, и «какой из них сейчас стоит» должно быть видно формой,
- * а не оттенком.
- */
-.tone {
-  width: 1.35rem;
-  height: 1.35rem;
-  border: 1px solid color-mix(in srgb, var(--ink) 18%, transparent);
-  border-radius: 999px;
-  background: var(--tone);
-  transition: transform var(--instant, 90ms) ease, box-shadow var(--quick, 180ms) ease;
-}
-
-.tone:hover {
-  transform: scale(1.14);
-}
-
-.tone[data-active='true'] {
-  border-color: var(--ink);
-  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px var(--ink);
 }

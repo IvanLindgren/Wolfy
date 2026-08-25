@@ -105,13 +105,13 @@ export function useShortcuts(shortcuts: Shortcut[], options: Options = {}): void
 
 /** Шпаргалка по клавишам — то, что показывает `?`. */
 export const CHEAT_SHEET: { keys: string; action: string }[] = [
-  { keys: '→ · PageDown · Пробел', action: 'Страница вперёд' },
-  { keys: '← · PageUp · Shift+Пробел', action: 'Страница назад' },
+  { keys: 'Вправо · PageDown · Пробел', action: 'Страница вперёд' },
+  { keys: 'Влево · PageUp · Shift+Пробел', action: 'Страница назад' },
   { keys: 'Home · End', action: 'Начало и конец главы' },
-  { keys: 'Esc', action: 'Назад: оглавление → карточка → книга' },
+  { keys: 'Esc', action: 'Назад: оглавление, карточка, книга' },
   { keys: 'Enter', action: 'Сохранить слово · следующий вопрос' },
   { keys: 'S', action: 'Произнести слово' },
   { keys: '1–9', action: 'Вариант ответа в тренировке' },
-  { keys: 'Ctrl+1…5', action: 'Разделы приложения' },
+  { keys: 'Ctrl+1…6', action: 'Разделы приложения' },
   { keys: '?', action: 'Эта шпаргалка' },
 ]

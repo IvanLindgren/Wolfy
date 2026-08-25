@@ -108,6 +108,7 @@
 .tab:nth-child(3) { animation-delay: 70ms; }
 .tab:nth-child(4) { animation-delay: 105ms; }
 .tab:nth-child(5) { animation-delay: 140ms; }
+.tab:nth-child(6) { animation-delay: 175ms; }
 
 .tab:hover {
   background: color-mix(in srgb, var(--accent) 7%, var(--surface-sunken));
@@ -145,15 +146,6 @@
   text-align: center;
 }
 
-.marker {
-  position: absolute;
-  left: 0.1rem;
-  top: 0.55rem;
-  bottom: 0.55rem;
-  width: 2px;
-  border-radius: 2px;
-  background: var(--accent);
-}
 
 @media (max-width: 860px) {
   .body {
@@ -177,15 +169,6 @@
     width: auto;
     flex: 1;
     max-width: 6rem;
-  }
-
-  .marker {
-    left: 25%;
-    right: 25%;
-    top: 0.1rem;
-    bottom: auto;
-    width: auto;
-    height: 2px;
   }
 
   .content {

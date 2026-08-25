@@ -4,6 +4,7 @@ import { Link, useParams } from '@tanstack/react-router'
 import { session, useSession } from '../core/session'
 import type { Card, CardKind, Drill, FreshRule } from '../core/types'
 import { Button } from '../widgets/Button'
+import { CloseIcon } from '../widgets/icons'
 import { WolfyCompanion } from '../widgets/Wolfy'
 import styles from './decks.module.css'
 
@@ -106,7 +107,7 @@ export function TrainingScreen() {
   return (
     <div className={styles.training}>
       <div className={styles.trainingBar}>
-        <Link to="/decks" aria-label="Закрыть тренировку">←</Link>
+        <Link to="/decks" aria-label="Закрыть тренировку" title="Закрыть тренировку"><CloseIcon size={18} /></Link>
         <div className={styles.trainingProgress}>
           <div className={styles.trainingProgress__bar} style={{ width: `${((position + (verdict ? 1 : 0)) / keys.length) * 100}%` }} />
         </div>
