@@ -367,3 +367,27 @@ mod tests {
         assert!(json.contains("\"withinChapter\""), "поле переименовалось");
     }
 }
+
+#[cfg(test)]
+mod canonical_tests {
+    use super::canonical_book_id;
+
+    /// Эталон, общий с сервером.
+    ///
+    /// `canonical_book_id` и `canonicalBookID` в `server/internal/store/sync.go`
+    /// обязаны давать один и тот же номер: сервер по нему решает, какая из двух
+    /// строк с одним `source_key` каноническая. Разойдутся — вернётся вечное
+    /// перекидывание книги между устройствами, ради которого §5 и затевалась.
+    #[test]
+    fn canonical_совпадает_с_серверным_эталоном() {
+        let ожидание = [
+            ("abc123", "62cca241-2f0a-5f65-9ec5-73768c755796"),
+            ("hash123", "87acf686-b595-5a9f-916c-695c49355d5e"),
+            ("same-hash-sync", "6f258824-9163-55be-aae4-aa460c08006d"),
+            ("deadbeefcafe123", "e06a9c5b-f253-52d8-bbf7-e99284ce4ac1"),
+        ];
+        for (ключ, номер) in ожидание {
+            assert_eq!(canonical_book_id(ключ).as_deref(), Some(номер), "ключ {ключ}");
+        }
+    }
+}

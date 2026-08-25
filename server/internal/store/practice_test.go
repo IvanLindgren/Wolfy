@@ -191,7 +191,13 @@ func TestPracticeOldReadingPreservedOnUpdate(t *testing.T) {
 	if err2 != nil {
 		t.Fatalf("list practice: %v", err2)
 	}
-	if len(components2) != 1 || !jsonEqual(components2[0].Practice, practice) {
+	// Длина проверяется отдельно: иначе Fatalf ниже полез бы в пустой срез и
+	// уронил тест паникой вместо внятного сообщения — ровно в том случае,
+	// который он и должен ловить.
+	if len(components2) != 1 {
+		t.Fatalf("компонентов practice %d, ожидали 1", len(components2))
+	}
+	if !jsonEqual(components2[0].Practice, practice) {
 		t.Fatalf("practice пропал после reading: got %s want %s", string(components2[0].Practice), string(practice))
 	}
 }

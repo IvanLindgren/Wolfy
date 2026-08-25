@@ -213,6 +213,13 @@ pub fn apply_server(
             for card in &mut merged_cards {
                 if let Some(new_id) = book_rebind.get(&card.book_id) {
                     card.book_id = new_id.clone();
+                    // Перепривязку обязан увидеть сервер: иначе он продолжит
+                    // отдавать карточку со старым book_id, и схлопывание
+                    // придётся повторять на каждой синхронизации, а другие
+                    // устройства так и не сойдутся. `rev` не сбрасываем —
+                    // id карточки не менялся, и серверная защита от
+                    // воскрешения tombstone сравнивает именно его.
+                    card.dirty = true;
                 }
             }
             // Дедупликация карточек после перепривязки: один и тот же lemma в одной книге не должен дублироваться
@@ -398,9 +405,14 @@ pub fn migrate_to_canonical(state: &LibraryState) -> LibraryState {
                 merged_books.push(book.clone());
             }
         } else {
-            // Дубликаты: несколько книг с одним source_key -> схлопываем
+            // Дубликаты: несколько книг с одним source_key -> схлопываем.
+            // Переименовываем только тех, чей id реально меняется: книга,
+            // уже стоящая на каноническом номере, не должна тащить свои
+            // карточки через перепривязку — иначе им зря сбросят dirty/rev.
             for b in &books {
-                renamed.push((b.id.clone(), canonical.clone()));
+                if b.id != canonical {
+                    renamed.push((b.id.clone(), canonical.clone()));
+                }
             }
             needs_migration = true;
             // Выбор survivor: не-удалённые предпочтительнее, затем max rev, затем max opened_at, затем max added_at
@@ -440,8 +452,13 @@ pub fn migrate_to_canonical(state: &LibraryState) -> LibraryState {
                     survivor.author = other.author.clone();
                 }
             }
-            survivor.id = canonical.clone();
-            survivor.rev = 0;
+            // `rev` обнуляется только при смене номера: на сервере это будет
+            // новая строка. Книге, уже стоящей на каноническом номере, сброс
+            // ревизии сломал бы серверную защиту от воскрешения tombstone.
+            if survivor.id != canonical {
+                survivor.id = canonical.clone();
+                survivor.rev = 0;
+            }
             survivor.dirty = true;
             // Если был удалён, но другой дубликат живой — оставить живым (выбрали живого как survivor), иначе survivor уже правильный
             merged_books.push(survivor);
@@ -456,8 +473,10 @@ pub fn migrate_to_canonical(state: &LibraryState) -> LibraryState {
     let mut rebound_cards: Vec<Card> = Vec::new();
     for mut card in state.cards.clone() {
         if let Some((_, canonical)) = renamed.iter().find(|(old, _)| *old == card.book_id) {
+            // Меняется только владелец. Номер карточки прежний, поэтому `rev`
+            // не трогаем: сервер сравнивает именно его, решая, не воскрешает
+            // ли устаревшая живая копия удалённую карточку.
             card.book_id = canonical.clone();
-            card.rev = 0;
             card.dirty = true;
         }
         rebound_cards.push(card);
@@ -977,6 +996,81 @@ mod tests {
         assert_eq!(after.books[0].source_key, hash);
         // Путь не затирается
         assert_eq!(after.books[0].path, "books/a.epub", "path-local состояние потерялось");
+    }
+
+    #[test]
+    fn перепривязанная_карточка_помечается_к_отправке() {
+        // Локальная старая книга A с HASH, сервер присылает каноническую C.
+        // Карточка A уезжает к C — и эта перепривязка обязана уехать на сервер,
+        // иначе он вечно будет отдавать её со старым book_id.
+        let hash = "rebind-dirty-hash";
+        let canonical = crate::library::book::canonical_book_id(hash).unwrap();
+        let mut local = книга("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "Локальная", NOW);
+        local.source_key = hash.to_string();
+        let mut card = Card::new("c1", "s", "lemma");
+        card.book_id = local.id.clone();
+        card.lemma = "hello".to_string();
+        card.rev = 7;
+        card.dirty = false;
+        let state = LibraryState {
+            books: vec![local],
+            cards: vec![card],
+            revision: 5,
+            ..Default::default()
+        };
+
+        let mut incoming = книга(&canonical, "Серверная", NOW);
+        incoming.source_key = hash.to_string();
+        incoming.rev = 5;
+        let after = apply_server(&state, 5, &[incoming], &[], &Sent::nothing(&state), NOW);
+
+        assert_eq!(after.cards.len(), 1);
+        assert_eq!(after.cards[0].book_id, canonical);
+        assert!(
+            after.cards[0].dirty,
+            "перепривязка book_id обязана уехать на сервер, иначе схлопывание повторяется вечно"
+        );
+        assert_eq!(
+            after.cards[0].rev, 7,
+            "номер карточки не менялся — сбрасывать её ревизию нельзя"
+        );
+    }
+
+    #[test]
+    fn каноничная_книга_в_группе_дубликатов_не_теряет_ревизию() {
+        // Одна книга уже на каноническом номере (rev 9, синхронизирована),
+        // рядом — старый дубликат. Схлопывание не должно обнулять ревизию
+        // выжившей: сервер по ней отличает свежую копию от устаревшей.
+        let hash = "dup-with-canonical";
+        let canonical = crate::library::book::canonical_book_id(hash).unwrap();
+        let mut good = книга(&canonical, "Каноничная", NOW);
+        good.source_key = hash.to_string();
+        good.rev = 9;
+        good.path = "books/good.epub".to_string();
+        let mut old = книга("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "Старая", NOW + 1);
+        old.source_key = hash.to_string();
+        old.rev = 2;
+
+        let mut card = Card::new("c1", "s", "lemma");
+        card.book_id = good.id.clone();
+        card.lemma = "hello".to_string();
+        card.rev = 4;
+        card.dirty = false;
+
+        let state = LibraryState {
+            books: vec![good, old],
+            cards: vec![card],
+            ..Default::default()
+        };
+        let after = migrate_to_canonical(&state);
+        assert_eq!(after.books.len(), 1);
+        assert_eq!(after.books[0].id, canonical);
+        assert_eq!(after.books[0].rev, 9, "ревизия каноничной книги обнулена зря");
+        assert_eq!(
+            after.cards[0].rev, 4,
+            "карточка не меняла владельца — её ревизию трогать нельзя"
+        );
+        assert!(!after.cards[0].dirty, "карточка не менялась, а помечена к отправке");
     }
 
     #[test]

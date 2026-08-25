@@ -2,9 +2,11 @@ package store
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -103,10 +105,22 @@ func (s *Store) NextRev(ctx context.Context, tx pgx.Tx, userID string) (int64, e
 // логическому id = canonical(HASH). Сервер хранит unique (user_id, source_key)
 // и не может иметь два id на один HASH. При конфликте source_key с разным id
 // выполняется alias-merge: карточки, аннотации и устройства перепривязываются
-// к пришедшему canonical id, старая книга удаляется. Без этого вторая офлайн-
-// отправка падала бы на unique violation с потерей прогресса.
-func (s *Store) SaveBooks(ctx context.Context, tx pgx.Tx, userID string, rev int64, books []Book) error {
+// к каноническому id, а проигравшая строка помечается удалённой — чтобы
+// устройство, у которого она ещё жива, узнало об этом обычным путём. Без
+// alias-merge вторая офлайн-отправка падала бы на unique violation с потерей
+// прогресса. Кто из двух номеров канонический, решает `canonicalBookID`, а не
+// порядок прихода: иначе устройства перекидывали бы книгу друг у друга.
+//
+// Возвращает карту «присланный номер -> номер, под которым книга легла».
+// Она непустая ровно в одном случае — когда присланный номер проиграл
+// каноническому, — и её обязан применить вызывающий к остальной посылке:
+// карточки той же отправки ссылаются на проигравший номер, которого в базе
+// нет и не будет, и без переписывания вся синхронизация упала бы на внешнем
+// ключе.
+func (s *Store) SaveBooks(ctx context.Context, tx pgx.Tx, userID string, rev int64, books []Book) (map[string]string, error) {
+	aliases := map[string]string{}
 	for _, book := range books {
+		sent := book.ID
 		// §5 alias: если такой source_key уже есть под другим id — освобождаем unique перед вставкой,
 		// чтобы INSERT не упал на books_user_source_idx, а затем перепривязываем зависимости.
 		var oldID string
@@ -117,12 +131,29 @@ func (s *Store) SaveBooks(ctx context.Context, tx pgx.Tx, userID string, rev int
                  WHERE user_id = $1 AND source_key = $2 AND source_key <> '' AND id <> $3::uuid`,
 				userID, book.SourceKey, book.ID).Scan(&oldID)
 			if err == nil {
-				hasOld = true
-				if _, err := tx.Exec(ctx, `UPDATE wolfy.books SET source_key='', updated_at=now() WHERE user_id=$1 AND id=$2::uuid`, userID, oldID); err != nil {
-					return fmt.Errorf("освобождение source_key %s: %w", oldID, err)
+				// Победителя выбирает не порядок прихода, а сам source_key:
+				// каноническим считается id, который из него выводится.
+				//
+				// Иначе получалось перекидывание. Устройство со старой копией
+				// библиотеки шлёт legacy-номер A — сервер объявлял бы
+				// каноническим A и хоронил C; обновлённое устройство при
+				// следующем открытии снова приводит книгу к C и шлёт C —
+				// сервер хоронит A. И так на каждой синхронизации, каждый раз
+				// перетаскивая все карточки книги.
+				canonical := canonicalBookID(book.SourceKey)
+				if canonical != "" && oldID == canonical && book.ID != canonical {
+					// Пришёл не-канонический номер, а канонический уже есть:
+					// вливаем присланное в него, чужой номер не заводим.
+					book.ID = oldID
+					aliases[sent] = oldID
+				} else {
+					hasOld = true
+					if _, err := tx.Exec(ctx, `UPDATE wolfy.books SET source_key='', updated_at=now() WHERE user_id=$1 AND id=$2::uuid`, userID, oldID); err != nil {
+						return nil, fmt.Errorf("освобождение source_key %s: %w", oldID, err)
+					}
 				}
 			} else if !errors.Is(err, pgx.ErrNoRows) {
-				return fmt.Errorf("проверка source_key %s: %w", book.SourceKey, err)
+				return nil, fmt.Errorf("проверка source_key %s: %w", book.SourceKey, err)
 			}
 		}
 
@@ -157,22 +188,41 @@ func (s *Store) SaveBooks(ctx context.Context, tx pgx.Tx, userID string, rev int
 			book.ChapterCount, book.LastChapter, book.LastOffset, book.Shelf,
 			book.Position, rev, deletedAt, book.Rev)
 		if err != nil {
-			return fmt.Errorf("запись книги %s: %w", book.ID, err)
+			return nil, fmt.Errorf("запись книги %s: %w", book.ID, err)
 		}
 
 		if hasOld {
-			if err := s.rebindBookAlias(ctx, tx, userID, oldID, book.ID); err != nil {
-				return fmt.Errorf("перепривязка книги %s -> %s: %w", oldID, book.ID, err)
+			if err := s.rebindBookAlias(ctx, tx, userID, rev, oldID, book.ID); err != nil {
+				return nil, fmt.Errorf("перепривязка книги %s -> %s: %w", oldID, book.ID, err)
 			}
 		}
 	}
-	return nil
+	return aliases, nil
+}
+
+// applyBookAliases переписывает ссылки карточек на книгу, проигравшую
+// каноническому номеру.
+//
+// Нужно потому, что порядок записи жёсткий: книги, потом карточки. Книга,
+// пришедшая под чужим номером, легла под канонический, а карточки той же
+// посылки всё ещё показывают на несуществующий номер — внешний ключ на
+// `wolfy.books` уронил бы всю транзакцию, и устройство со старой копией
+// библиотеки перестало бы синхронизироваться вовсе.
+func applyBookAliases(cards []Card, aliases map[string]string) {
+	if len(aliases) == 0 {
+		return
+	}
+	for i := range cards {
+		if to, ok := aliases[cards[i].BookID]; ok {
+			cards[i].BookID = to
+		}
+	}
 }
 
 // rebindBookAlias перепривязывает карточки, аннотации и устройства со старого
 // book id к новому canonical id, разрешая конфликты без потери данных.
 // Вызывается внутри транзакции Sync до вставки новой книги.
-func (s *Store) rebindBookAlias(ctx context.Context, tx pgx.Tx, userID, oldID, newID string) error {
+func (s *Store) rebindBookAlias(ctx context.Context, tx pgx.Tx, userID string, rev int64, oldID, newID string) error {
 	// Карточки: удалить дубликаты по (kind, lemma) где lemma непуст и not deleted,
 	// чтобы последующий UPDATE не словил unique violation
 	if _, err := tx.Exec(ctx, `
@@ -240,21 +290,24 @@ func (s *Store) rebindBookAlias(ctx context.Context, tx pgx.Tx, userID, oldID, n
 				}
 			}
 			merged := annotations.Merge(oldItems, newItems)
-			payload, err := json.Marshal(merged)
-			if err != nil {
-				return fmt.Errorf("сериализация аннотаций: %w", err)
-			}
 			mergedGen := oldGen
 			if newGen > mergedGen {
 				mergedGen = newGen
 			}
-			// Поколение штампуется заново, если было слияние
-			mergedGen++
-			for i := range merged {
-				merged[i].Generation = mergedGen
+			// Поколение растёт только вместе с состоянием — то же правило,
+			// что в обычном пути (`store/annotations.go`). Слияние, которое
+			// ничего не добавило к тому, что уже лежало под новым номером,
+			// не должно гонять устройства за подтверждениями впустую.
+			if !reflect.DeepEqual(merged, newItems) {
+				mergedGen++
+				for i := range merged {
+					merged[i].Generation = mergedGen
+				}
 			}
-			// Перезаписать merged под newID
-			payload, _ = json.Marshal(merged)
+			payload, err := json.Marshal(merged)
+			if err != nil {
+				return fmt.Errorf("сериализация аннотаций: %w", err)
+			}
 			if _, err := tx.Exec(ctx, `UPDATE wolfy.book_annotations SET items=$3, generation=$4, updated_at=now() WHERE user_id=$1 AND book_id=$2`, userID, newID, payload, mergedGen); err != nil {
 				return fmt.Errorf("обновление слитых аннотаций: %w", err)
 			}
@@ -268,11 +321,57 @@ func (s *Store) rebindBookAlias(ctx context.Context, tx pgx.Tx, userID, oldID, n
 			}
 		}
 	}
-	// Удалить старую книгу (если осталась пустая строка после перепривязки)
-	if _, err := tx.Exec(ctx, `DELETE FROM wolfy.books WHERE user_id=$1 AND id=$2::uuid`, userID, oldID); err != nil {
-		return fmt.Errorf("удаление старой книги: %w", err)
+	// Старую книгу хороним, а не стираем.
+	//
+	// Стёртая строка не попадает в выборку изменений, и устройство, у которого
+	// эта книга ещё жива, о её судьбе не узнает: оно оставит её у себя и на
+	// следующей отправке заведёт заново. Tombstone же доезжает как обычное
+	// удаление, и книга исчезает там, где была.
+	if _, err := tx.Exec(ctx, `
+        UPDATE wolfy.books
+           SET deleted_at = COALESCE(deleted_at, now()), source_key = '', rev = $3, updated_at = now()
+         WHERE user_id = $1 AND id = $2::uuid`,
+		userID, oldID, rev); err != nil {
+		return fmt.Errorf("похороны старой книги: %w", err)
 	}
 	return nil
+}
+
+// canonicalBookID — тот же детерминированный номер, что считает Rust
+// (`core/src/library/book.rs::canonical_book_id`).
+//
+// Сервер обязан уметь его вычислять сам: только так он может выбрать
+// победителя при конфликте `source_key` не по порядку прихода, а по существу.
+// Реализация повторена, а не вынесена: тащить ядро в серверный бинарник ради
+// тридцати строк дороже, чем держать общий эталон в тестах на обеих сторонах.
+//
+// Пустой source_key не каноникализируется: это «отпечаток снять не удалось»,
+// и склеивать по нему разные книги нельзя.
+func canonicalBookID(sourceKey string) string {
+	if sourceKey == "" {
+		return ""
+	}
+	const prime uint64 = 1099511628211
+	const offset uint64 = 14695981039346656037
+	fnv1a := func(data []byte, hash uint64) uint64 {
+		for _, b := range data {
+			hash ^= uint64(b)
+			hash *= prime
+		}
+		return hash
+	}
+	data := []byte(sourceKey)
+	h1 := fnv1a(data, offset)
+	h2 := fnv1a(data, prime^offset)
+
+	var raw [16]byte
+	binary.BigEndian.PutUint64(raw[0:8], h1)
+	binary.BigEndian.PutUint64(raw[8:16], h2)
+	raw[6] = (raw[6] & 0x0f) | 0x50 // версия 5
+	raw[8] = (raw[8] & 0x3f) | 0x80 // вариант 10xx
+
+	hex := fmt.Sprintf("%x", raw)
+	return hex[0:8] + "-" + hex[8:12] + "-" + hex[12:16] + "-" + hex[16:20] + "-" + hex[20:32]
 }
 
 // SaveCards записывает карточки. Книги обязаны быть записаны раньше: у карточки
@@ -283,7 +382,10 @@ func (s *Store) rebindBookAlias(ctx context.Context, tx pgx.Tx, userID, oldID, n
 //
 // §5: если две офлайн-книги слились к canonical, их карточки с одним lemma
 // тоже схлопываются. Дубликат по (kind, lemma, book_id) не должен падать на
-// unique violation: второй сохраняется как обновление первого (last writer wins).
+// unique violation: второй сохраняется как обновление первого (last writer wins),
+// а его собственный номер хоронится — иначе устройство, приславшее дубликат,
+// так и не узнало бы, что его карточка слилась с чужой, и держало бы у себя
+// две записи на одно слово.
 func (s *Store) SaveCards(ctx context.Context, tx pgx.Tx, userID string, rev int64, cards []Card) error {
 	for _, card := range cards {
 		// §5 dedup дубля lemma после каноникализации книги
@@ -301,7 +403,14 @@ func (s *Store) SaveCards(ctx context.Context, tx pgx.Tx, userID string, rev int
                    AND deleted_at IS NULL AND id <> $5::uuid`,
 				userID, kindOr(card.Kind), card.Lemma, qBookID, card.ID).Scan(&dupID)
 			if errDup == nil {
-				// Переписываем id на существующий, чтобы ON CONFLICT (id) обновил его
+				// Хороним присланный номер до того, как перепишем его на
+				// существующий: клиент увидит tombstone и уберёт лишнюю
+				// запись, оставив ту, что пришла в ответе. Частичный
+				// unique-индекс считает только живые строки, поэтому
+				// tombstone с тем же lemma в него не упирается.
+				if err := buryCard(ctx, tx, userID, rev, card); err != nil {
+					return err
+				}
 				card.ID = dupID
 			} else if !errors.Is(errDup, pgx.ErrNoRows) {
 				return fmt.Errorf("проверка дубля карточки %s: %w", card.ID, errDup)
@@ -498,9 +607,11 @@ func (s *Store) Sync(ctx context.Context, userID string, changes Changes) (Chang
 		}
 		// Книги раньше карточек: у карточки внешний ключ на книгу, и обратный
 		// порядок сорвался бы на первой же новой книге со словами.
-		if err := s.SaveBooks(ctx, tx, userID, rev, changes.Books); err != nil {
+		aliases, err := s.SaveBooks(ctx, tx, userID, rev, changes.Books)
+		if err != nil {
 			return Changes{}, err
 		}
+		applyBookAliases(changes.Cards, aliases)
 		if err := s.SaveCards(ctx, tx, userID, rev, changes.Cards); err != nil {
 			return Changes{}, err
 		}
@@ -543,6 +654,35 @@ func (s *Store) Sync(ctx context.Context, userID string, changes Changes) (Chang
 
 // kindOr защищает от пустого вида карточки: колонка не допускает пустоты, а
 // клиент прошлой версии о поле мог не знать.
+// buryCard помечает номер карточки удалённым, не трогая её содержимое.
+//
+// Нужно ровно одному месту — схлопыванию дубликатов по lemma: карточка
+// продолжает жить под другим номером, а этот обязан доехать до приславшего
+// устройства как удаление, иначе слово останется в колоде дважды.
+func buryCard(ctx context.Context, tx pgx.Tx, userID string, rev int64, card Card) error {
+	var bookID any
+	if card.BookID != "" {
+		bookID = card.BookID
+	}
+	due := card.DueAt
+	if due.IsZero() {
+		due = time.Now()
+	}
+	if _, err := tx.Exec(ctx, `
+        INSERT INTO wolfy.cards (
+            id, user_id, book_id, kind, surface, lemma, due_at, rev, deleted_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), now())
+        ON CONFLICT (id) DO UPDATE SET
+            deleted_at = COALESCE(wolfy.cards.deleted_at, now()),
+            rev = excluded.rev,
+            updated_at = now()
+          WHERE wolfy.cards.user_id = $2`,
+		card.ID, userID, bookID, kindOr(card.Kind), card.Surface, card.Lemma, due, rev); err != nil {
+		return fmt.Errorf("похороны дубля карточки %s: %w", card.ID, err)
+	}
+	return nil
+}
+
 func kindOr(kind string) string {
 	if kind == "" {
 		return "word"
