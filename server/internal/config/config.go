@@ -66,12 +66,10 @@ type Config struct {
 	// CORS и OAuth-возврат. Пустое значение оставляет только same-origin.
 	WebOrigin string
 
-	// StandardEbooks* — официальный Atom-каталог. Открытая лента новых
-	// релизов работает без учётных данных; полный /all требует разрешения
-	// Standard Ebooks и Basic Auth.
-	StandardEbooksFeedURL string
-	StandardEbooksUser    string
-	StandardEbooksPass    string
+	// GutendexURL — каталог Project Gutenberg. Ключей и регистрации не
+	// требует, поэтому значение по умолчанию рабочее, а переменная нужна
+	// только чтобы подставить зеркало, если основной адрес недоступен.
+	GutendexURL string
 
 	// DictionaryPath — распакованный TSV. Рядом обязан лежать файл .tsv.gz,
 	// который сервер отдаёт устройствам для офлайн-установки.
@@ -92,12 +90,12 @@ func Load() (Config, error) {
 	cfg := Config{
 		Addr:        envOr("WOLFY_ADDR", ":8080"),
 		Env:         envOr("WOLFY_ENV", "dev"),
-		DatabaseURL: strings.TrimSpace(os.Getenv("WOLFY_DB_URL")),
+		DatabaseURL: env("WOLFY_DB_URL"),
 
-		DeepLKey: strings.TrimSpace(os.Getenv("DEEPL_API_KEY")),
+		DeepLKey: env("DEEPL_API_KEY"),
 		DeepLURL: envOr("WOLFY_DEEPL_URL", "https://api-free.deepl.com/v2/translate"),
 
-		OCRKey:   strings.TrimSpace(os.Getenv("WOLFY_OCR_KEY")),
+		OCRKey:   env("WOLFY_OCR_KEY"),
 		OCRModel: envOr("WOLFY_OCR_MODEL", "google/gemini-3.7-flash"),
 		OCRURL:   envOr("WOLFY_OCR_URL", "https://api.polza.ai/api/v1/chat/completions"),
 
@@ -108,18 +106,13 @@ func Load() (Config, error) {
 		CitavukYandexStartURL:    envOr("WOLFY_CITAVUK_YANDEX_START_URL", "https://api.citavuk.ru/v1/auth/yandex/start"),
 		CitavukYandexCompleteURL: envOr("WOLFY_CITAVUK_YANDEX_COMPLETE_URL", "https://api.citavuk.ru/v1/auth/yandex/complete"),
 		CitavukYandexWebReturn:   envBool("WOLFY_CITAVUK_YANDEX_WEB_RETURN", false),
-		GoogleWebClientID:        strings.TrimSpace(os.Getenv("WOLFY_GOOGLE_WEB_CLIENT_ID")),
-		GoogleClientID:           strings.TrimSpace(os.Getenv("WOLFY_GOOGLE_CLIENT_ID")),
-		GoogleClientSecret:       strings.TrimSpace(os.Getenv("WOLFY_GOOGLE_CLIENT_SECRET")),
-		GoogleCallbackURL:        strings.TrimSpace(os.Getenv("WOLFY_GOOGLE_CALLBACK_URL")),
-		OAuthStateSecret:         strings.TrimSpace(os.Getenv("WOLFY_OAUTH_STATE_SECRET")),
-		WebOrigin:                strings.TrimRight(strings.TrimSpace(os.Getenv("WOLFY_WEB_ORIGIN")), "/"),
-		StandardEbooksFeedURL: envOr(
-			"WOLFY_STANDARD_EBOOKS_FEED_URL",
-			"https://standardebooks.org/feeds/atom/new-releases",
-		),
-		StandardEbooksUser: strings.TrimSpace(os.Getenv("WOLFY_STANDARD_EBOOKS_USER")),
-		StandardEbooksPass: strings.TrimSpace(os.Getenv("WOLFY_STANDARD_EBOOKS_PASSWORD")),
+		GoogleWebClientID:        env("WOLFY_GOOGLE_WEB_CLIENT_ID"),
+		GoogleClientID:           env("WOLFY_GOOGLE_CLIENT_ID"),
+		GoogleClientSecret:       env("WOLFY_GOOGLE_CLIENT_SECRET"),
+		GoogleCallbackURL:        env("WOLFY_GOOGLE_CALLBACK_URL"),
+		OAuthStateSecret:         env("WOLFY_OAUTH_STATE_SECRET"),
+		WebOrigin:                strings.TrimRight(env("WOLFY_WEB_ORIGIN"), "/"),
+		GutendexURL:              envOr("WOLFY_GUTENDEX_URL", "https://gutendex.com/books/"),
 		DictionaryPath: envOr(
 			"WOLFY_DICTIONARY_PATH",
 			defaultDictionaryPath(),
@@ -180,15 +173,46 @@ func (c Config) Development() bool {
 	return c.Env != "prod"
 }
 
+/*
+ * env читает переменную и снимает с неё кавычки.
+ *
+ * `WOLFY_GOOGLE_WEB_CLIENT_ID="123.apps.googleusercontent.com"` — то, как
+ * переменные окружения пишут по привычке из shell-скриптов, и systemd такую
+ * запись действительно раскавычивает сам. Но раскавычивает он её только когда
+ * кавычки закрыты и стоят по краям всего значения: строка со случайным
+ * пробелом после закрывающей кавычки, с `#` внутри или собранная не systemd, а
+ * `docker run --env-file`, доезжает до сервиса вместе с кавычками.
+ *
+ * Дальше кавычка молча становится частью ключа: Google отвечает
+ * `invalid_client` на client_id, отличающийся от настоящего двумя знаками,
+ * Postgres — «не найден хост», и ни один из этих ответов не называет причину.
+ * Дешевле снять кавычки здесь, чем каждый раз узнавать их по симптомам.
+ *
+ * Снимается только пара одинаковых кавычек по краям: значение, в котором
+ * кавычка стоит внутри, — это значение с кавычкой, а не ошибка записи.
+ */
+func env(key string) string {
+	return unquote(strings.TrimSpace(os.Getenv(key)))
+}
+
+func unquote(value string) string {
+	for _, quote := range []string{`"`, `'`} {
+		if len(value) >= 2 && strings.HasPrefix(value, quote) && strings.HasSuffix(value, quote) {
+			return strings.TrimSpace(value[1 : len(value)-1])
+		}
+	}
+	return value
+}
+
 func envOr(key, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+	if value := env(key); value != "" {
 		return value
 	}
 	return fallback
 }
 
 func envBool(key string, fallback bool) bool {
-	value := strings.TrimSpace(os.Getenv(key))
+	value := env(key)
 	if value == "" {
 		return fallback
 	}

@@ -28,15 +28,19 @@ const (
 var ErrUnavailable = fmt.Errorf("Открытая библиотека сейчас недоступна")
 
 // Book — находка поиска: что за книга и откуда её качать.
+// Имена полей на проводе заданы тегами, а не оставлены на усмотрение
+// encoding/json: клиенты читают `id`/`title`/`urls`, и Go-имена `ID`/`Title`
+// молча превращали любую находку в ошибку разбора, то есть в «каталог
+// недоступен» на совершенно исправном ответе.
 type Book struct {
 	// Номер работы в каталоге вида «OL267218W».
-	ID     string
-	Title  string
-	Author string
-	Year   int
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+	Author string `json:"author"`
+	Year   int    `json:"year"`
 	// Ссылки на скачивание по убыванию предпочтительности:
 	// сначала EPUB из архива, затем простой текст.
-	URLs []string
+	URLs []string `json:"urls"`
 }
 
 type Service struct {

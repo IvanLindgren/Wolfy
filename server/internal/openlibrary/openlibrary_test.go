@@ -2,6 +2,7 @@ package openlibrary
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -77,5 +78,34 @@ func TestSearchRefusesEmptyQuery(t *testing.T) {
 	service := withBase("https://openlibrary.org", time.Second)
 	if _, err := service.Search(context.Background(), "   ", 20); err == nil {
 		t.Fatal("пустой запрос должен быть отклонён до похода в каталог")
+	}
+}
+
+// Имена полей на проводе — часть договора с клиентами: Kotlin и React читают
+// `id`/`title`/`author`/`year`/`urls`. Пока тега не было, encoding/json отдавал
+// Go-имена, и любая находка превращалась у клиента в ошибку разбора.
+func TestBookMarshalsClientFieldNames(t *testing.T) {
+	payload, err := json.Marshal(Book{
+		ID:     "OL267218W",
+		Title:  "The Adventures of Sherlock Holmes",
+		Author: "Arthur Conan Doyle",
+		Year:   1892,
+		URLs:   []string{"https://archive.org/download/x/x.epub"},
+	})
+	if err != nil {
+		t.Fatalf("книга не сериализовалась: %v", err)
+	}
+
+	var wire map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &wire); err != nil {
+		t.Fatalf("ответ не разобрался: %v", err)
+	}
+	for _, name := range []string{"id", "title", "author", "year", "urls"} {
+		if _, ok := wire[name]; !ok {
+			t.Errorf("в ответе нет поля %q: %s", name, payload)
+		}
+	}
+	if len(wire) != 5 {
+		t.Errorf("лишние поля в ответе: %s", payload)
 	}
 }
