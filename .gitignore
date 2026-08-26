@@ -19,6 +19,7 @@ client/build/
 client/*/build/
 client/*/build-*/
 client/local.properties
+client/release-signing.properties
 client/.kotlin/
 *.jks
 *.keystore

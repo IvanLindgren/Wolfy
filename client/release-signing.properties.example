@@ -1,0 +1,5 @@
+# Скопируйте в release-signing.properties. Этот файл хранится только локально.
+storeFile=androidApp/wolfy-release.keystore
+storePassword=
+keyAlias=wolfy-release
+keyPassword=
