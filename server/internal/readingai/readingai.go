@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -23,6 +25,41 @@ var (
 	ErrLimit       = errors.New("на сегодня доступно 10 Beta-подсказок")
 	ErrInvalid     = errors.New("ответ ИИ не прошёл проверку")
 )
+
+// Виды отказа провайдера. Код едет клиенту в поле code, чтобы тот показывал
+// честную фразу вместо общей «недоступно», и пишется в лог вместе со статусом.
+const (
+	FailKey      = "key"      // 401/403 — провайдер не принял ключ
+	FailModel    = "model"    // 404 — не найдены модель или URL
+	FailLimit    = "limit"    // 429 — лимит провайдера
+	FailProvider = "provider" // 5xx — сбой на стороне провайдера
+	FailTimeout  = "timeout"  // Gemini не успел ответить
+	FailBadJSON  = "badjson"  // ответ не прошёл контракт
+)
+
+// ProviderError — расшифрованный отказ внешнего ИИ-провайдера. Для старых
+// проверок остаётся совместим с ErrUnavailable через Is.
+type ProviderError struct {
+	Kind   string
+	Status int
+}
+
+func (e *ProviderError) Error() string { return ErrUnavailable.Error() }
+func (e *ProviderError) Is(target error) bool {
+	return target == ErrUnavailable || target == e
+}
+
+type Service struct {
+	store           *store.Store
+	client          *http.Client
+	log             *slog.Logger
+	key, url, model string
+}
+
+func New(s *store.Store, key, url, model string, timeout time.Duration) *Service {
+	return &Service{store: s, log: slog.Default(), client: &http.Client{Timeout: timeout}, key: strings.TrimSpace(key), url: strings.TrimSpace(url), model: strings.TrimSpace(model)}
+}
+func (s *Service) Configured() bool { return s.key != "" && s.url != "" && s.model != "" }
 
 type PhraseStep struct {
 	Label string `json:"label"`
@@ -45,17 +82,6 @@ type Recap struct {
 	Events    []Event `json:"events"`
 	Remaining int     `json:"remaining"`
 }
-
-type Service struct {
-	store           *store.Store
-	client          *http.Client
-	key, url, model string
-}
-
-func New(s *store.Store, key, url, model string, timeout time.Duration) *Service {
-	return &Service{store: s, client: &http.Client{Timeout: timeout}, key: strings.TrimSpace(key), url: strings.TrimSpace(url), model: strings.TrimSpace(model)}
-}
-func (s *Service) Configured() bool { return s.key != "" && s.url != "" && s.model != "" }
 
 func (s *Service) Phrase(ctx context.Context, userID, phrase, contextText string) (Phrase, error) {
 	if len([]rune(phrase)) < 3 || len([]rune(phrase)) > 800 || len([]rune(contextText)) > 4000 {
@@ -138,18 +164,42 @@ func (s *Service) ask(ctx context.Context, prompt string) (string, error) {
 	body, _ := json.Marshal(map[string]any{"model": s.model, "temperature": 0.2, "messages": []map[string]string{{"role": "user", "content": prompt}}})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.url, bytes.NewReader(body))
 	if err != nil {
-		return "", ErrUnavailable
+		return "", &ProviderError{Kind: FailProvider}
 	}
 	req.Header.Set("Authorization", "Bearer "+s.key)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return "", ErrUnavailable
+		// Ключ и текст книги в лог не пишутся никогда: здесь важны только
+		// вид отказа и модель, по ним чинят конфигурацию.
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || isTimeout(err) {
+			s.log.Warn("gemini не ответил вовремя", "kind", FailTimeout, "model", s.model)
+			return "", &ProviderError{Kind: FailTimeout}
+		}
+		s.log.Warn("gemini недоступен", "kind", FailProvider, "error", err.Error(), "model", s.model)
+		return "", &ProviderError{Kind: FailProvider}
 	}
 	defer resp.Body.Close()
+	switch {
+	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+		s.log.Warn("gemini отверг ключ", "kind", FailKey, "status", resp.StatusCode)
+		return "", &ProviderError{Kind: FailKey, Status: resp.StatusCode}
+	case resp.StatusCode == http.StatusNotFound:
+		s.log.Warn("gemini не нашёл модель или адрес", "kind", FailModel, "status", resp.StatusCode, "model", s.model)
+		return "", &ProviderError{Kind: FailModel, Status: resp.StatusCode}
+	case resp.StatusCode == http.StatusTooManyRequests:
+		s.log.Warn("gemини лимит исчерпан", "kind", FailLimit, "status", resp.StatusCode)
+		return "", &ProviderError{Kind: FailLimit, Status: resp.StatusCode}
+	case resp.StatusCode >= 500:
+		s.log.Warn("gemини сбой провайдера", "kind", FailProvider, "status", resp.StatusCode)
+		return "", &ProviderError{Kind: FailProvider, Status: resp.StatusCode}
+	case resp.StatusCode != http.StatusOK:
+		s.log.Warn("gemини неожиданный статус", "kind", FailProvider, "status", resp.StatusCode)
+		return "", &ProviderError{Kind: FailProvider, Status: resp.StatusCode}
+	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 128<<10))
-	if err != nil || resp.StatusCode != http.StatusOK {
-		return "", ErrUnavailable
+	if err != nil {
+		return "", &ProviderError{Kind: FailBadJSON}
 	}
 	var decoded struct {
 		Choices []struct {
@@ -159,9 +209,16 @@ func (s *Service) ask(ctx context.Context, prompt string) (string, error) {
 		} `json:"choices"`
 	}
 	if json.Unmarshal(raw, &decoded) != nil || len(decoded.Choices) == 0 {
-		return "", ErrUnavailable
+		s.log.Warn("ответ gemini не разобран", "kind", FailBadJSON, "bytes", len(raw))
+		return "", &ProviderError{Kind: FailBadJSON}
 	}
 	return decoded.Choices[0].Message.Content, nil
+}
+
+// isTimeout отличает сетевой таймаут от прочих ошибок транспорта.
+func isTimeout(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func cleanJSON(raw string) []byte {

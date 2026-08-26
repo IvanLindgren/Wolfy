@@ -47,11 +47,15 @@ fun DropCapParagraph(
     saved: Set<String> = emptySet(),
     savedLemmaOf: (Token) -> String = { it.text.lowercase() },
     selected: Token? = null,
+    selection: IntRange? = null,
+    selectViaMouse: Boolean = false,
     /** Докуда набирать каждое слово полужирным — по числу на токен абзаца. */
     anchors: List<Int> = emptyList(),
     /** Притушить абзац целиком: читатель сейчас не здесь. */
     dimmed: Boolean = false,
     onWordTap: (Token) -> Unit = {},
+    onPhrase: (IntRange) -> Unit = {},
+    onPhraseDone: (IntRange) -> Unit = {},
 ) {
     val colors = WolfyTheme.colors
     val typography = WolfyTheme.typography
@@ -74,9 +78,13 @@ fun DropCapParagraph(
             saved = saved,
             savedLemmaOf = savedLemmaOf,
             selected = selected,
+            selection = selection,
+            selectViaMouse = selectViaMouse,
             anchors = anchors,
             dimmed = dimmed,
             onWordTap = onWordTap,
+            onPhrase = onPhrase,
+            onPhraseDone = onPhraseDone,
         )
         return
     }
@@ -146,9 +154,17 @@ fun DropCapParagraph(
                             saved = saved,
                             savedLemmaOf = savedLemmaOf,
                             selected = selected,
+                            selection = selection,
+                            // Локальные смещения этой раскладки начинаются с
+                            // нуля, а токены — с единицы (буквицы): без
+                            // сдвига попадание уехало бы на один знак.
+                            offsetShift = 1,
+                            selectViaMouse = selectViaMouse,
                             anchors = beside.anchors,
                             dimmed = dimmed,
                             onWordTap = tapWhole,
+                            onPhrase = onPhrase,
+                            onPhraseDone = onPhraseDone,
                         )
                     }
                 }
@@ -159,9 +175,14 @@ fun DropCapParagraph(
                         saved = saved,
                         savedLemmaOf = savedLemmaOf,
                         selected = selected,
+                        selection = selection,
+                        offsetShift = splitAt + 1,
+                        selectViaMouse = selectViaMouse,
                         anchors = below.anchors,
                         dimmed = dimmed,
                         onWordTap = tapWhole,
+                        onPhrase = onPhrase,
+                        onPhraseDone = onPhraseDone,
                     )
                 }
             }

@@ -53,6 +53,17 @@ data class WordCardState(
      * оборот, в котором оно стоит, — и наоборот почти никогда.
      */
     val phraseSaved: Boolean = false,
+    /**
+     * Выделенная читателем фраза вместо всего предложения.
+     *
+     * Заполняется жестом выделения: переводится, сохраняется и объясняется
+     * именно она, а окружающее предложение остаётся контекстом. `null` —
+     * карточка открыта тапом по слову и фразой считается всё предложение
+     * (старое поведение).
+     */
+    val phraseText: String? = null,
+    /** Карточка открыта сразу на вкладке «Фраза» — следом за выделением. */
+    val openOnPhrase: Boolean = false,
     val betaExplanation: BetaPhraseState = BetaPhraseState.Idle,
 )
 
@@ -60,8 +71,15 @@ data class WordCardState(
 sealed interface BetaPhraseState {
     data object Idle : BetaPhraseState
     data object Loading : BetaPhraseState
+
+    /**
+     * Готовый ответ держится в состоянии карточки до её закрытия: читатель,
+     * случайно убравший карточку, не обязан платить новым запросом.
+     */
     data class Ready(val value: AiPhrase) : BetaPhraseState
-    data class Failed(val message: String) : BetaPhraseState
+
+    /** @param remaining сколько запросов осталось после неудачного. */
+    data class Failed(val message: String, val remaining: Int = -1) : BetaPhraseState
 }
 
 /** Толкование приезжает независимо от перевода: локально либо с сервера. */

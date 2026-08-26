@@ -599,7 +599,10 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		"translate": s.translate.Configured(),
 		// Клиент прячет съёмку, если распознавание не настроено: кнопка,
 		// которая всегда отвечает ошибкой, хуже её отсутствия.
-		"ocr":        s.ocr.Configured(),
+		"ocr": s.ocr.Configured(),
+		// Отдельное поле для Beta-подсказки: раньше о её доступности можно
+		// было только догадываться по research, а это разные сервисы.
+		"ai":         s.readingAI.Configured(),
 		"dictionary": s.dictionary.Configured(),
 		// По этим двум клиент решает, показывать ли «Создать аккаунт» и
 		// «Выслать письмо ещё раз».

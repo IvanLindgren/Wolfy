@@ -777,6 +777,9 @@ private fun Shell(
                     onDismissRecap = parts.reader::dismissRecap,
                     onResearch = parts.reader::startResearch,
                     onResearchDisposition = parts.reader::setResearchDisposition,
+                    onPhraseSelected = { block, range, text, parsed ->
+                        parts.reader.openPhrase(block, range, text, parsed)
+                    },
                     onImageVisible = parts.reader::loadImage,
                     theme = theme,
                     fontScale = fontScale,

@@ -176,7 +176,12 @@ private fun CardBody(
     maxHeight: Dp,
 ) {
     val spacing = WolfyTheme.spacing
-    var mode by remember(state.token.start, state.context) { mutableStateOf(CardMode.Word) }
+    // Карточка после выделения фразы обязана встретить читателя вкладкой
+    // «Фраза»: он только что взял фразу — показывать вкладку слова значит
+    // делать за него выбор заново.
+    var mode by remember(state.token.start, state.context) {
+        mutableStateOf(if (state.openOnPhrase) CardMode.Phrase else CardMode.Word)
+    }
     val flight = LocalFlight.current
     val (launchModifier, launchBounds) = rememberLaunchPad()
 
@@ -616,6 +621,18 @@ private fun PhraseEssentials(
 ) {
     val spacing = WolfyTheme.spacing
     Column(verticalArrangement = Arrangement.spacedBy(spacing.medium)) {
+        // Выделенная фраза показывается отдельно и без задержки появления:
+        // читатель должен сразу видеть, что переводится/объясняется именно
+        // его выбор, а не всё предложение вокруг.
+        if (state.phraseText != null && state.phraseText != state.context) {
+            PrimaryCard(title = "Выделенная фраза") {
+                Text(
+                    state.phraseText,
+                    style = WolfyTheme.typography.translation,
+                    color = WolfyTheme.colors.ink,
+                )
+            }
+        }
         Appear(0) {
             PrimaryCard(title = "Фраза и части речи") {
                 if (state.chunks.isNotEmpty()) {
@@ -665,8 +682,24 @@ private fun BetaPhraseExplanation(state: BetaPhraseState, onAsk: () -> Unit) {
         )
         when (state) {
             BetaPhraseState.Idle -> Text("Спросить Gemini", style = WolfyTheme.typography.button, color = colors.accent, modifier = Modifier.pressable(onClick = onAsk).padding(top = spacing.small))
-            BetaPhraseState.Loading -> Text("Gemini разбирает фразу…", style = WolfyTheme.typography.caption, color = colors.inkMuted)
-            is BetaPhraseState.Failed -> Text(state.message, style = WolfyTheme.typography.caption, color = colors.accent)
+            BetaPhraseState.Loading -> {
+                // Запрос уже в полёте: повторное нажатие ничего не должно
+                // запускать заново.
+                Text("Gemini разбирает фразу…", style = WolfyTheme.typography.caption, color = colors.inkMuted)
+            }
+            is BetaPhraseState.Failed -> {
+                // Ошибка остаётся на экране вместе с кнопкой повтора: пропавшая
+                // ошибка выглядит как молчание кнопки.
+                Text(state.message, style = WolfyTheme.typography.caption, color = colors.accent)
+                Row(Modifier.padding(top = spacing.small), horizontalArrangement = Arrangement.spacedBy(spacing.medium)) {
+                    Text("Повторить", style = WolfyTheme.typography.button, color = colors.accent, modifier = Modifier.pressable(onClick = onAsk))
+                    // Сервер сообщает остаток не на каждой ошибке: показываем
+                    // только когда он действительно приехал.
+                    if (state.remaining >= 0) {
+                        Text("Осталось сегодня: ${state.remaining}", style = WolfyTheme.typography.caption, color = colors.inkMuted)
+                    }
+                }
+            }
             is BetaPhraseState.Ready -> {
                 Text(state.value.title, style = WolfyTheme.typography.body, color = colors.ink)
                 Text(state.value.explanation, style = WolfyTheme.typography.caption, color = colors.inkMuted)

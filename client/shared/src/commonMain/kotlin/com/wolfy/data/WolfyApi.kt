@@ -486,8 +486,18 @@ class WolfyApi(
                 setBody(AiPhraseRequest(phrase, context))
                 timeout { requestTimeoutMillis = 45_000 }
             }
-            if (response.status == HttpStatusCode.OK) AiPhraseResult.Ready(response.body())
-            else AiPhraseResult.Failed(response.authMessage().ifBlank { "Beta-подсказка сейчас недоступна." })
+            if (response.status == HttpStatusCode.OK) {
+                AiPhraseResult.Ready(response.body())
+            } else {
+                // Вместе с фразой забирается код отказа: по нему карточка
+                // показывает читателю причину, а не общее «недоступно».
+                val failure = runCatching { response.body<AuthError>() }.getOrNull()
+                val reason = failure?.message().orEmpty()
+                AiPhraseResult.Failed(
+                    reason.ifBlank { "Beta-подсказка сейчас недоступна." },
+                    failure?.code.orEmpty(),
+                )
+            }
         } catch (_: Exception) { AiPhraseResult.Failed("Нет связи с Beta-подсказкой.") }
     }
 
@@ -1117,7 +1127,12 @@ data class AiRecap(val summary: String, val events: List<AiEvent>, val remaining
 @Serializable
 data class AiEvent(val title: String, val text: String, val kind: String)
 
-sealed interface AiPhraseResult { data class Ready(val value: AiPhrase) : AiPhraseResult; data class Failed(val message: String) : AiPhraseResult }
+sealed interface AiPhraseResult {
+    data class Ready(val value: AiPhrase) : AiPhraseResult
+
+    /** @param code машиночитаемый вид отказа сервера (`provider`, `limit`…). */
+    data class Failed(val message: String, val code: String = "") : AiPhraseResult
+}
 sealed interface AiRecapResult { data class Ready(val value: AiRecap) : AiRecapResult; data class Failed(val message: String) : AiRecapResult }
 
 @Serializable

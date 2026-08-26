@@ -49,13 +49,37 @@ func (s *Server) postAIRecap(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) writeAI(w http.ResponseWriter, result any, err error) {
+	var provider *readingai.ProviderError
 	switch {
 	case err == nil:
 		writeJSON(w, http.StatusOK, result)
 	case errors.Is(err, readingai.ErrLimit):
-		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "Лимит Beta: до 10 запросов в день."})
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{
+			"error": "Лимит Beta: до 10 запросов в день.",
+			"code":  "quota",
+		})
 	case errors.Is(err, readingai.ErrInvalid):
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Не удалось проверить ответ ИИ. Попробуйте другой фрагмент."})
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "Не удалось проверить ответ ИИ. Попробуйте другой фрагмент.",
+			"code":  "invalid_answer",
+		})
+	case errors.As(err, &provider):
+		// Вместо одной «недоступно» — разные причины и честные коды: клиент
+		// по ним показывает читателю конкретную подсказку.
+		switch provider.Kind {
+		case readingai.FailKey:
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Провайдер не принял ключ сервера.", "code": "key"})
+		case readingai.FailModel:
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Модель ИИ сейчас недоступна.", "code": "model"})
+		case readingai.FailLimit:
+			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "Провайдер ИИ ограничил запросы.", "code": "limit"})
+		case readingai.FailTimeout:
+			writeJSON(w, http.StatusGatewayTimeout, map[string]string{"error": "Gemini не успел ответить. Попробуйте ещё раз.", "code": "timeout"})
+		case readingai.FailBadJSON:
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Ответ ИИ не подошёл по формату.", "code": "badjson"})
+		default:
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Gemini сейчас не ответил.", "code": "provider"})
+		}
 	default:
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Beta-подсказка сейчас недоступна."})
 	}

@@ -67,3 +67,7 @@ dist/
 # РїРµСЂРµСЃРѕР±РёСЂР°СЋС‚СЃСЏ РѕРґРЅРѕР№ РєРѕРјР°РЅРґРѕР№.
 graphify-out/
 WOLFY_OPTIM.txt
+
+# Локальные сборки APK и прочие артефакты доставки
+Wolfy-*.apk
+release-download/

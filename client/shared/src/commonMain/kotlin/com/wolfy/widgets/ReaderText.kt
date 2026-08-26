@@ -2,9 +2,6 @@ package com.wolfy.widgets
 
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.awaitHorizontalTouchSlopOrCancellation
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -12,7 +9,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
@@ -27,7 +27,7 @@ import com.wolfy.ffi.Token
 import com.wolfy.theme.WolfyTheme
 
 /**
- * Абзац книги, в котором можно тапнуть по слову.
+ * Абзац книги, в котором можно тапнуть по слову и выделить фразу.
  *
  * Разметка приходит из ядра: [ParsedText] несёт токены с позициями в тех же
  * единицах, которыми меряет строки Kotlin. Поэтому подсветка и попадание в
@@ -40,6 +40,12 @@ import com.wolfy.theme.WolfyTheme
  * @param selected слово, по которому только что нажали — под ним держится фон,
  *   пока открыта карточка.
  * @param selection выделенный кусок абзаца в тех же смещениях, что и токены.
+ * @param offsetShift добавка к локальным смещениям раскладки. Буквица режет
+ *   абзац на части, у каждой своя раскладка со смещениями от нуля, а токены
+ *   остались в координатах полного абзаца; без этой добавки тап во второй
+ *   половине попадал бы мимо слова.
+ * @param selectViaMouse жест настраивается мышью (двойной клик + протягивание),
+ *   а не долгим нажатием. Desktop — true, Android — false.
  * @param onPhrase зовётся, пока палец ведут по строке: по нему держится
  *   подсветка выделения.
  * @param onPhraseDone зовётся, когда палец подняли, — здесь открывается
@@ -54,6 +60,8 @@ fun ReaderParagraph(
     savedLemmaOf: (Token) -> String = { it.text.lowercase() },
     selected: Token? = null,
     selection: IntRange? = null,
+    offsetShift: Int = 0,
+    selectViaMouse: Boolean = false,
     /**
      * Докуда набирать каждое слово полужирным — по числу на токен абзаца.
      *
@@ -105,7 +113,7 @@ fun ReaderParagraph(
                  *
                  * Насыщенность умеренная (`W600`, а не `Bold`): на странице,
                  * где выделено каждое слово, разница в двести единиц
-                 * превращает текст в сплошную черноту, и якорь перестаёт быть
+                 * превращает текст в сплошную черноту, и якорь перестает быть
                  * якорем.
                  */
                 val anchor = anchors.getOrElse(index) { 0 }
@@ -176,62 +184,182 @@ fun ReaderParagraph(
         onTextLayout = { layout = it },
         modifier = modifier
             .fillMaxWidth()
-            .pointerInput(parsed) {
-                detectTapGestures { position ->
-                    val result = layout ?: return@detectTapGestures
-                    val offset = result.getOffsetForPosition(position)
-                    val token = parsed.tokenAt(offset) ?: return@detectTapGestures
-                    if (token.tappable) {
-                        onWordTap(token)
+            .pointerInput(parsed, selectViaMouse, offsetShift) {
+                // Ссылки на локальные переменные (::layout) Kotlin пока не
+                // берёт — раскладку отдаём лямбдой. Жестовые автоматы живут в
+                // отдельной области ожидания событий указателя.
+                awaitPointerEventScope {
+                    val layoutProvider: () -> TextLayoutResult? = { layout }
+                    if (selectViaMouse) {
+                        mouseGestures(parsed, offsetShift, layoutProvider, onWordTap, onPhrase, onPhraseDone)
+                    } else {
+                        touchGestures(parsed, offsetShift, layoutProvider, viewConfiguration.longPressTimeoutMillis, onWordTap, onPhrase, onPhraseDone)
                     }
-                }
-            }
-            // Выделение фразы. Порог берётся горизонтальный, а не общий, и это
-            // главное здесь: вертикальное движение по абзацу — это прокрутка
-            // книги, и перехватывать его нельзя. Проведённая же по строке рука
-            // ничего, кроме выделения, значить не может.
-            .pointerInput(parsed) {
-                awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false)
-                    val started = awaitHorizontalTouchSlopOrCancellation(down.id) { change, _ ->
-                        change.consume()
-                    } ?: return@awaitEachGesture
-
-                    val result = layout ?: return@awaitEachGesture
-                    val anchor = result.getOffsetForPosition(down.position)
-                    var range = parsed.spanBetween(
-                        anchor,
-                        result.getOffsetForPosition(started.position),
-                    )
-                    onPhrase(range)
-
-                    drag(started.id) { change ->
-                        change.consume()
-                        range = parsed.spanBetween(
-                            anchor,
-                            result.getOffsetForPosition(change.position),
-                        )
-                        onPhrase(range)
-                    }
-                    onPhraseDone(range)
                 }
             },
     )
 }
 
 /**
- * Кусок текста между двумя точками касания, растянутый до границ слов.
+ * Жесты пальцем: долгое нажатие включает режим выделения, протягивание ведёт
+ * диапазон по словам, поднятие пальца открывает карточку фразы.
  *
- * Растянутый — потому что палец опускают на середину слова, а взять половину
- * слова нельзя: «he was rea» не переводится и не сохраняется. Границы берутся
- * у токенов, то есть у того же разбора, который нарисовал абзац.
+ * До активации жест целиком остаётся прокрутке страницы: вертикальное
+ * движение после долгого нажатия тоже относится к выделению, а до него —
+ * обычный скролл. Долгое нажатие без движения выбирает предложение вокруг
+ * пальца — оно полезнее одиночного слова, которое и так открывается тапом.
  */
+private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.touchGestures(
+    parsed: ParsedText,
+    shift: Int,
+    layout: () -> TextLayoutResult?,
+    longPressMillis: Long,
+    onWordTap: (Token) -> Unit,
+    onPhrase: (IntRange) -> Unit,
+    onPhraseDone: (IntRange) -> Unit,
+) {
+    val slop = viewConfiguration.touchSlop
+    while (true) {
+        val down = awaitFirstDown(requireUnconsumed = false)
+        val startTime = down.uptimeMillis
+
+        // Ждём конца долгого нажатия: любое движение сильнее slop отменяет
+        // кандидатуру — это прокрутка, и её нельзя блокировать.
+        var moved = false
+        var held = false
+        var lifted = false
+        while (true) {
+            val event = awaitPointerEvent()
+            val change = event.changes.firstOrNull() ?: break
+            if (!change.pressed) {
+                lifted = true
+                break
+            }
+            if (change.uptimeMillis - startTime >= longPressMillis) {
+                held = true
+                break
+            }
+            if (change.positionChange().getDistance() > slop) {
+                moved = true
+                break
+            }
+        }
+
+        val result = layout() ?: continue
+        val anchor = result.getOffsetForPosition(down.position) + shift
+
+        if (lifted && !held && !moved) {
+            // Обычный тап — карточка слова, как раньше.
+            val token = parsed.tokenAt(anchor)
+            if (token?.tappable == true) onWordTap(token)
+            continue
+        }
+        if (!held || moved) continue
+
+        // Долгое нажатие состоялось: сразу подсвечиваем предложение вокруг
+        // пальца и дальше ведём жест только как выделение.
+        var range = parsed.spanAroundSentence(anchor)
+        onPhrase(range)
+
+        while (true) {
+            val event = awaitPointerEvent()
+            val change = event.changes.firstOrNull() ?: break
+            if (!change.pressed) break
+            change.consume()
+            range = parsed.spanBetween(anchor, result.getOffsetForPosition(change.position) + shift)
+            onPhrase(range)
+        }
+        onPhraseDone(range)
+    }
+}
+
+/**
+ * Жесты мышью: одиночный клик открывает карточку слова, второй клик в пределах
+ * интервала двойного клика начинает выделение, которое ведётся зажатой кнопкой
+ * и фиксируется отпусканием.
+ *
+ * Время первого клика живёт между жестами, иначе второй клик не с чем сравнить.
+ */
+private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.mouseGestures(
+    parsed: ParsedText,
+    shift: Int,
+    layout: () -> TextLayoutResult?,
+    onWordTap: (Token) -> Unit,
+    onPhrase: (IntRange) -> Unit,
+    onPhraseDone: (IntRange) -> Unit,
+) {
+    val doubleWindowMs = 400L
+    var lastClickTime = 0L
+    var lastClickPos = Offset.Zero
+    val radiusPx = 12f
+
+    while (true) {
+        val down = awaitFirstDown(requireUnconsumed = false)
+        val isSecondClick = down.uptimeMillis - lastClickTime < doubleWindowMs &&
+            (down.position - lastClickPos).getDistance() <= radiusPx
+
+        if (!isSecondClick) {
+            // Первый клик: запоминаем момент и место, ждём отпускания.
+            lastClickTime = down.uptimeMillis
+            lastClickPos = down.position
+            var dragged = false
+            while (true) {
+                val event = awaitPointerEvent()
+                val change = event.changes.firstOrNull() ?: break
+                if (change.positionChange().getDistance() > 8f) dragged = true
+                if (!change.pressed) break
+            }
+            if (!dragged) {
+                layout()?.let { result ->
+                    val token = parsed.tokenAt(result.getOffsetForPosition(down.position) + shift)
+                    if (token?.tappable == true) onWordTap(token)
+                }
+            }
+            continue
+        }
+
+        // Второй клик: включаем выделение.
+        lastClickTime = 0L
+        val result = layout() ?: continue
+        val anchor = result.getOffsetForPosition(down.position) + shift
+        var range = parsed.spanBetween(anchor, anchor)
+        onPhrase(range)
+
+        while (true) {
+            val event = awaitPointerEvent()
+            val change = event.changes.firstOrNull() ?: break
+            if (!change.pressed) break
+            change.consume()
+            range = parsed.spanBetween(anchor, result.getOffsetForPosition(change.position) + shift)
+            onPhrase(range)
+        }
+        onPhraseDone(range)
+    }
+}
+
+/** Кусок текста между двумя точками касания, растянутый до границ слов. */
 private fun ParsedText.spanBetween(from: Int, to: Int): IntRange {
     val left = minOf(from, to)
     val right = maxOf(from, to)
     val start = tokenAt(left)?.start ?: left
     val end = tokenAt(right)?.end ?: right
     return start until maxOf(end, start + 1)
+}
+
+/**
+ * Предложение вокруг точки касания, прижатое к границам разбираемых токенов.
+ *
+ * Предложение — самый честный ответ на «долгое нажатие без движения»: слово
+ * под пальцем уже открывается простым тапом, а фраза целиком чаще всего и есть
+ * то, что читатель хотел спросить.
+ */
+private fun ParsedText.spanAroundSentence(offset: Int): IntRange {
+    val anchorToken = tokenAt(offset)
+        ?: tokens.firstOrNull { it.tappable }
+        ?: return offset until offset + 1
+    val sentence = sentenceAt(anchorToken.start)
+        ?: return anchorToken.start until maxOf(anchorToken.end, anchorToken.start + 1)
+    return sentence.start until maxOf(sentence.end, sentence.start + 1)
 }
 
 /** Заголовок главы с линейками сверху и снизу, как в печатной полосе. */

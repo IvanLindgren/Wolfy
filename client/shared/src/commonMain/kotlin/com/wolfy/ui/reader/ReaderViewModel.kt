@@ -713,20 +713,101 @@ class ReaderViewModel(
         }
     }
 
+    /**
+     * Читатель выделил фразу в блоке [block].
+     *
+     * Диапазон приезжает уже в границах токенов — границы дорастягивает тот,
+     * кто считал жест. Карточка открывается сразу на вкладке «Фразы»:
+     * переводится именно выбранная фраза, а окружающее предложение остаётся
+     * контекстом, как и в тапе по слову.
+     */
+    fun openPhrase(block: Int, range: IntRange, text: String, parsed: ParsedText) {
+        val id = bookId ?: return
+        val session = generation
+        val request = ++cardGeneration
+
+        // Фраза строго внутри выбранного куска и только из разбираемых слов.
+        val inside = parsed.tokens.filter { token ->
+            token.tappable && token.end > range.first && token.start < range.last + 1
+        }
+        val first = inside.firstOrNull() ?: return
+        val last = inside.lastOrNull() ?: return
+        val phraseStart = first.start
+        val phraseEnd = maxOf(last.end, phraseStart + 1)
+        val phraseText = text.substring(phraseStart, phraseEnd).trim()
+        if (phraseText.isBlank()) return
+
+        val context = parsed.sentenceAt(phraseStart)?.text ?: phraseText
+        val synthetic = Token(
+            kind = "word",
+            start = phraseStart,
+            end = phraseEnd,
+            text = phraseText,
+        )
+        val placeholder = com.wolfy.ffi.WordAnalysis(
+            surface = phraseText,
+            lemma = phraseText.lowercase(),
+            pos = emptyList(),
+            matchedPos = null,
+            dominantPos = null,
+            form = "unknown",
+            facts = emptyList(),
+            zipf = 0f,
+            cefr = "C2",
+            known = false,
+        )
+        _state.update {
+            it.copy(
+                selectedBlock = block,
+                card = WordCardState(
+                    token = synthetic,
+                    analysis = placeholder,
+                    context = context,
+                    translation = TranslationState.Loading,
+                    saved = false,
+                    phraseText = phraseText,
+                    openOnPhrase = true,
+                ),
+            )
+        }
+
+        analysisJob?.cancel()
+        definitionJob?.cancel()
+        translationJob?.cancel()
+        translationJob = viewModelScope.launch {
+            val result = api.translate(phraseText)
+            _state.update { current ->
+                val card = current.card ?: return@update current
+                if (!ownsCard(session, id, request, block, synthetic)) return@update current
+                current.copy(
+                    card = card.copy(
+                        translation = when (result) {
+                            is TranslateResult.Ready -> TranslationState.Ready(word = result.text)
+                            is TranslateResult.Failed -> TranslationState.Failed(result.message)
+                        },
+                    ),
+                )
+            }
+        }
+    }
+
     /** Beta: Gemini объясняет только выбранное предложение, не всю книгу. */
     fun explainCardPhrase() {
         val id = bookId ?: return
         val session = generation
         val card = _state.value.card ?: return
         if (card.betaExplanation is BetaPhraseState.Loading) return
+        // Объясняется то, что читатель взял: выделенная фраза или всё
+        // предложение карточки. Отправлять в модель не цель — только текст.
+        val subject = card.phraseText ?: card.context
         _state.update { it.copy(card = it.card?.copy(betaExplanation = BetaPhraseState.Loading)) }
         viewModelScope.launch {
-            val result = api.explainPhrase(card.context, card.context)
+            val result = api.explainPhrase(subject, card.context)
             _state.update { current ->
                 if (!owns(session, id) || current.card?.context != card.context) current
                 else current.copy(card = current.card.copy(betaExplanation = when (result) {
                     is AiPhraseResult.Ready -> BetaPhraseState.Ready(result.value)
-                    is AiPhraseResult.Failed -> BetaPhraseState.Failed(result.message)
+                    is AiPhraseResult.Failed -> BetaPhraseState.Failed(betaFailureMessage(result.code, result.message))
                 }))
             }
         }
@@ -772,7 +853,14 @@ class ReaderViewModel(
         val opened = handle ?: return
         val session = generation
         val chapters = _state.value.chapterCount
-        if (chapters <= 0 || _state.value.research is ReaderResearchState.Building) return
+        // Запрос можно запустить только с чистого места: пока идёт подготовка,
+        // обработка или готов результат, вторая кнопка ничего не должна
+        // перезапускать — иначе читатель случайно списывал бы два лимита.
+        when (_state.value.research) {
+            is ReaderResearchState.Idle, is ReaderResearchState.Failed -> Unit
+            else -> return
+        }
+        if (chapters <= 0) return
         _state.update { it.copy(research = ReaderResearchState.Building) }
         researchJob?.cancel()
         researchJob = viewModelScope.launch {
@@ -806,24 +894,51 @@ class ReaderViewModel(
                             ) else current
                         }
                     }
-                    is ResearchArtifactResult.Failed -> _state.update { it.copy(research = ReaderResearchState.Failed(artifact.message)) }
+                    is ResearchArtifactResult.Failed -> _state.update { it.copy(research = ReaderResearchState.Failed(researchFailureMessage(artifact.message))) }
                 }
                 return
             }
             if (status.stage == "failed" || status.stage == "cancelled") {
-                _state.update { it.copy(research = ReaderResearchState.Failed("Исследование не удалось завершить.")) }
+                _state.update { it.copy(research = ReaderResearchState.Failed(researchFailureMessage(status.error))) }
                 return
             }
             delay(RESEARCH_STATUS_DELAY)
             when (val fresh = api.researchStatus(id, status.analysisId)) {
                 is ResearchStartResult.Ready -> status = fresh.value
                 is ResearchStartResult.Failed -> {
-                    _state.update { it.copy(research = ReaderResearchState.Failed(fresh.message)) }
+                    _state.update { it.copy(research = ReaderResearchState.Failed(researchFailureMessage(fresh.message))) }
                     return
                 }
             }
         }
         _state.update { it.copy(research = ReaderResearchState.Processing(status)) }
+    }
+
+    /**
+     * Код ошибки редакции превращается в понятную фразу.
+     *
+     * Сервер кладёт в поле кода машиночитаемое слово (`provider`,
+     * `invalid_answer`…); показывать его читателю — как показать стек-трейс.
+     * Неизвестные коды и живые тексты проходят насквозь без приукрашивания.
+     */
+    private fun researchFailureMessage(code: String): String = when (code) {
+        "provider" -> "Gemini сейчас не ответил. Попробуйте ещё раз позже."
+        "invalid_answer" -> "Gemini вернул ответ неподходящего формата."
+        "spoilers" -> "Ответ скрыт, потому что содержит спойлеры."
+        "quota" -> "На этой неделе лимит исследований исчерпан."
+        "source" -> "Не удалось подготовить текст книги."
+        "" -> "Исследование не удалось завершить."
+        else -> code
+    }
+
+    /** Те же коды у Beta-подсказки фразы; без кода остаётся текст сервера. */
+    private fun betaFailureMessage(code: String, fallback: String): String = when (code) {
+        "provider", "timeout" -> "Gemini сейчас не ответил. Попробуйте ещё раз позже."
+        "invalid_answer", "badjson" -> "Gemini вернул ответ неподходящего формата."
+        "limit" -> "Провайдер ИИ ограничил запросы. Загляните чуть позже."
+        "quota" -> "Лимит подсказок на сегодня исчерпан."
+        "key", "model" -> "Подсказка временно не работает на стороне сервера."
+        else -> fallback
     }
 
     fun setResearchDisposition(cardId: String, disposition: String) {
@@ -894,23 +1009,28 @@ class ReaderViewModel(
     }
 
     /**
-     * Кладёт в колоду всё предложение.
+     * Кладёт в колоду фразу.
      *
-     * Фраза сохраняется вместе со своим переводом — тем самым, что уже пришёл
-     * с сервера для контекста. Без перевода конструктор фраз показывать нечего:
-     * задание в нём начинается с русской строки, и собрать английскую «по
-     * памяти о том, что там было» нельзя.
+     * Читатель выделил конкретные слова — сохраняются они, а не предложение
+     * вокруг: окружение уже свою службу сослужило как контекст перевода. Для
+     * карточки, открытой тапом по слову, фразой остаётся всё предложение —
+     * прежнее поведение.
      *
-     * Поэтому кнопка и не предлагается, пока перевод предложения не приехал, —
-     * см. [WordCardState.translation].
+     * Перевод берётся тот, что приехал для выбранного куска. Без перевода
+     * конструктор фраз показывать нечего: задание в нём начинается с русской
+     * строки, и собрать английскую «по памяти о том, что там было» нельзя.
      */
     fun savePhrase() {
         val card = _state.value.card ?: return
         val id = bookId ?: return
-        val translation = (card.translation as? TranslationState.Ready)?.sentence.orEmpty()
+        val ready = card.translation as? TranslationState.Ready
+        val phrase = card.phraseText ?: card.context
+        // Для выделенной фразы перевод лежит в словесной ячейке: он и
+        // запрашивался как перевод именно фразы.
+        val translation = if (card.phraseText != null) ready?.word.orEmpty() else ready?.sentence.orEmpty()
         if (translation.isBlank()) return
 
-        library.savePhrase(bookId = id, sentence = card.context, translation = translation)
+        library.savePhrase(bookId = id, sentence = phrase, translation = translation)
         _state.update { it.copy(card = card.copy(phraseSaved = true)) }
     }
 

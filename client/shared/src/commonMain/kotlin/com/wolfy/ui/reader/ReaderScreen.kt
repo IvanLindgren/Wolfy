@@ -25,6 +25,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -114,6 +115,11 @@ fun ReaderScreen(
     onDismissRecap: () -> Unit,
     onResearch: () -> Unit,
     onResearchDisposition: (String, String) -> Unit,
+    /**
+     * Выделение завершено: блок, диапазон в границах токенов, текст абзаца и
+     * его разбор. По нему открывается карточка сразу на вкладке «Фраза».
+     */
+    onPhraseSelected: (Int, IntRange, String, com.wolfy.ffi.ParsedText) -> Unit = { _, _, _, _ -> },
     onImageVisible: (String) -> Unit,
     theme: ReadingTheme,
     fontScale: Float,
@@ -145,6 +151,23 @@ fun ReaderScreen(
     var contentsOpen by remember { mutableStateOf(false) }
     var readingSettingsOpen by remember { mutableStateOf(false) }
     var researchOpen by remember { mutableStateOf(false) }
+
+    // Живое выделение фразы: блок и диапазон, подсвечиваемый по ходу жеста.
+    val phraseSelection = remember { mutableStateOf<PhraseSelection?>(null) }
+    // Десктоп выделяет мышью (двойной клик + протягивание), палец — долгим
+    // нажатием. Признак берётся у клавиатуры: она есть на десктопе.
+    val selectViaMouse = LocalKeyboard.current
+
+    BackHandler(
+        enabled = readingSettingsOpen || researchOpen || contentsOpen || state.card != null,
+    ) {
+        when {
+            readingSettingsOpen -> readingSettingsOpen = false
+            researchOpen -> researchOpen = false
+            contentsOpen -> contentsOpen = false
+            state.card != null -> onDismissCard()
+        }
+    }
 
     // Прокрутка живёт здесь, а не в теле главы: её же двигают клавиши, а они
     // ловятся на самом верху экрана.
@@ -268,34 +291,47 @@ fun ReaderScreen(
                 }
             },
     ) {
-        // Реальная высота верхней зоны (панель, прогресс, ссылка на recap,
-        // AttentionBar) зависит от кегля: overlay настроек привязывается к
-        // ней, а не к выдуманной константе.
+        // Высота верхней зоны меряется отдельно и только у неё: шапка,
+        // прогресс, ИИ-кнопки и панель внимания. Если мерить весь столбец,
+        // в замер попадает и тело книги — и overlay настроек уезжает на
+        // экран вниз.
         var headerHeightPx by remember { mutableStateOf(0f) }
         val overlayTop = with(LocalDensity.current) { headerHeightPx.toDp() }
         Column(
-            Modifier.fillMaxSize().onSizeChanged { headerHeightPx = it.height.toFloat() },
+            Modifier.fillMaxSize(),
         ) {
-            ReaderTopBar(
-                state = state,
-                withinChapterProgress = withinChapterProgress,
-                onClose = onClose,
-                onOpenContents = { contentsOpen = true },
-                onOpenSettings = { readingSettingsOpen = !readingSettingsOpen },
-                onRecap = onRecap,
-                onResearch = {
-                    if (state.research is ReaderResearchState.Ready) researchOpen = true else onResearch()
-                },
-            )
-            AttentionBar(
-                state = state,
-                activeBlock = activeBlock,
-                pacing = pacing,
-                pacerWpm = pacerWpm,
-                onPace = { pacing = it },
-                onNextSegment = onNextSegment,
-                onStopSegments = onStopSegments,
-            )
+            Column(
+                Modifier.onSizeChanged { headerHeightPx = it.height.toFloat() },
+            ) {
+                ReaderTopBar(
+                    state = state,
+                    withinChapterProgress = withinChapterProgress,
+                    onClose = onClose,
+                    onOpenContents = { contentsOpen = true },
+                    onOpenSettings = { readingSettingsOpen = !readingSettingsOpen },
+                    onRecap = onRecap,
+                    onResearch = {
+                        // Лист исследования открывается немедленно: читатель
+                        // должен видеть подготовку текста, процент редакции
+                        // и ошибки. Сам запрос стартует только там, где он
+                        // ещё не был запущен.
+                        researchOpen = true
+                        when (state.research) {
+                            is ReaderResearchState.Idle, is ReaderResearchState.Failed -> onResearch()
+                            else -> Unit
+                        }
+                    },
+                )
+                AttentionBar(
+                    state = state,
+                    activeBlock = activeBlock,
+                    pacing = pacing,
+                    pacerWpm = pacerWpm,
+                    onPace = { pacing = it },
+                    onNextSegment = onNextSegment,
+                    onStopSegments = onStopSegments,
+                )
+            }
 
             when {
                 state.error != null -> Message(state.error)
@@ -312,14 +348,45 @@ fun ReaderScreen(
                     onScrolled = onScrolled,
                     images = images,
                     onImageVisible = onImageVisible,
+                    phraseSelectionBlock = phraseSelection.value?.block ?: -1,
+                    phraseSelectionRange = phraseSelection.value?.range,
+                    selectViaMouse = selectViaMouse,
+                    onPhraseSelect = { block, range ->
+                        if (phraseSelection.value?.block != block || phraseSelection.value?.range != range) {
+                            phraseSelection.value = PhraseSelection(block, range)
+                        }
+                    },
+                    onPhraseCommit = { block, range ->
+                        val selectedBlock = state.blocks.getOrNull(block)
+                        val parsedForBlock = selectedBlock?.parsed
+                        if (parsedForBlock != null && range.first <= range.last) {
+                            onPhraseSelected(block, range, selectedBlock.text, parsedForBlock)
+                        }
+                        // Подсветка остаётся до закрытия карточки: снять её
+                        // раньше — значит спрятать то, что читатель взял.
+                    },
                     modifier = Modifier.weight(1f),
                 )
             }
         }
 
-        // Это overlay, а не разворачивающийся блок в Column: открытие текста
-        // не меняет высоту viewport и не сдвигает строку, на которой читатель
-        // остановился.
+        // Панель настроек — overlay по-прежнему: открытие не сдвигает строку,
+        // на которой читатель остановился. Слой под ней ловит касание мимо:
+        // тап вне панели закрывает её, как ведут себя системные листы.
+        if (readingSettingsOpen || researchOpen) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .zIndex(1f)
+                    .pointerInput(Unit) {
+                        detectTapGestures {
+                            readingSettingsOpen = false
+                            researchOpen = false
+                        }
+                    },
+            )
+        }
+
         AnimatedVisibility(
             visible = readingSettingsOpen,
             enter = fadeIn(),
@@ -375,11 +442,24 @@ fun ReaderScreen(
             }
         }
         if (researchOpen) {
-            Box(Modifier.fillMaxWidth().align(Alignment.BottomCenter)) {
+            Box(Modifier.fillMaxWidth().align(Alignment.BottomCenter).zIndex(2f)) {
                 val totalWords = (state.research as? ReaderResearchState.Ready)?.status?.sourceWords ?: 0L
                 val place = (state.chapterIndex + withinChapterProgress.coerceIn(0f, 1f)) /
                     state.chapterCount.coerceAtLeast(1).toFloat()
-                ResearchSheet(state.research, state.researchDispositions, (totalWords * place).toLong(), onResearchDisposition, onDismiss = { researchOpen = false })
+                ResearchSheet(
+                    state = state.research,
+                    dispositions = state.researchDispositions,
+                    readWords = (totalWords * place).toLong(),
+                    onDisposition = onResearchDisposition,
+                    onStartRetry = {
+                        researchOpen = true
+                        when (state.research) {
+                            is ReaderResearchState.Idle, is ReaderResearchState.Failed -> onResearch()
+                            else -> Unit
+                        }
+                    },
+                    onDismiss = { researchOpen = false },
+                )
             }
         }
     }
@@ -437,7 +517,8 @@ private fun ReaderTopBar(
                     .pressable(onClick = onOpenContents),
             )
             Row(horizontalArrangement = Arrangement.spacedBy(spacing.small)) {
-                SectionLabel("Текст", Modifier.pressable(onClick = onOpenSettings))
+                // «Текст» не читался как кнопка настроек — явное название честнее.
+                SectionLabel("Настройки чтения", Modifier.pressable(onClick = onOpenSettings))
                 SectionLabel("${(progress * 100).toInt()}%")
             }
         }
@@ -652,7 +733,14 @@ private fun StoryRecapSheet(state: StoryRecapState, onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun ResearchSheet(state: ReaderResearchState, dispositions: Map<String, String>, readWords: Long, onDisposition: (String, String) -> Unit, onDismiss: () -> Unit) {
+private fun ResearchSheet(
+    state: ReaderResearchState,
+    dispositions: Map<String, String>,
+    readWords: Long,
+    onDisposition: (String, String) -> Unit,
+    onStartRetry: () -> Unit,
+    onDismiss: () -> Unit,
+) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
     BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -669,10 +757,26 @@ private fun ResearchSheet(state: ReaderResearchState, dispositions: Map<String, 
                 Text("закрыть", style = WolfyTheme.typography.caption, color = colors.accent, modifier = Modifier.pressable(onClick = onDismiss))
             }
             when (state) {
-                ReaderResearchState.Idle -> Text("Начните исследование из шапки читалки.", style = WolfyTheme.typography.body, color = colors.inkMuted)
-                ReaderResearchState.Building -> Text("Готовим текст книги…", style = WolfyTheme.typography.body, color = colors.inkMuted)
-                is ReaderResearchState.Processing -> Text("Редакция собирает нити сюжета: ${state.status.progress}%.", style = WolfyTheme.typography.body, color = colors.inkMuted)
-                is ReaderResearchState.Failed -> Text(state.message, style = WolfyTheme.typography.body, color = colors.accent)
+                ReaderResearchState.Idle -> Text("Собираем исследование…", style = WolfyTheme.typography.body, color = colors.inkMuted)
+                // Подготовка может занять несколько секунд на большой книге:
+                // читатель видит, что именно происходит, а не мёртвую кнопку.
+                ReaderResearchState.Building -> {
+                    Text("Готовим текст книги…", style = WolfyTheme.typography.body, color = colors.inkMuted)
+                    Text("Загружаем главы по одной, чтобы не держать книгу в памяти.", style = WolfyTheme.typography.caption, color = colors.inkMuted)
+                }
+                is ReaderResearchState.Processing -> Column(verticalArrangement = Arrangement.spacedBy(spacing.tight)) {
+                    Text("Редакция собирает нити сюжета…", style = WolfyTheme.typography.body, color = colors.inkMuted)
+                    // Процент живёт в статусе; полоска делает ожидание честным.
+                    Text("${state.status.progress}%", style = WolfyTheme.typography.sectionLabel, color = colors.accent)
+                }
+                is ReaderResearchState.Failed -> {
+                    Text(state.message, style = WolfyTheme.typography.body, color = colors.accent)
+                    // Ошибка не закрывает лист за собой: кнопка повтора лежит
+                    // рядом и запускает тот же путь заново.
+                    Row(Modifier.padding(top = spacing.small)) {
+                        Text("Попробовать снова", style = WolfyTheme.typography.button, color = colors.accent, modifier = Modifier.pressable(onClick = onStartRetry))
+                    }
+                }
                 is ReaderResearchState.Ready -> {
                     Text(state.artifact.subtitle, style = WolfyTheme.typography.caption, color = colors.accent)
                     Text(state.artifact.summary, style = WolfyTheme.typography.body, color = colors.ink)
@@ -733,6 +837,9 @@ private data class ScrollReport(
     val blockOffset: Float,
 )
 
+/** Живое выделение фразы: номер блока и диапазон в смещениях абзаца. */
+private data class PhraseSelection(val block: Int, val range: IntRange)
+
 /** Абсолютный потолок высоты иллюстрации: доля экрана его только ограничивает. */
 private val ImageMaxHeight = 640.dp
 
@@ -749,6 +856,11 @@ private fun ChapterBody(
     onScrolled: (Float, Int, Float) -> Unit,
     images: Map<String, ImageBitmap?>,
     onImageVisible: (String) -> Unit,
+    phraseSelectionBlock: Int,
+    phraseSelectionRange: IntRange?,
+    selectViaMouse: Boolean,
+    onPhraseSelect: (Int, IntRange) -> Unit,
+    onPhraseCommit: (Int, IntRange) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val spacing = WolfyTheme.spacing
@@ -851,6 +963,10 @@ private fun ChapterBody(
                 // Иначе абзац с тем же смещением подсветит своё слово заодно —
                 // смещения у блоков считаются каждое от своего начала.
                 selected = state.card?.token?.takeIf { index == state.selectedBlock },
+                phraseSelection = phraseSelectionRange?.takeIf { index == phraseSelectionBlock },
+                selectViaMouse = selectViaMouse,
+                onPhrase = { range -> onPhraseSelect(index, range) },
+                onPhraseDone = { range -> onPhraseCommit(index, range) },
                 image = block.imagePath?.let(images::get),
                 onImageVisible = onImageVisible,
                 onWordTap = onWordTap,
@@ -877,6 +993,10 @@ private fun BlockView(
     dimmed: Boolean,
     bright: IntRange?,
     selected: com.wolfy.ffi.Token?,
+    phraseSelection: IntRange?,
+    selectViaMouse: Boolean,
+    onPhrase: (IntRange) -> Unit,
+    onPhraseDone: (IntRange) -> Unit,
     image: ImageBitmap?,
     onImageVisible: (String) -> Unit,
     onWordTap: (Int, com.wolfy.ffi.Token, com.wolfy.ffi.ParsedText) -> Unit,
@@ -893,9 +1013,13 @@ private fun BlockView(
                     saved = savedLemmas,
                     savedLemmaOf = { it.text.lowercase() },
                     selected = selected,
+                    selection = phraseSelection,
+                    selectViaMouse = selectViaMouse,
                     anchors = block.anchors,
                     dimmed = dimmed,
                     onWordTap = { onWordTap(index, it, parsed) },
+                    onPhrase = onPhrase,
+                    onPhraseDone = onPhraseDone,
                 )
             } else {
                 ReaderParagraph(
@@ -903,10 +1027,14 @@ private fun BlockView(
                     saved = savedLemmas,
                     savedLemmaOf = { it.text.lowercase() },
                     selected = selected,
+                    selection = phraseSelection,
+                    selectViaMouse = selectViaMouse,
                     anchors = block.anchors,
                     dimmed = dimmed,
                     bright = bright,
                     onWordTap = { onWordTap(index, it, parsed) },
+                    onPhrase = onPhrase,
+                    onPhraseDone = onPhraseDone,
                 )
             }
         }
@@ -920,9 +1048,13 @@ private fun BlockView(
                     parsed = parsed,
                     saved = savedLemmas,
                     selected = selected,
+                    selection = phraseSelection,
+                    selectViaMouse = selectViaMouse,
                     anchors = block.anchors,
                     dimmed = dimmed,
                     onWordTap = { onWordTap(index, it, parsed) },
+                    onPhrase = onPhrase,
+                    onPhraseDone = onPhraseDone,
                 )
             }
         }
