@@ -154,7 +154,7 @@ jobs:
           WOLFY_SIGNING_KEYALIAS: ${{ secrets.WOLFY_ANDROID_KEY_ALIAS }}
           WOLFY_SIGNING_KEYPASSWORD: ${{ secrets.WOLFY_ANDROID_KEY_PASSWORD }}
           WOLFY_RELEASE_SERVER_URL: https://wolfy.citavuk.ru
-        run: ./gradlew --no-daemon :androidApp:assembleRelease
+        run: bash ./gradlew --no-daemon :androidApp:assembleRelease
 
       - name: Build Linux server
         working-directory: server
@@ -288,7 +288,7 @@ jobs:
         env:
           WOLFY_SERVER_URL: https://wolfy.citavuk.ru
         run: |
-          ./client/gradlew --no-daemon :desktopApp:packageDeb
+          bash ./client/gradlew --no-daemon :desktopApp:packageDeb
           find client/desktopApp/build/compose/binaries -name '*.deb' -type f -print -quit | grep -q .
       - name: Upload Linux package
         uses: actions/upload-artifact@v4
