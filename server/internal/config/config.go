@@ -156,6 +156,12 @@ func defaultBookFilesPath() string {
 }
 
 func defaultReleasesPath() string {
+	// Пакеты обновления — общие данные, а не часть переключаемого релиза.
+	// Без этого production после каждого deploy смотрел бы в новый каталог
+	// бинарника и переставал предлагать уже опубликованный APK/MSI.
+	if info, err := os.Stat("/opt/wolfy/shared/releases"); err == nil && info.IsDir() {
+		return "/opt/wolfy/shared/releases"
+	}
 	candidates := []string{"dist", filepath.Join("..", "dist")}
 	if executable, err := os.Executable(); err == nil {
 		folder := filepath.Dir(executable)

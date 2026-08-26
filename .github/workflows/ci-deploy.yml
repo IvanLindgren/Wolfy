@@ -54,6 +54,27 @@ jobs:
           go-version-file: server/go.mod
           cache-dependency-path: server/go.sum
 
+      # APK нужен только для master: в pull request нет production-секретов
+      # подписи, а debug-сборку нельзя выдавать как обновление пользователю.
+      - name: Set up Java for signed Android release
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Android NDK
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        shell: bash
+        run: |
+          sdkmanager --install 'ndk;27.0.12077973'
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.12077973" >> "$GITHUB_ENV"
+
       - name: Set up Rust
         shell: bash
         run: |
@@ -64,6 +85,14 @@ jobs:
       - name: Install wasm-bindgen CLI
         shell: bash
         run: cargo install wasm-bindgen-cli --version 0.2.127 --locked
+
+      - name: Build Android core
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        shell: bash
+        run: |
+          rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+          cargo install cargo-ndk --locked
+          tools/build_core.sh android
 
       - name: Seed shared Citavuk account tables
         shell: bash
@@ -104,6 +133,27 @@ jobs:
         working-directory: web
         run: npm run e2e
 
+      - name: Restore Android release key
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.WOLFY_ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          test -n "$KEYSTORE_BASE64"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > client/androidApp/wolfy-release.keystore
+          chmod 600 client/androidApp/wolfy-release.keystore
+
+      - name: Build signed Android APK
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        working-directory: client
+        env:
+          WOLFY_SIGNING_STOREFILE: androidApp/wolfy-release.keystore
+          WOLFY_SIGNING_STOREPASSWORD: ${{ secrets.WOLFY_ANDROID_STORE_PASSWORD }}
+          WOLFY_SIGNING_KEYALIAS: ${{ secrets.WOLFY_ANDROID_KEY_ALIAS }}
+          WOLFY_SIGNING_KEYPASSWORD: ${{ secrets.WOLFY_ANDROID_KEY_PASSWORD }}
+          WOLFY_RELEASE_SERVER_URL: https://wolfy.citavuk.ru
+        run: ./gradlew --no-daemon :androidApp:assembleRelease
+
       - name: Build Linux server
         working-directory: server
         shell: bash
@@ -116,11 +166,16 @@ jobs:
       - name: Package production release
         shell: bash
         run: |
-          mkdir -p release/web
+          mkdir -p release/web release/apps
           cp -a web/dist/. release/web/
           test -x release/server/wolfy-server
           test -f release/web/index.html
-          tar -C release -czf wolfy-release.tar.gz server web
+          if [[ "${{ github.event_name }}" != "pull_request" && "${{ github.ref }}" == "refs/heads/master" ]]; then
+            version="$(sed -n 's/.*versionName = "\([0-9.]\+\)"/\1/p' client/androidApp/build.gradle.kts)"
+            test -n "$version"
+            cp client/androidApp/build/outputs/apk/release/androidApp-release.apk "release/apps/Wolfy-$version.apk"
+          fi
+          tar -C release -czf wolfy-release.tar.gz server web apps
 
       - name: Upload production artifact
         uses: actions/upload-artifact@v4

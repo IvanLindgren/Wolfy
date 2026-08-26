@@ -14,7 +14,8 @@ func TestLatestReturnsOnlyNewerMatchingPlatform(t *testing.T) {
 	for name, body := range map[string]string{
 		"Wolfy-1.3.0.msi":       "windows-new",
 		"Wolfy-1.2.9.msi":       "windows-old",
-		"Wolfy-9.0.0-debug.apk": "android",
+		"Wolfy-8.9.0-debug.apk": "android-debug",
+		"Wolfy-9.0.0.apk":       "android-release",
 		"not-a-release.exe":     "ignored",
 	} {
 		if err := os.WriteFile(filepath.Join(directory, name), []byte(body), 0o600); err != nil {
@@ -35,6 +36,13 @@ func TestLatestReturnsOnlyNewerMatchingPlatform(t *testing.T) {
 	service.Latest(response, request)
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("want 204, got %d", response.Code)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/v1/update/latest?platform=android&current=8.9.0", nil)
+	response = httptest.NewRecorder()
+	service.Latest(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"version":"9.0.0"`) {
+		t.Fatalf("unexpected Android response: %d %s", response.Code, response.Body.String())
 	}
 }
 

@@ -22,7 +22,9 @@ import (
 
 var (
 	windowsPackage = regexp.MustCompile(`^Wolfy-(\d+\.\d+\.\d+)\.msi$`)
-	androidPackage = regexp.MustCompile(`^Wolfy-(\d+\.\d+\.\d+)-debug\.apk$`)
+	// Внешнее обновление Android обязано быть подписанным release APK. Старый
+	// суффикс -debug оставлен только для уже опубликованных тестовых сборок.
+	androidPackage = regexp.MustCompile(`^Wolfy-(\d+\.\d+\.\d+)(?:-debug)?\.apk$`)
 )
 
 type Service struct {

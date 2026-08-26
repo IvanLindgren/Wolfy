@@ -39,6 +39,15 @@ rm -f -- "$archive"
 
 test -x "$staging/server/wolfy-server"
 test -f "$staging/web/index.html"
+# Пакет приходит из той же проверенной GitHub Actions сборки, что и сервер.
+# Публикуем его до переключения current: клиент либо видит старую цель, либо
+# уже полностью готовый новый APK, но никогда недокачанный файл.
+if compgen -G "$staging/apps/Wolfy-*.apk" > /dev/null; then
+    install -d -o wolfy -g wolfy -m 750 "$root/shared/releases"
+    for package in "$staging"/apps/Wolfy-*.apk; do
+        install -o wolfy -g wolfy -m 640 "$package" "$root/shared/releases/$(basename "$package")"
+    done
+fi
 find "$staging" -type d -exec chmod 755 {} +
 find "$staging" -type f -exec chmod 644 {} +
 chmod 755 "$staging/server/wolfy-server"
