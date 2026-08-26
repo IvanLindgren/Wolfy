@@ -93,6 +93,10 @@ class SyncService(
 
                 is SyncResult.Ready -> {
                     apply(result.payload, sent)
+                    // Файлы идут отдельно от JSON-обмена. По одному мегабайту
+                    // за запрос: даже большая книга не превращается в копию в
+                    // памяти телефона, а обычный sync остаётся быстрым.
+                    syncFiles(result.payload)
                     _status.value = SyncStatus(
                         running = false,
                         lastSuccess = currentTimeMillis(),
@@ -130,4 +134,51 @@ class SyncService(
 
     private fun readingSettings(): JsonElement =
         json.encodeToJsonElement(AppSettings.serializer(), settings.current)
+
+    private suspend fun syncFiles(payload: SyncPayload) {
+        val remote = payload.files.associateBy { it.bookId }
+        val local = library.state.value.books.filter { !it.deleted }
+
+        // Сначала отправляем отсутствующие в облаке файлы. Их хеш уже посчитан
+        // при импорте; сервер сверит его ещё раз после потоковой записи.
+        local.filter { it.readable && it.id !in remote }.forEach { book ->
+            val total = library.localFileSize(book.id) ?: return@forEach
+            if (total !in 1..MAX_BOOK_BYTES || book.sourceKey.isBlank()) return@forEach
+            var offset = 0L
+            while (offset < total) {
+                val part = library.readLocalFileChunk(book.id, offset, CHUNK_BYTES) ?: break
+                val accepted = api.uploadBookChunk(
+                    book.id,
+                    "${book.title.ifBlank { "book" }}.${book.format.ifBlank { "epub" }}",
+                    book.sourceKey,
+                    offset,
+                    total,
+                    part,
+                )
+                if (!accepted) break
+                offset += part.size
+            }
+        }
+
+        // На втором устройстве книга появляется сразу после sync, а файл
+        // докачивается следом. Пока его нет, экран честно показывает прогресс.
+        remote.values.filter { file ->
+            library.book(file.bookId)?.readable == false && file.size in 1..MAX_BOOK_BYTES
+        }.forEach { file ->
+            val target = library.createDownloadedFile(file.fileName)
+            if (target.isBlank()) return@forEach
+            var offset = 0L
+            while (offset < file.size) {
+                val part = api.downloadBookChunk(file.bookId, offset, CHUNK_BYTES) ?: break
+                if (part.bytes.isEmpty() || !library.appendDownloadedChunk(target, part.bytes)) break
+                offset += part.bytes.size
+            }
+            if (offset == file.size) library.attachDownloadedFile(file.bookId, target, file.sha256)
+        }
+    }
+
+    private companion object {
+        const val CHUNK_BYTES = 1024 * 1024
+        const val MAX_BOOK_BYTES = 256L * 1024 * 1024
+    }
 }

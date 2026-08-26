@@ -67,14 +67,10 @@ import com.wolfy.theme.settling
 import com.wolfy.ui.nav.FLIGHT_CARDS
 import com.wolfy.widgets.Appear
 import com.wolfy.widgets.CefrBadge
-import com.wolfy.widgets.DependencyArcs
 import com.wolfy.widgets.Disclosure
-import com.wolfy.widgets.GraphEmptyNote
 import com.wolfy.widgets.LocalFlight
 import com.wolfy.widgets.PhraseBlocks
 import com.wolfy.widgets.SectionLabel
-import com.wolfy.widgets.SentenceGraph
-import com.wolfy.widgets.SentenceTree
 import com.wolfy.widgets.WolfyCompanion
 import com.wolfy.widgets.pressable
 import com.wolfy.widgets.rememberLaunchPad
@@ -615,22 +611,8 @@ private fun PhraseEssentials(
     onOpenRule: (String) -> Unit,
 ) {
     val spacing = WolfyTheme.spacing
-    var graphMode by remember(state.context) { mutableStateOf(GraphMode.Arcs) }
-
     Column(verticalArrangement = Arrangement.spacedBy(spacing.medium)) {
         Appear(0) {
-            PrimaryCard(
-                title = "Граф связей",
-                trailing = if (state.chunks.isNotEmpty()) {
-                    ({ GraphModeToggle(graphMode, onMode = { graphMode = it }) })
-                } else {
-                    null
-                },
-            ) {
-                PhraseGraph(state, graphMode)
-            }
-        }
-        Appear(1) {
             PrimaryCard(title = "Фраза и части речи") {
                 if (state.chunks.isNotEmpty()) {
                     PhraseBlocks(state.sentenceTokens, state.chunks, state.markers)
@@ -643,12 +625,12 @@ private fun PhraseEssentials(
                 }
             }
         }
-        Appear(2) {
+        Appear(1) {
             PrimaryCard(title = "Перевод в этом контексте") {
                 SentenceTranslation(state)
             }
         }
-        Appear(3) {
+        Appear(2) {
             Disclosure(
                 label = "Подробнее о фразе",
                 hint = "Правила, которые движок нашёл в этом предложении",
@@ -666,79 +648,6 @@ private fun PhraseEssentials(
     }
 }
 
-/** Два вида связей: дуги к сказуемому или дерево зависимостей. */
-private enum class GraphMode(val title: String) {
-    Arcs("дуги"),
-    Tree("дерево"),
-}
-
-@Composable
-private fun GraphModeToggle(mode: GraphMode, onMode: (GraphMode) -> Unit) {
-    val colors = WolfyTheme.colors
-    val spacing = WolfyTheme.spacing
-
-    Row(
-        Modifier
-            .background(colors.surface, RoundedCornerShape(spacing.huge))
-            .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.huge))
-            .padding(spacing.hair),
-        horizontalArrangement = Arrangement.spacedBy(spacing.hair),
-    ) {
-        GraphMode.entries.forEach { item ->
-            val active = mode == item
-            Text(
-                text = item.title,
-                style = WolfyTheme.typography.caption,
-                color = if (active) colors.onInverse else colors.inkMuted,
-                modifier = Modifier
-                    .background(
-                        if (active) colors.inverse else Color.Transparent,
-                        RoundedCornerShape(spacing.huge),
-                    )
-                    .pressable(enabled = !active, onClick = { onMode(item) })
-                    .padding(horizontal = spacing.small, vertical = spacing.tight),
-            )
-        }
-    }
-}
-
-/**
- * Граф для текущей фразы.
- *
- * Приоритет честный: сначала то, что ядро разобрало до ролей, — их дуги и
- * дерево; если ролей нет, остаются скобы конструкций; если и их нет —
- * сообщение вместо догадки.
- */
-@Composable
-private fun PhraseGraph(state: WordCardState, mode: GraphMode) {
-    val hasTree = state.chunks.any { it.role == "predicate" } && state.chunks.size >= 2
-    val motion = WolfyTheme.motion
-
-    when {
-        hasTree -> AnimatedContent(
-            targetState = mode,
-            transitionSpec = {
-                fadeIn(tween(motion.quick, easing = Curves.Paper)) togetherWith
-                    fadeOut(tween(motion.instant, easing = Curves.Paper))
-            },
-            label = "graph mode",
-        ) { selected ->
-            when (selected) {
-                GraphMode.Arcs -> DependencyArcs(
-                    tokens = state.sentenceTokens,
-                    chunks = state.chunks,
-                )
-                GraphMode.Tree -> SentenceTree(
-                    tokens = state.sentenceTokens,
-                    chunks = state.chunks,
-                )
-            }
-        }
-
-        state.graphLinks.isNotEmpty() -> SentenceGraph(words = state.graphWords, links = state.graphLinks)
-        else -> GraphEmptyNote()
-    }
-}
 
 @Composable
 private fun SentenceTranslation(state: WordCardState) {
@@ -777,7 +686,6 @@ private fun FactTags(state: WordCardState) {
         verticalArrangement = Arrangement.spacedBy(WolfyTheme.spacing.small),
     ) {
         if (analysis.cefr.isNotBlank()) Chip("уровень ${analysis.cefr}")
-        if (analysis.zipf > 0f) Chip("Zipf ${analysis.zipf}")
         if (syllables > 0) Chip(plural(syllables, "слог", "слога", "слогов"))
         if (!analysis.known) Chip("нет в лексиконе")
     }
@@ -1042,6 +950,7 @@ private fun WolfyLexicalTip(state: WordCardState) {
         state.analysis.zipf >= 5f -> "Вульфи: частое слово. Полезнее запомнить его в этой фразе, чем отдельно."
         else -> "Вульфи: слово книжное. Сохрани пример, если оборот хочется использовать самому."
     }
+    // Подсказка остаётся короткой и появляется только по желанию в раскрытии.
     WolfyTip(tip)
 }
 
@@ -1057,6 +966,7 @@ private fun WolfyPhraseTip(state: WordCardState) {
 
 @Composable
 private fun WolfyTip(text: String) {
+    var reply by remember { mutableStateOf("") }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1076,17 +986,22 @@ private fun WolfyTip(text: String) {
         // Крупнее подписи рядом: Вульфи единственное живое на карточке, и
         // размером с иконку он читался как значок, а не как зверь, которого
         // можно погладить.
-        WolfyCompanion(size = 152.dp)
+        WolfyCompanion(
+            size = 72.dp,
+            onPet = {
+                reply = listOf("Вууу!", "Ты ж мой сладенький!", "Сохрани фразу целиком — так её легче вспомнить.").random()
+            },
+        )
         Column(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(WolfyTheme.spacing.small),
         ) {
-            SectionLabel("Вульфи замечает")
             Text(
                 text.removePrefix("Вульфи: "),
                 style = WolfyTheme.typography.body,
                 color = WolfyTheme.colors.ink,
             )
+            if (reply.isNotBlank()) Text(reply, style = WolfyTheme.typography.caption, color = WolfyTheme.colors.accent)
         }
     }
 }

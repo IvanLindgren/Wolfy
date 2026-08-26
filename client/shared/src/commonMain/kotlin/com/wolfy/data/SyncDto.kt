@@ -23,6 +23,8 @@ data class SyncPayload(
     val cursor: Long = 0,
     val books: List<SyncBook> = emptyList(),
     val cards: List<SyncCard> = emptyList(),
+    /** Файлы, которые можно забрать с личного хранилища аккаунта. */
+    val files: List<SyncBookFile> = emptyList(),
     /**
      * Настройки чтения целиком.
      *
@@ -31,6 +33,14 @@ data class SyncPayload(
      * с другого.
      */
     val reading: JsonElement? = null,
+)
+
+@Serializable
+data class SyncBookFile(
+    val bookId: String,
+    val fileName: String,
+    val size: Long,
+    val sha256: String,
 )
 
 @Serializable

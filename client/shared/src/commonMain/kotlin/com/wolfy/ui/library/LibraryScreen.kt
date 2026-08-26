@@ -76,6 +76,7 @@ fun LibraryScreen(
 ) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
+    var cameraHelp by remember { mutableStateOf(false) }
 
     PullToRefreshBox(
         isRefreshing = isRefreshing,
@@ -108,10 +109,19 @@ fun LibraryScreen(
                 LibraryHeader(
                     count = state.books.size,
                     recognizing = state.recognizing,
+                    cameraHelp = cameraHelp,
                     onImport = onImport,
+                    onCameraHelp = { cameraHelp = !cameraHelp },
                     onShoot = onShoot,
                     onCatalog = onCatalog,
                 )
+                if (cameraHelp) {
+                    Text(
+                        "Камера позволяет снять и добавить фразу из плаката, постера, баннера, страницы книги.",
+                        style = WolfyTheme.typography.caption,
+                        color = colors.inkMuted,
+                    )
+                }
                 state.message?.let { message ->
                     Text(
                         text = message,
@@ -203,7 +213,9 @@ private fun ContinueCard(
 private fun LibraryHeader(
     count: Int,
     recognizing: Boolean,
+    cameraHelp: Boolean,
     onImport: () -> Unit,
+    onCameraHelp: () -> Unit,
     onShoot: () -> Unit,
     onCatalog: () -> Unit,
 ) {
@@ -222,21 +234,18 @@ private fun LibraryHeader(
                 style = WolfyTheme.typography.screenTitle,
                 color = colors.ink,
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(spacing.large)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(spacing.medium)) {
                 Text(
                     text = "+ добавить",
                     style = WolfyTheme.typography.button,
                     color = colors.accent,
                     modifier = Modifier.pressable(onClick = onImport),
                 )
-                // Съёмка страницы бумажной книги. Стоит рядом с добавлением
-                // файла, а не в отдельном разделе: и то, и другое отвечает на
-                // вопрос «как сюда попадает книга».
                 Text(
-                    text = if (recognizing) "распознаётся…" else "снять страницу",
+                    text = if (recognizing) "…" else "📷",
                     style = WolfyTheme.typography.button,
                     color = if (recognizing) colors.inkMuted else colors.accent,
-                    modifier = Modifier.pressable(enabled = !recognizing, onClick = onShoot),
+                    modifier = Modifier.pressable(enabled = !recognizing, onClick = onCameraHelp),
                 )
             }
         }
@@ -260,6 +269,16 @@ private fun LibraryHeader(
                     color = colors.inkMuted,
                 )
             }
+        }
+        // Кнопка появляется только после подсказки: действие не прячется за
+        // непонятной пиктограммой и не занимает две строки в заголовке.
+        if (cameraHelp && !recognizing) {
+            Text(
+                text = "снять страницу",
+                style = WolfyTheme.typography.caption,
+                color = colors.accent,
+                modifier = Modifier.pressable(onClick = onShoot),
+            )
         }
         if (count > 0) {
             Text(

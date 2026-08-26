@@ -160,6 +160,23 @@ class Library(
         )
     }
 
+    /** Методы ниже используются синхронизацией и всегда работают частями. */
+    fun localFileSize(id: String): Long? = book(id)?.path?.takeIf { it.isNotBlank() }?.let(store::bookSize)
+
+    fun readLocalFileChunk(id: String, offset: Long, maxBytes: Int): ByteArray? =
+        book(id)?.path?.takeIf { it.isNotBlank() }?.let { store.readBookChunk(it, offset, maxBytes) }
+
+    fun createDownloadedFile(fileName: String): String = store.createBookDownload(fileName)
+
+    fun appendDownloadedChunk(path: String, bytes: ByteArray): Boolean = store.appendBookChunk(path, bytes)
+
+    fun attachDownloadedFile(id: String, path: String, expectedFingerprint: String): Boolean {
+        val fingerprint = store.fingerprint(path)
+        if (path.isBlank() || fingerprint.isBlank() || fingerprint != expectedFingerprint) return false
+        send(command("attachFile") { put("id", id); put("path", path); put("fingerprint", fingerprint) })
+        return true
+    }
+
     /**
      * Возвращает удалённую книгу к жизни на том же номере.
      *

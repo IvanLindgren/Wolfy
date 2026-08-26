@@ -16,9 +16,8 @@ import (
 
 // Book — книга библиотеки так, как её хранит сервер.
 //
-// Файла книги здесь нет и не будет: книга пользователя это его файл, и держать
-// чужие epub у себя значит отвечать за них. Сервер хранит только то, что нужно
-// второму устройству, чтобы узнать книгу и продолжить с того же места.
+// Сам файл хранится отдельно от строки библиотеки: синхронизация остаётся
+// маленьким JSON-обменом, а книга едет защищённым потоковым маршрутом.
 type Book struct {
 	ID           string `json:"id"`
 	Title        string `json:"title"`
@@ -32,6 +31,15 @@ type Book struct {
 	Position     int    `json:"position"`
 	Rev          int64  `json:"rev"`
 	Deleted      bool   `json:"deleted"`
+}
+
+// BookFile — доступность файла в защищённом хранилище. В запросе клиента это
+// поле игнорируется; в ответе оно позволяет второму устройству скачать книгу.
+type BookFile struct {
+	BookID   string `json:"bookId"`
+	FileName string `json:"fileName"`
+	Size     int64  `json:"size"`
+	SHA256   string `json:"sha256"`
 }
 
 // Card — слово, фраза или правило вместе с состоянием повторений.
@@ -60,6 +68,7 @@ type Changes struct {
 	Cursor  int64           `json:"cursor"`
 	Books   []Book          `json:"books"`
 	Cards   []Card          `json:"cards"`
+	Files   []BookFile      `json:"files,omitempty"`
 	Reading json.RawMessage `json:"reading,omitempty"`
 }
 

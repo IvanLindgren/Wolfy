@@ -474,6 +474,49 @@ class WolfyApi(
         }
     }
 
+    /** Передаёт книгу отдельным бинарным запросом, а не внутри JSON sync. */
+    suspend fun uploadBookChunk(
+        bookId: String,
+        fileName: String,
+        sha256: String,
+        offset: Long,
+        total: Long,
+        bytes: ByteArray,
+    ): Boolean {
+        val token = tokenProvider() ?: return false
+        return try {
+            val response = client.put("$baseUrl/v1/books/$bookId/file") {
+                header("Authorization", "Bearer $token")
+                header("X-Wolfy-File-Name", fileName)
+                header("X-Wolfy-SHA256", sha256)
+                header("X-Wolfy-Offset", offset.toString())
+                header("X-Wolfy-Total", total.toString())
+                contentType(ContentType.Application.OctetStream)
+                setBody(bytes)
+                timeout { requestTimeoutMillis = 180_000 }
+            }
+            response.status == HttpStatusCode.NoContent
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** Один ограниченный кусок книги; Range не позволяет раздувать память. */
+    suspend fun downloadBookChunk(bookId: String, offset: Long, maxBytes: Int): BookFileChunk? {
+        val token = tokenProvider() ?: return null
+        return try {
+            val response = client.get("$baseUrl/v1/books/$bookId/file") {
+                header("Authorization", "Bearer $token")
+                header(HttpHeaders.Range, "bytes=$offset-${offset + maxBytes - 1}")
+                timeout { requestTimeoutMillis = 180_000 }
+            }
+            if (response.status != HttpStatusCode.PartialContent && response.status != HttpStatusCode.OK) return null
+            BookFileChunk(response.body(), response.headers["X-Wolfy-File-Name"].orEmpty())
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     /**
      * Распознаёт страницу бумажной книги по снимку.
      *
@@ -820,6 +863,9 @@ sealed interface SyncResult {
      */
     data class Failed(val message: String) : SyncResult
 }
+
+/** Небольшая часть файла книги, полученная по HTTP Range. */
+data class BookFileChunk(val bytes: ByteArray, val fileName: String)
 
 /** Результат перевода. */
 sealed interface TranslateResult {

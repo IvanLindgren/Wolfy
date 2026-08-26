@@ -19,6 +19,7 @@ import (
 	"github.com/wolfy/server/internal/account"
 	"github.com/wolfy/server/internal/api"
 	"github.com/wolfy/server/internal/auth"
+	"github.com/wolfy/server/internal/bookfiles"
 	"github.com/wolfy/server/internal/config"
 	"github.com/wolfy/server/internal/dictionary"
 	"github.com/wolfy/server/internal/discovery"
@@ -119,6 +120,7 @@ func run() error {
 			discoveryService,
 			dictionaryService,
 			updates.New(cfg.ReleasesPath),
+			bookfiles.New(db, cfg.BookFilesPath),
 			log,
 		).WithWebOrigin(cfg.WebOrigin).
 			WithGoogleWebClientID(cfg.GoogleWebClientID).

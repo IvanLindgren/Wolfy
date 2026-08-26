@@ -79,6 +79,10 @@ type Config struct {
 	// непосредственно по его содержимому, поэтому выпуск новой версии не
 	// требует править конфиг или перезапускать процесс.
 	ReleasesPath string
+	// BookFilesPath — закрытое файловое хранилище книг пользователей. Оно
+	// намеренно не раздаётся как статический каталог: каждый запрос проверяет
+	// сессию и владельца книги.
+	BookFilesPath string
 
 	// RequestTimeout — сколько сервис готов ждать ответа от внешнего API.
 	// Клиент не должен ждать дольше, чем ему обещано.
@@ -117,7 +121,8 @@ func Load() (Config, error) {
 			"WOLFY_DICTIONARY_PATH",
 			defaultDictionaryPath(),
 		),
-		ReleasesPath: envOr("WOLFY_RELEASES_PATH", defaultReleasesPath()),
+		ReleasesPath:  envOr("WOLFY_RELEASES_PATH", defaultReleasesPath()),
+		BookFilesPath: envOr("WOLFY_BOOK_FILES_PATH", defaultBookFilesPath()),
 
 		RequestTimeout: 20 * time.Second,
 	}
@@ -128,6 +133,10 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("не задан WOLFY_DB_URL: без базы сервис работать не может")
 	}
 	return cfg, nil
+}
+
+func defaultBookFilesPath() string {
+	return filepath.Join(defaultReleasesPath(), "book-files")
 }
 
 func defaultReleasesPath() string {

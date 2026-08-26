@@ -48,8 +48,7 @@ fun SettingsScreen(
     onFontScaleChange: (Float) -> Unit,
     sync: SyncStatus,
     onSyncNow: () -> Unit,
-    coreVersion: String,
-    serverUrl: String,
+    appVersion: String,
     signedIn: Boolean,
     accountEmail: String,
     reduceMotion: Boolean,
@@ -102,11 +101,6 @@ fun SettingsScreen(
             style = WolfyTheme.typography.screenTitle,
             color = colors.ink,
         )
-        Text(
-            "Всё важное собрано по темам. Нужный пункт видно сразу.",
-            style = WolfyTheme.typography.body,
-            color = colors.inkMuted,
-        )
 
         SettingsCard("Вид и текст") {
             SectionLabel("Тема")
@@ -115,6 +109,7 @@ fun SettingsScreen(
             SectionLabel("Размер текста книги")
             FontScale(scale = fontScale, onChange = onFontScaleChange)
             MotionToggle(reduceMotion, onReduceMotion)
+            ReaderPreview(fontScale, focusMode)
         }
 
         SettingsCard("Помощь при чтении") {
@@ -231,28 +226,28 @@ fun SettingsScreen(
         }
 
         SettingsCard("О приложении") {
-            Fact(label = "Версия ядра", value = coreVersion)
-            Fact(label = "Сервис", value = serverUrl)
+            Fact(label = "Версия приложения", value = appVersion)
         }
 
-        Row(
-            Modifier.fillMaxWidth().padding(top = spacing.xlarge),
-            horizontalArrangement = Arrangement.spacedBy(spacing.large),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            WolfySticker(Sticker.HappyWave, size = 88.dp)
-            Column(verticalArrangement = Arrangement.spacedBy(spacing.tight)) {
-                Text(
-                    text = "Вульфи",
-                    style = WolfyTheme.typography.bookTitle,
-                    color = colors.ink,
-                )
-                Text(
-                    text = "Хранитель библиотеки",
-                    style = WolfyTheme.typography.caption,
-                    color = colors.inkMuted,
-                )
-            }
+    }
+}
+
+/** Живой пример вместо терминов: изменения видны до выхода к книге. */
+@Composable
+private fun ReaderPreview(fontScale: Float, focus: FocusMode) {
+    val colors = WolfyTheme.colors
+    val spacing = WolfyTheme.spacing
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(colors.paper, RoundedCornerShape(spacing.small))
+            .padding(spacing.medium),
+        verticalArrangement = Arrangement.spacedBy(spacing.tight),
+    ) {
+        SectionLabel("Так будет выглядеть читалка")
+        Text("The small fox found a quiet place to read.", style = WolfyTheme.typography.body.copy(fontSize = WolfyTheme.typography.body.fontSize * fontScale), color = colors.ink)
+        if (focus != FocusMode.Off) {
+            Text("Следующая строка станет тише вокруг места чтения.", style = WolfyTheme.typography.caption, color = colors.inkMuted)
         }
     }
 }
@@ -385,8 +380,7 @@ private fun MotionToggle(reduced: Boolean, onChange: (Boolean) -> Unit) {
  * прятать это за молчаливым значком значит оставить его гадать, доехали ли
  * его книги.
  *
- * Сами книги при этом не ездят и ездить не будут: сервер хранит, что вы
- * читаете, а не сами файлы.
+ * Книги, которые уже добавлены на другом устройстве, тоже будут скачаны.
  */
 @Composable
 private fun SyncBlock(status: SyncStatus, signedIn: Boolean, onSyncNow: () -> Unit) {
@@ -411,8 +405,7 @@ private fun SyncBlock(status: SyncStatus, signedIn: Boolean, onSyncNow: () -> Un
             Text(text = it, style = WolfyTheme.typography.caption, color = colors.accent)
         }
         Text(
-            text = "Прогресс, полки и карточки появятся на ваших устройствах. " +
-                "Сами файлы книг останутся только у вас.",
+            text = "Прогресс, полки, карточки и добавленные книги появятся на ваших устройствах.",
             style = WolfyTheme.typography.caption,
             color = colors.inkMuted,
         )

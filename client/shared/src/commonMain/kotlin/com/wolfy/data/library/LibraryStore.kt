@@ -97,6 +97,18 @@ interface LibraryStore {
     /** Байты файла из хранилища. `null` — файла нет или он не читается. */
     fun readBinary(path: String): ByteArray?
 
+    /** Размер книги. Нужен для передачи файла без его полной копии в памяти. */
+    fun bookSize(path: String): Long? = null
+
+    /** Читает небольшой кусок книги для потоковой отправки. */
+    fun readBookChunk(path: String, offset: Long, maxBytes: Int): ByteArray? = null
+
+    /** Создаёт пустой файл для поступающей частями книги. */
+    fun createBookDownload(fileName: String): String = ""
+
+    /** Дописывает очередную часть скачиваемой книги. */
+    fun appendBookChunk(path: String, bytes: ByteArray): Boolean = false
+
     /** Путь к установленному офлайн-словарю или пустая строка. */
     fun dictionaryPath(): String
 

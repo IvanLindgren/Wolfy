@@ -804,10 +804,7 @@ private fun Shell(
                     onFontScaleChange = onFontScaleChange,
                     sync = syncStatus,
                     onSyncNow = { scope.launch { parts.sync.sync() } },
-                    coreVersion = remember {
-                        runCatching { parts.core.version() }.getOrElse { "?" }
-                    },
-                    serverUrl = serverUrl,
+                    appVersion = APP_VERSION,
                     signedIn = signedIn,
                     accountEmail = accountEmail,
                     reduceMotion = reduceMotion,

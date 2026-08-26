@@ -60,6 +60,7 @@ import org.jetbrains.compose.resources.painterResource
 fun WolfyCompanion(
     modifier: Modifier = Modifier,
     size: Dp = 88.dp,
+    onPet: () -> Unit = {},
 ) {
     val colors = WolfyTheme.colors
     val scope = rememberCoroutineScope()
@@ -115,6 +116,7 @@ fun WolfyCompanion(
                     change.consume()
                     if (stroke.push(drag.x)) {
                         strokes += 1
+                        onPet()
                         if (strokes >= HEARTS_AFTER) {
                             hearts.add(nextHeart++)
                         }

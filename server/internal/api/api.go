@@ -22,6 +22,7 @@ import (
 
 	"github.com/wolfy/server/internal/account"
 	"github.com/wolfy/server/internal/auth"
+	"github.com/wolfy/server/internal/bookfiles"
 	"github.com/wolfy/server/internal/dictionary"
 	"github.com/wolfy/server/internal/discovery"
 	"github.com/wolfy/server/internal/library"
@@ -50,6 +51,7 @@ type Server struct {
 	catalogue         *openlibrary.Service
 	newspaper         *newspaper.Service
 	updates           *updates.Service
+	bookFiles         *bookfiles.Service
 	log               *slog.Logger
 	webOrigin         string
 	googleWebClientID string
@@ -94,6 +96,7 @@ func NewServer(
 	d *discovery.Service,
 	dict *dictionary.Service,
 	updater *updates.Service,
+	fileStore *bookfiles.Service,
 	log *slog.Logger,
 ) *Server {
 	return &Server{
@@ -102,7 +105,7 @@ func NewServer(
 		remoteBooks: remotebook.New(30 * time.Second),
 		catalogue:   openlibrary.New(10 * time.Second),
 		newspaper:   newspaper.New(12 * time.Second),
-		updates:     updater, log: log,
+		updates:     updater, bookFiles: fileStore, log: log,
 		// Двести переводов залпом и один в секунду сверху: страница книги
 		// редко даёт больше двухсот незнакомых слов, а секунда — это дольше,
 		// чем читатель успевает выбрать следующее слово, но много быстрее,
@@ -209,6 +212,8 @@ func (s *Server) Handler() http.Handler {
 	private := http.NewServeMux()
 	private.HandleFunc("GET /v1/me", s.me)
 	private.HandleFunc("POST /v1/sync", s.postSync)
+	private.HandleFunc("PUT /v1/books/{bookId}/file", s.putBookFile)
+	private.HandleFunc("GET /v1/books/{bookId}/file", s.getBookFile)
 	private.HandleFunc("POST /v1/ocr", s.postOCR)
 	private.HandleFunc("GET /v1/discovery/profile", s.getDiscoveryProfile)
 	private.HandleFunc("PUT /v1/discovery/profile", s.putDiscoveryProfile)
@@ -746,8 +751,72 @@ func (s *Server) postSync(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	for _, book := range incoming.Books {
+		if book.Deleted {
+			_ = s.bookFiles.Delete(r.Context(), user.ID, book.ID)
+		}
+	}
+	// Доступность файлов не участвует в разрешении конфликтов библиотеки: это
+	// просто снимок защищённого хранилища для второго устройства.
+	result.Files, err = s.bookFiles.List(r.Context(), user.ID)
+	if err != nil {
+		s.log.Error("список файлов книг не получен", "error", err, "user", user.ID)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "файлы книг сейчас недоступны"})
+		return
+	}
 
 	writeJSON(w, http.StatusOK, result)
+}
+
+// putBookFile принимает EPUB/PDF отдельным потоком. JSON-синхронизация книг
+// остаётся лёгкой, а сервер никогда не держит книгу целиком в памяти.
+func (s *Server) putBookFile(w http.ResponseWriter, r *http.Request) {
+	user, ok := auth.FromContext(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "нужен вход"})
+		return
+	}
+	bookID := r.PathValue("bookId")
+	if r.ContentLength <= 0 || r.ContentLength > 2<<20 {
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "часть книги слишком велика"})
+		return
+	}
+	offset, offsetErr := strconv.ParseInt(r.Header.Get("X-Wolfy-Offset"), 10, 64)
+	total, totalErr := strconv.ParseInt(r.Header.Get("X-Wolfy-Total"), 10, 64)
+	if offsetErr != nil || totalErr != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "не указан диапазон файла"})
+		return
+	}
+	err := s.bookFiles.PutChunk(r.Context(), user.ID, bookID, r.Header.Get("X-Wolfy-File-Name"), r.Header.Get("X-Wolfy-SHA256"), http.MaxBytesReader(w, r.Body, 2<<20), r.ContentLength, offset, total)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "файл книги не принят"})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) getBookFile(w http.ResponseWriter, r *http.Request) {
+	user, ok := auth.FromContext(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "нужен вход"})
+		return
+	}
+	file, info, err := s.bookFiles.Open(r.Context(), user.ID, r.PathValue("bookId"))
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "файл книги не найден"})
+		return
+	}
+	defer file.Close()
+	stat, err := file.Stat()
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "файл книги не найден"})
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", "attachment; filename=\""+info.FileName+"\"")
+	w.Header().Set("X-Wolfy-File-Name", info.FileName)
+	w.Header().Set("X-Wolfy-SHA256", info.SHA256)
+	http.ServeContent(w, r, info.FileName, stat.ModTime(), file)
 }
 
 type ocrRequest struct {

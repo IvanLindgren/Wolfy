@@ -197,6 +197,33 @@ internal class FileLibraryStore(
     override fun readBinary(path: String): ByteArray? =
         runCatching { File(path).takeIf { it.isFile }?.readBytes() }.getOrNull()
 
+    override fun bookSize(path: String): Long? = File(path).takeIf { it.isFile }?.length()
+
+    override fun readBookChunk(path: String, offset: Long, maxBytes: Int): ByteArray? = runCatching {
+        require(offset >= 0 && maxBytes in 1..(2 * 1024 * 1024))
+        val file = File(path)
+        if (!file.isFile || offset >= file.length()) return@runCatching null
+        val length = minOf(maxBytes.toLong(), file.length() - offset).toInt()
+        java.io.RandomAccessFile(file, "r").use { input ->
+            input.seek(offset)
+            ByteArray(length).also { input.readFully(it) }
+        }
+    }.getOrNull()
+
+    override fun createBookDownload(fileName: String): String {
+        books.mkdirs()
+        val target = uniqueFile(fileName)
+        FileOutputStream(target, false).use { it.fd.sync() }
+        return target.absolutePath
+    }
+
+    override fun appendBookChunk(path: String, bytes: ByteArray): Boolean = runCatching {
+        val target = File(path)
+        require(target.absolutePath.startsWith(books.absolutePath))
+        FileOutputStream(target, true).use { output -> output.write(bytes); output.fd.sync() }
+        true
+    }.getOrDefault(false)
+
     override fun dictionaryPath(): String =
         File(directory, DICTIONARY_FILE).takeIf { dictionary ->
             dictionary.isFile && dictionary.length() > 0L && runCatching {

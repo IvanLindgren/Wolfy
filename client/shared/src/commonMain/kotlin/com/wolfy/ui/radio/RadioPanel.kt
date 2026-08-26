@@ -84,8 +84,7 @@ fun RadioPanel(
             color = colors.ink,
         )
         Text(
-            text = "HTTPS-адрес потока. У того, кто слушает под чтение, любимая " +
-                "станция обычно уже есть. Наш список пригодится, если своей ещё нет.",
+            text = "Ссылка на вашу радиостанцию.",
             style = WolfyTheme.typography.caption,
             color = colors.inkMuted,
         )

@@ -253,8 +253,8 @@ private fun FeedScreen(
                     )
                 }
                 Caption(
-                    text = "${pager.currentPage + 1} / ${state.items.size}",
-                    modifier = Modifier.align(Alignment.TopEnd).padding(WolfyTheme.spacing.large),
+                    text = "Книга ${pager.currentPage + 1} из ${state.items.size}",
+                    modifier = Modifier.align(Alignment.TopCenter).padding(top = WolfyTheme.spacing.small),
                 )
                 state.message?.let {
                     Text(
@@ -337,7 +337,7 @@ private fun BookStory(
                     modifier = Modifier.weight(1f),
                 )
             }
-            Caption("Добавление автоматически отмечает книгу как понравившуюся и уточняет рекомендации.")
+            Caption("После добавления подберём больше похожих книг.")
         }
     }
 }
