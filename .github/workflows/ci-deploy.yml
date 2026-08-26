@@ -7,7 +7,9 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: wolfy-${{ github.workflow }}-${{ github.ref }}
+  # Ручной production-run не должен быть отменён запоздавшим событием старого
+  # push. Старые deploy дополнительно отсекаются проверкой current master.
+  group: wolfy-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 permissions:
@@ -309,6 +311,12 @@ jobs:
     steps:
       - name: Checkout deploy script
         uses: actions/checkout@v4
+
+      - name: Verify deployment revision is current master
+        shell: bash
+        run: |
+          current="$(git ls-remote origin refs/heads/master | awk '{print $1}')"
+          test "$current" = "$GITHUB_SHA"
 
       - name: Download tested artifact
         uses: actions/download-artifact@v4
