@@ -123,7 +123,7 @@ import kotlinx.coroutines.coroutineScope
  * десктоп — запечённое сборкой `-Dwolfy.version`. Значение здесь остаётся
  * последним доводом для запуска из исходников и тестов.
  */
-const val APP_VERSION = "1.0.10"
+const val APP_VERSION = "1.0.11"
 
 /**
  * Корень приложения.

@@ -132,7 +132,8 @@ val wolfyServerUrl = providers.gradleProperty("wolfyServerUrl")
  * приложении нет ни терминала, ни его переменных среды, поэтому версия
  * запекается тем же способом, что и адрес API.
  */
-val wolfyVersion = "1.0.10"
+val wolfyVersion = "1.0.11"
+val isWindowsHost = System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
 
 // Compose Desktop не всегда считает javaOptions входом app-image. Тогда MSI
 // получает новый ProductVersion, а launcher остаётся со старой версией и
@@ -199,7 +200,14 @@ compose.desktop {
         }
 
         nativeDistributions {
-            targetFormats(TargetFormat.Msi, TargetFormat.Exe)
+            // jpackage создаёт нативный пакет только для ОС, на которой идёт
+            // сборка. Так GitHub Actions честно выпускает MSI на Windows и
+            // DEB на Linux, не пытаясь собрать Windows-инсталлятор на Linux.
+            if (isWindowsHost) {
+                targetFormats(TargetFormat.Msi, TargetFormat.Exe)
+            } else {
+                targetFormats(TargetFormat.Deb)
+            }
             packageName = "Wolfy"
             packageVersion = wolfyVersion
             // Латиницей, и не по недосмотру: установщик собирает WiX, а строки
