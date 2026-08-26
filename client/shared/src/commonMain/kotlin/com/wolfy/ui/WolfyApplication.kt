@@ -744,6 +744,9 @@ private fun Shell(
                         reference = rule
                         section = Section.More
                     },
+                    onExplainPhrase = parts.reader::explainCardPhrase,
+                    onRecap = parts.reader::recapRecentPages,
+                    onDismissRecap = parts.reader::dismissRecap,
                     onImageVisible = parts.reader::loadImage,
                     theme = theme,
                     fontScale = fontScale,

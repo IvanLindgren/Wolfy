@@ -25,6 +25,7 @@ import (
 	"github.com/wolfy/server/internal/discovery"
 	"github.com/wolfy/server/internal/library"
 	"github.com/wolfy/server/internal/ocr"
+	"github.com/wolfy/server/internal/readingai"
 	"github.com/wolfy/server/internal/social"
 	"github.com/wolfy/server/internal/store"
 	"github.com/wolfy/server/internal/translate"
@@ -121,6 +122,7 @@ func run() error {
 			dictionaryService,
 			updates.New(cfg.ReleasesPath),
 			bookfiles.New(db, cfg.BookFilesPath),
+			readingai.New(db, cfg.AIKey, cfg.AIURL, cfg.AIModel, cfg.RequestTimeout),
 			log,
 		).WithWebOrigin(cfg.WebOrigin).
 			WithGoogleWebClientID(cfg.GoogleWebClientID).

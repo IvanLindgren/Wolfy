@@ -39,6 +39,13 @@ type Config struct {
 	OCRModel string
 	OCRURL   string
 
+	// AI* — Gemini-compatible endpoint для двух Beta-подсказок читателю.
+	// По умолчанию берёт уже настроенный OCR-провайдер: оба запроса идут через
+	// один совместимый OpenAI API, но модели и ключи можно разделить.
+	AIKey   string
+	AIModel string
+	AIURL   string
+
 	// Читавук выдаёт общую сессию и заводит аккаунты. Каждый адрес
 	// настраивается отдельно: сервис, поднятый только ради чтения, вправе
 	// уметь вход и не уметь регистрацию. Пустой адрес прячет кнопку в
@@ -102,6 +109,9 @@ func Load() (Config, error) {
 		OCRKey:   env("WOLFY_OCR_KEY"),
 		OCRModel: envOr("WOLFY_OCR_MODEL", "google/gemini-3.7-flash"),
 		OCRURL:   envOr("WOLFY_OCR_URL", "https://api.polza.ai/api/v1/chat/completions"),
+		AIKey:    envOr("WOLFY_AI_KEY", env("WOLFY_OCR_KEY")),
+		AIModel:  envOr("WOLFY_AI_MODEL", envOr("WOLFY_OCR_MODEL", "google/gemini-3.7-flash")),
+		AIURL:    envOr("WOLFY_AI_URL", envOr("WOLFY_OCR_URL", "https://api.polza.ai/api/v1/chat/completions")),
 
 		CitavukLoginURL:          envOr("WOLFY_CITAVUK_LOGIN_URL", "https://api.citavuk.ru/v1/auth/login"),
 		CitavukRegisterURL:       envOr("WOLFY_CITAVUK_REGISTER_URL", "https://api.citavuk.ru/v1/auth/register"),

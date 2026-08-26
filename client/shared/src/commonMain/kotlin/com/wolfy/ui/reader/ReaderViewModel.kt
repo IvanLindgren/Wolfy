@@ -6,6 +6,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.wolfy.data.TranslateResult
 import com.wolfy.data.WolfyApi
+import com.wolfy.data.AiRecap
+import com.wolfy.data.AiRecapResult
+import com.wolfy.data.AiPhraseResult
 import com.wolfy.data.library.Library
 import com.wolfy.data.library.LibraryBook
 import com.wolfy.data.library.currentTimeMillis
@@ -24,6 +27,7 @@ import com.wolfy.ffi.WolfyCore
 import com.wolfy.ui.card.TranslationState
 import com.wolfy.ui.card.DefinitionState
 import com.wolfy.ui.card.WordCardState
+import com.wolfy.ui.card.BetaPhraseState
 import com.wolfy.widgets.GraphLink
 import com.wolfy.widgets.GraphWord
 import kotlinx.coroutines.Dispatchers
@@ -91,6 +95,7 @@ data class ReaderState(
      */
     val startAt: Float = 0f,
     val error: String? = null,
+    val recap: StoryRecapState = StoryRecapState.Idle,
 ) {
     val chapterCount: Int get() = chapters.size
     val hasPrevious: Boolean get() = chapterIndex > 0
@@ -666,6 +671,59 @@ class ReaderViewModel(
         }
     }
 
+    /** Beta: Gemini объясняет только выбранное предложение, не всю книгу. */
+    fun explainCardPhrase() {
+        val id = bookId ?: return
+        val session = generation
+        val card = _state.value.card ?: return
+        if (card.betaExplanation is BetaPhraseState.Loading) return
+        _state.update { it.copy(card = it.card?.copy(betaExplanation = BetaPhraseState.Loading)) }
+        viewModelScope.launch {
+            val result = api.explainPhrase(card.context, card.context)
+            _state.update { current ->
+                if (!owns(session, id) || current.card?.context != card.context) current
+                else current.copy(card = current.card.copy(betaExplanation = when (result) {
+                    is AiPhraseResult.Ready -> BetaPhraseState.Ready(result.value)
+                    is AiPhraseResult.Failed -> BetaPhraseState.Failed(result.message)
+                }))
+            }
+        }
+    }
+
+    /** Beta: до десяти последних экранов, ограниченных 18 тысячами знаков. */
+    fun recapRecentPages() {
+        val id = bookId ?: return
+        val opened = handle ?: return
+        val session = generation
+        if (_state.value.recap is StoryRecapState.Loading) return
+        _state.update { it.copy(recap = StoryRecapState.Loading) }
+        viewModelScope.launch {
+            val snapshot = _state.value
+            val excerpt = withContext(Dispatchers.Default) {
+                val pieces = mutableListOf<String>()
+                var left = RECAP_CHARS
+                var index = snapshot.chapterIndex
+                while (index >= 0 && left > 0) {
+                    val text = if (index == snapshot.chapterIndex) snapshot.blocks.joinToString("\n\n") { it.text }
+                    else runCatching { core.readChapter(opened, index).plainText() }.getOrDefault("")
+                    if (text.isNotBlank()) { pieces += text.takeLast(left); left -= text.length }
+                    index--
+                }
+                pieces.asReversed().joinToString("\n\n")
+            }
+            val result = api.recap(snapshot.bookTitle, excerpt)
+            _state.update { current ->
+                if (!owns(session, id)) current
+                else current.copy(recap = when (result) {
+                    is AiRecapResult.Ready -> StoryRecapState.Ready(result.value)
+                    is AiRecapResult.Failed -> StoryRecapState.Failed(result.message)
+                })
+            }
+        }
+    }
+
+    fun dismissRecap() { _state.update { it.copy(recap = StoryRecapState.Idle) } }
+
     fun dismissCard() {
         invalidateCard()
         _state.update { it.copy(card = null, selectedBlock = -1) }
@@ -849,6 +907,7 @@ class ReaderViewModel(
     }
 
     private companion object {
+		const val RECAP_CHARS = 18_000
         /** Как редко место в книге доходит до диска. */
         const val WRITE_EVERY = 3_000L
         /** Не больше 32 MiB готовых растров на открытую книгу. */
@@ -1018,4 +1077,12 @@ internal fun PreparedChapter.toReaderBlocks(): List<ReaderBlock> {
         )
     }
     return out
+}
+
+@Immutable
+sealed interface StoryRecapState {
+    data object Idle : StoryRecapState
+    data object Loading : StoryRecapState
+    data class Ready(val value: AiRecap) : StoryRecapState
+    data class Failed(val message: String) : StoryRecapState
 }

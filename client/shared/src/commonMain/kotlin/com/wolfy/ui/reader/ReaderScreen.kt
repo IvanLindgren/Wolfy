@@ -4,6 +4,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -91,6 +92,9 @@ fun ReaderScreen(
     onScrolled: (Float) -> Unit,
     onChapter: (Int) -> Unit,
     onOpenRule: (String) -> Unit,
+    onExplainPhrase: () -> Unit,
+    onRecap: () -> Unit,
+    onDismissRecap: () -> Unit,
     onImageVisible: (String) -> Unit,
     theme: ReadingTheme,
     fontScale: Float,
@@ -251,6 +255,7 @@ fun ReaderScreen(
                 onClose = onClose,
                 onOpenContents = { contentsOpen = true },
                 onOpenSettings = { readingSettingsOpen = !readingSettingsOpen },
+                onRecap = onRecap,
             )
             AttentionBar(
                 state = state,
@@ -330,7 +335,11 @@ fun ReaderScreen(
             onSavePhrase = onSavePhrase,
             onPronounce = onPronounce,
             onOpenRule = onOpenRule,
+            onExplainPhrase = onExplainPhrase,
         )
+        if (state.recap !is StoryRecapState.Idle) {
+            StoryRecapSheet(state.recap, onDismissRecap)
+        }
     }
 }
 
@@ -342,6 +351,7 @@ private fun ReaderTopBar(
     onClose: () -> Unit,
     onOpenContents: () -> Unit,
     onOpenSettings: () -> Unit,
+    onRecap: () -> Unit,
 ) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
@@ -387,9 +397,15 @@ private fun ReaderTopBar(
                 Modifier
                     .fillMaxWidth(progress)
                     .height(spacing.hair)
-                    .background(colors.accent),
+                .background(colors.accent),
             )
         }
+        Text(
+            "Вспомнить сюжет · Beta",
+            style = WolfyTheme.typography.caption,
+            color = colors.accent,
+            modifier = Modifier.align(Alignment.End).pressable(onClick = onRecap).padding(horizontal = spacing.pageMargin, vertical = spacing.small),
+        )
     }
 }
 
@@ -522,6 +538,37 @@ private fun <T> QuickChoice(
                     modifier = Modifier.pressable { onChange(value) },
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun StoryRecapSheet(state: StoryRecapState, onDismiss: () -> Unit) {
+    val colors = WolfyTheme.colors
+    val spacing = WolfyTheme.spacing
+    Column(
+        Modifier.fillMaxWidth().background(colors.surface, androidx.compose.foundation.shape.RoundedCornerShape(spacing.large)).border(spacing.rule, colors.rule, androidx.compose.foundation.shape.RoundedCornerShape(spacing.large)).padding(spacing.large),
+        verticalArrangement = Arrangement.spacedBy(spacing.small),
+    ) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Сюжет · Beta", style = WolfyTheme.typography.bookTitle, color = colors.ink)
+            Text("закрыть", style = WolfyTheme.typography.caption, color = colors.accent, modifier = Modifier.pressable(onClick = onDismiss))
+        }
+        Text("ИИ может ошибаться. До 10 запросов в день.", style = WolfyTheme.typography.caption, color = colors.inkMuted)
+        when (state) {
+            StoryRecapState.Loading -> Text("Gemini собирает события…", style = WolfyTheme.typography.body, color = colors.inkMuted)
+            is StoryRecapState.Failed -> Text(state.message, style = WolfyTheme.typography.caption, color = colors.accent)
+            is StoryRecapState.Ready -> {
+                Text(state.value.summary, style = WolfyTheme.typography.body, color = colors.ink)
+                state.value.events.forEachIndexed { index, event ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(spacing.small)) {
+                        Text(if (index == 0) "●" else "↓", style = WolfyTheme.typography.body, color = colors.accent)
+                        Column { Text(event.title, style = WolfyTheme.typography.body, color = colors.ink); Text(event.text, style = WolfyTheme.typography.caption, color = colors.inkMuted) }
+                    }
+                }
+                Text("Осталось сегодня: ${state.value.remaining}", style = WolfyTheme.typography.caption, color = colors.inkMuted)
+            }
+            StoryRecapState.Idle -> Unit
         }
     }
 }

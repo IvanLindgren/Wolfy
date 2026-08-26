@@ -29,6 +29,7 @@ import (
 	"github.com/wolfy/server/internal/newspaper"
 	"github.com/wolfy/server/internal/ocr"
 	"github.com/wolfy/server/internal/openlibrary"
+	"github.com/wolfy/server/internal/readingai"
 	"github.com/wolfy/server/internal/remotebook"
 	"github.com/wolfy/server/internal/social"
 	"github.com/wolfy/server/internal/store"
@@ -52,6 +53,7 @@ type Server struct {
 	newspaper         *newspaper.Service
 	updates           *updates.Service
 	bookFiles         *bookfiles.Service
+	readingAI         *readingai.Service
 	log               *slog.Logger
 	webOrigin         string
 	googleWebClientID string
@@ -97,6 +99,7 @@ func NewServer(
 	dict *dictionary.Service,
 	updater *updates.Service,
 	fileStore *bookfiles.Service,
+	ai *readingai.Service,
 	log *slog.Logger,
 ) *Server {
 	return &Server{
@@ -105,7 +108,7 @@ func NewServer(
 		remoteBooks: remotebook.New(30 * time.Second),
 		catalogue:   openlibrary.New(10 * time.Second),
 		newspaper:   newspaper.New(12 * time.Second),
-		updates:     updater, bookFiles: fileStore, log: log,
+		updates:     updater, bookFiles: fileStore, readingAI: ai, log: log,
 		// Двести переводов залпом и один в секунду сверху: страница книги
 		// редко даёт больше двухсот незнакомых слов, а секунда — это дольше,
 		// чем читатель успевает выбрать следующее слово, но много быстрее,
@@ -215,6 +218,8 @@ func (s *Server) Handler() http.Handler {
 	private.HandleFunc("PUT /v1/books/{bookId}/file", s.putBookFile)
 	private.HandleFunc("GET /v1/books/{bookId}/file", s.getBookFile)
 	private.HandleFunc("POST /v1/ocr", s.postOCR)
+	private.HandleFunc("POST /v1/ai/phrase", s.postAIPhrase)
+	private.HandleFunc("POST /v1/ai/recap", s.postAIRecap)
 	private.HandleFunc("GET /v1/discovery/profile", s.getDiscoveryProfile)
 	private.HandleFunc("PUT /v1/discovery/profile", s.putDiscoveryProfile)
 	private.HandleFunc("GET /v1/discovery/feed", s.getDiscoveryFeed)

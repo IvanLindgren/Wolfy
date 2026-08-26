@@ -474,6 +474,34 @@ class WolfyApi(
         }
     }
 
+    suspend fun explainPhrase(phrase: String, context: String): AiPhraseResult {
+        val token = tokenProvider() ?: return AiPhraseResult.Failed("Войдите, чтобы использовать Beta.")
+        return try {
+            val response = client.post("$baseUrl/v1/ai/phrase") {
+                header("Authorization", "Bearer $token")
+                contentType(ContentType.Application.Json)
+                setBody(AiPhraseRequest(phrase, context))
+                timeout { requestTimeoutMillis = 45_000 }
+            }
+            if (response.status == HttpStatusCode.OK) AiPhraseResult.Ready(response.body())
+            else AiPhraseResult.Failed(response.authMessage().ifBlank { "Beta-подсказка сейчас недоступна." })
+        } catch (_: Exception) { AiPhraseResult.Failed("Нет связи с Beta-подсказкой.") }
+    }
+
+    suspend fun recap(title: String, excerpt: String): AiRecapResult {
+        val token = tokenProvider() ?: return AiRecapResult.Failed("Войдите, чтобы использовать Beta.")
+        return try {
+            val response = client.post("$baseUrl/v1/ai/recap") {
+                header("Authorization", "Bearer $token")
+                contentType(ContentType.Application.Json)
+                setBody(AiRecapRequest(title, excerpt))
+                timeout { requestTimeoutMillis = 60_000 }
+            }
+            if (response.status == HttpStatusCode.OK) AiRecapResult.Ready(response.body())
+            else AiRecapResult.Failed(response.authMessage().ifBlank { "Beta-подсказка сейчас недоступна." })
+        } catch (_: Exception) { AiRecapResult.Failed("Нет связи с Beta-подсказкой.") }
+    }
+
     /** Передаёт книгу отдельным бинарным запросом, а не внутри JSON sync. */
     suspend fun uploadBookChunk(
         bookId: String,
@@ -911,6 +939,24 @@ private data class RemoteBookRequest(val url: String)
 
 @Serializable
 private data class ApiErrorBody(val error: String = "", val message: String = "")
+
+@Serializable
+private data class AiPhraseRequest(val phrase: String, val context: String)
+
+@Serializable
+private data class AiRecapRequest(val title: String, val excerpt: String)
+
+@Serializable
+data class AiPhrase(val title: String, val explanation: String, val pattern: String, val steps: List<AiPhraseStep>, val remaining: Int)
+@Serializable
+data class AiPhraseStep(val label: String, val text: String)
+@Serializable
+data class AiRecap(val summary: String, val events: List<AiEvent>, val remaining: Int)
+@Serializable
+data class AiEvent(val title: String, val text: String, val kind: String)
+
+sealed interface AiPhraseResult { data class Ready(val value: AiPhrase) : AiPhraseResult; data class Failed(val message: String) : AiPhraseResult }
+sealed interface AiRecapResult { data class Ready(val value: AiRecap) : AiRecapResult; data class Failed(val message: String) : AiRecapResult }
 
 @Serializable
 data class NewsTopic(val code: String = "", val title: String = "")

@@ -98,6 +98,7 @@ fun WordCardSheet(
     onSavePhrase: () -> Unit,
     onPronounce: () -> Unit,
     onOpenRule: (String) -> Unit,
+    onExplainPhrase: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = WolfyTheme.colors
@@ -150,6 +151,7 @@ fun WordCardSheet(
                     onPronounce = onPronounce,
                     onDismiss = onDismiss,
                     onOpenRule = onOpenRule,
+                    onExplainPhrase = onExplainPhrase,
                     maxHeight = maxCardHeight,
                 )
             }
@@ -170,6 +172,7 @@ private fun CardBody(
     onPronounce: () -> Unit,
     onDismiss: () -> Unit,
     onOpenRule: (String) -> Unit,
+    onExplainPhrase: () -> Unit,
     maxHeight: Dp,
 ) {
     val spacing = WolfyTheme.spacing
@@ -209,7 +212,7 @@ private fun CardBody(
             ) { selected ->
                 when (selected) {
                     CardMode.Word -> WordEssentials(state, onOpenRule)
-                    CardMode.Phrase -> PhraseEssentials(state, onOpenRule)
+                    CardMode.Phrase -> PhraseEssentials(state, onOpenRule, onExplainPhrase)
                 }
             }
         }
@@ -609,6 +612,7 @@ private fun FormSummary(state: WordCardState) {
 private fun PhraseEssentials(
     state: WordCardState,
     onOpenRule: (String) -> Unit,
+    onExplainPhrase: () -> Unit,
 ) {
     val spacing = WolfyTheme.spacing
     Column(verticalArrangement = Arrangement.spacedBy(spacing.medium)) {
@@ -643,6 +647,37 @@ private fun PhraseEssentials(
                     )
                 }
                 WolfyPhraseTip(state)
+            }
+        }
+        Appear(3) { BetaPhraseExplanation(state.betaExplanation, onExplainPhrase) }
+    }
+}
+
+@Composable
+private fun BetaPhraseExplanation(state: BetaPhraseState, onAsk: () -> Unit) {
+    val colors = WolfyTheme.colors
+    val spacing = WolfyTheme.spacing
+    PrimaryCard(title = "Почему фраза построена так · Beta") {
+        Text(
+            "ИИ может ошибаться. До 10 запросов в день.",
+            style = WolfyTheme.typography.caption,
+            color = colors.inkMuted,
+        )
+        when (state) {
+            BetaPhraseState.Idle -> Text("Спросить Gemini", style = WolfyTheme.typography.button, color = colors.accent, modifier = Modifier.pressable(onClick = onAsk).padding(top = spacing.small))
+            BetaPhraseState.Loading -> Text("Gemini разбирает фразу…", style = WolfyTheme.typography.caption, color = colors.inkMuted)
+            is BetaPhraseState.Failed -> Text(state.message, style = WolfyTheme.typography.caption, color = colors.accent)
+            is BetaPhraseState.Ready -> {
+                Text(state.value.title, style = WolfyTheme.typography.body, color = colors.ink)
+                Text(state.value.explanation, style = WolfyTheme.typography.caption, color = colors.inkMuted)
+                if (state.value.pattern.isNotBlank()) Chip(state.value.pattern)
+                state.value.steps.forEachIndexed { index, step ->
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(spacing.small)) {
+                        Text("${index + 1}", style = WolfyTheme.typography.caption, color = colors.accent)
+                        Column { Text(step.label, style = WolfyTheme.typography.caption, color = colors.ink); Text(step.text, style = WolfyTheme.typography.caption, color = colors.inkMuted) }
+                    }
+                }
+                Text("Осталось сегодня: ${state.value.remaining}", style = WolfyTheme.typography.caption, color = colors.inkMuted)
             }
         }
     }

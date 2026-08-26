@@ -9,6 +9,7 @@ import com.wolfy.ffi.Token
 import com.wolfy.ffi.WordAnalysis
 import com.wolfy.widgets.GraphLink
 import com.wolfy.widgets.GraphWord
+import com.wolfy.data.AiPhrase
 
 /**
  * Состояние открытой карточки слова.
@@ -52,7 +53,16 @@ data class WordCardState(
      * оборот, в котором оно стоит, — и наоборот почти никогда.
      */
     val phraseSaved: Boolean = false,
+    val betaExplanation: BetaPhraseState = BetaPhraseState.Idle,
 )
+
+@Immutable
+sealed interface BetaPhraseState {
+    data object Idle : BetaPhraseState
+    data object Loading : BetaPhraseState
+    data class Ready(val value: AiPhrase) : BetaPhraseState
+    data class Failed(val message: String) : BetaPhraseState
+}
 
 /** Толкование приезжает независимо от перевода: локально либо с сервера. */
 @Immutable
