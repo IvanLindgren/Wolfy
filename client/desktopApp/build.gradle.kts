@@ -110,12 +110,19 @@ tasks.matching { it.name == "prepareAppResources" }.configureEach {
 // урезанной сборки, что приносит с собой IDE. Toolchain решает это раз и
 // навсегда: Gradle возьмёт подходящий JDK или скачает его.
 //
+// Обычно это JDK 17, но на Windows ARM64 дистрибутивов Temurin 17 нет вовсе,
+// а foojay их не скачает — там сборку ведёт JDK 21 (WOLFY_PACKAGING_JVM=21).
+//
 // Спрашиваем toolchain только когда действительно собирают установщик:
 // обращение к нему разрешает — и при необходимости качает — JDK прямо во время
 // конфигурации, и делать это ради `desktopRun` или тестов незачем.
 val packagingRequested = gradle.startParameter.taskNames.any { name ->
     name.contains("package", ignoreCase = true) || name.contains("Distributable")
 }
+val packagingJdkVersion = providers.gradleProperty("wolfyPackagingJdk")
+    .orElse(providers.environmentVariable("WOLFY_PACKAGING_JDK"))
+    .map { it.toInt() }
+    .orElse(17)
 val wolfyServerUrl = providers.gradleProperty("wolfyServerUrl")
     .orElse(providers.environmentVariable("WOLFY_SERVER_URL"))
     .orElse("http://localhost:8080")
@@ -195,7 +202,7 @@ compose.desktop {
 
         if (packagingRequested) {
             javaHome = javaToolchains.launcherFor {
-                languageVersion.set(JavaLanguageVersion.of(17))
+                languageVersion.set(JavaLanguageVersion.of(packagingJdkVersion.get()))
             }.get().metadata.installationPath.asFile.absolutePath
         }
 

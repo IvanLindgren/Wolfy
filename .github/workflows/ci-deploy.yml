@@ -235,8 +235,10 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          # На hosted Windows ARM64 сейчас доступен Temurin 21; приложение
-          # всё равно компилируется с jvmTarget 17 и работает на JRE 17+.
+          # На hosted Windows ARM64 нет ни Temurin 17, ни авто-установки через
+          # foojay; собираем под Temurin 21. Приложение компилируется с
+          # jvmTarget 17 и работает на JRE 21, а версию JDK упаковки указывает
+          # WOLFY_PACKAGING_JDK ниже.
           java-version: '21'
           cache: gradle
       - uses: actions/setup-go@v6
@@ -252,6 +254,7 @@ jobs:
         working-directory: client
         env:
           WOLFY_SERVER_URL: https://wolfy.citavuk.ru
+          WOLFY_PACKAGING_JDK: '21'
         run: |
           .\gradlew.bat --no-daemon :desktopApp:packageMsi
           if (-not (Get-ChildItem desktopApp\build\compose\binaries -Recurse -Filter '*.msi')) { throw 'ARM64 MSI не создан' }
