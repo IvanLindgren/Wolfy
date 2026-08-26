@@ -210,11 +210,12 @@ jobs:
           rustup default stable
       - name: Build MSI
         shell: pwsh
+        working-directory: client
         env:
           WOLFY_SERVER_URL: https://wolfy.citavuk.ru
         run: |
-          .\client\gradlew.bat --no-daemon :desktopApp:packageMsi
-          if (-not (Get-ChildItem client\desktopApp\build\compose\binaries -Recurse -Filter '*.msi')) { throw 'MSI не создан' }
+          .\gradlew.bat --no-daemon :desktopApp:packageMsi
+          if (-not (Get-ChildItem desktopApp\build\compose\binaries -Recurse -Filter '*.msi')) { throw 'MSI не создан' }
       - name: Upload Windows x64 installer
         uses: actions/upload-artifact@v4
         with:
@@ -234,7 +235,9 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          # На hosted Windows ARM64 сейчас доступен Temurin 21; приложение
+          # всё равно компилируется с jvmTarget 17 и работает на JRE 17+.
+          java-version: '21'
           cache: gradle
       - uses: actions/setup-go@v6
         with:
@@ -246,11 +249,12 @@ jobs:
           rustup default stable
       - name: Build ARM64 MSI
         shell: pwsh
+        working-directory: client
         env:
           WOLFY_SERVER_URL: https://wolfy.citavuk.ru
         run: |
-          .\client\gradlew.bat --no-daemon :desktopApp:packageMsi
-          if (-not (Get-ChildItem client\desktopApp\build\compose\binaries -Recurse -Filter '*.msi')) { throw 'ARM64 MSI не создан' }
+          .\gradlew.bat --no-daemon :desktopApp:packageMsi
+          if (-not (Get-ChildItem desktopApp\build\compose\binaries -Recurse -Filter '*.msi')) { throw 'ARM64 MSI не создан' }
       - name: Upload Windows ARM64 installer
         uses: actions/upload-artifact@v4
         with:
@@ -285,11 +289,12 @@ jobs:
         run: sudo apt-get update && sudo apt-get install --yes fakeroot
       - name: Build DEB
         shell: bash
+        working-directory: client
         env:
           WOLFY_SERVER_URL: https://wolfy.citavuk.ru
         run: |
-          bash ./client/gradlew --no-daemon :desktopApp:packageDeb
-          find client/desktopApp/build/compose/binaries -name '*.deb' -type f -print -quit | grep -q .
+          bash ./gradlew --no-daemon :desktopApp:packageDeb
+          find desktopApp/build/compose/binaries -name '*.deb' -type f -print -quit | grep -q .
       - name: Upload Linux package
         uses: actions/upload-artifact@v4
         with:
