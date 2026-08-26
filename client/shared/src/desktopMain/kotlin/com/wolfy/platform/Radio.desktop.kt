@@ -46,13 +46,17 @@ private class DesktopRadio : RadioPlayer {
     private var stream: Job? = null
 
     /**
-     * Линия, на которую сейчас идёт звук.
-     *
-     * Держится отдельно от корутины, потому что громкость меняют из другого
-     * потока: ждать, пока поток дойдёт до следующего кадра, читателю незачем.
+     * Все ресурсы одной попытки проигрывания. Они не лежат в глобальных
+     * полях: `finally` старой станции иначе мог закрыть линию новой.
      */
+    private class Playback(val station: RadioStation) {
+        @Volatile var connection: HttpURLConnection? = null
+        @Volatile var source: InputStream? = null
+        @Volatile var line: SourceDataLine? = null
+    }
+
     @Volatile
-    private var line: SourceDataLine? = null
+    private var active: Playback? = null
 
     override fun play(station: RadioStation) {
         if (_state.value.station?.id == station.id && _state.value.playing) {
@@ -61,6 +65,8 @@ private class DesktopRadio : RadioPlayer {
         }
 
         stop()
+        val playback = Playback(station)
+        active = playback
         _state.value = _state.value.copy(
             station = station,
             connecting = true,
@@ -70,32 +76,42 @@ private class DesktopRadio : RadioPlayer {
 
         stream = scope.launch {
             try {
-                open(station.url).use { source -> pump(source) }
+                open(playback, station.url).use { source -> pump(playback, source) }
             } catch (error: Throwable) {
                 // Отмена — это не сбой: читатель сам выключил радио.
                 if (error is kotlinx.coroutines.CancellationException) throw error
-                _state.value = _state.value.copy(
-                    playing = false,
-                    connecting = false,
-                    failure = "Станция не отвечает. Проверьте сеть или выберите другую.",
-                )
+                if (active === playback) {
+                    _state.value = _state.value.copy(
+                        playing = false,
+                        connecting = false,
+                        failure = "Станция не отвечает. Проверьте сеть или выберите другую.",
+                    )
+                }
             } finally {
-                closeLine()
+                close(playback)
+                if (active === playback) {
+                    active = null
+                    _state.value = _state.value.copy(playing = false, connecting = false)
+                }
             }
         }
     }
 
     override fun stop() {
+        val playback = active
+        active = null
+        // Закрытие input и HttpURLConnection размораживает read() сразу;
+        // одной cancel() для сетевого InputStream недостаточно.
+        close(playback)
         stream?.cancel()
         stream = null
-        closeLine()
         _state.value = _state.value.copy(playing = false, connecting = false)
     }
 
     override fun setVolume(volume: Float) {
         val clamped = volume.coerceIn(0f, 1f)
         _state.value = _state.value.copy(volume = clamped)
-        applyVolume(line, clamped)
+        applyVolume(active?.line, clamped)
     }
 
     override fun release() {
@@ -104,10 +120,11 @@ private class DesktopRadio : RadioPlayer {
     }
 
     /** Открывает поток. Пять перенаправлений — предел: дальше это петля. */
-    private fun open(url: String): InputStream {
+    private fun open(playback: Playback, url: String): InputStream {
         var address = URI(url).toURL()
         repeat(6) {
             val connection = address.openConnection() as HttpURLConnection
+            playback.connection = connection
             connection.instanceFollowRedirects = false
             connection.connectTimeout = 10_000
             connection.readTimeout = 20_000
@@ -120,45 +137,50 @@ private class DesktopRadio : RadioPlayer {
             if (code in 300..399) {
                 val next = connection.getHeaderField("Location")
                 connection.disconnect()
+                if (playback.connection === connection) playback.connection = null
                 if (next.isNullOrBlank()) error("станция перенаправила в никуда")
-                address = URI(next).toURL()
+                address = address.toURI().resolve(next).toURL()
                 return@repeat
             }
             if (code != HttpURLConnection.HTTP_OK) {
                 connection.disconnect()
                 error("станция ответила $code")
             }
-            return BufferedInputStream(connection.inputStream, 64 * 1024)
+            return BufferedInputStream(connection.inputStream, 64 * 1024).also { playback.source = it }
         }
         error("слишком много перенаправлений")
     }
 
     /** Разбирает кадры и отдаёт их звуковой линии, пока корутина жива. */
-    private suspend fun pump(source: InputStream) {
+    private suspend fun pump(playback: Playback, source: InputStream) {
         val bitstream = Bitstream(source)
         val decoder = Decoder()
+        var pcm = ByteArray(0)
 
         while (true) {
             currentCoroutineContextEnsureActive()
             val header = bitstream.readFrame() ?: break
             val samples = decoder.decodeFrame(header, bitstream) as SampleBuffer
 
-            val target = line ?: openLine(samples.sampleFrequency, samples.channelCount).also {
-                line = it
+            val target = playback.line ?: openLine(samples.sampleFrequency, samples.channelCount).also {
+                playback.line = it
                 applyVolume(it, _state.value.volume)
-                _state.value = _state.value.copy(playing = true, connecting = false)
+                if (active === playback) {
+                    _state.value = _state.value.copy(playing = true, connecting = false)
+                }
             }
 
             // Кадр приходит массивом `short`; линия ждёт байты в порядке
             // little-endian — тот же, что объявлен в формате линии.
             val buffer = samples.buffer
-            val bytes = ByteArray(samples.buffer.size * 2)
+            val byteCount = buffer.size * 2
+            if (pcm.size < byteCount) pcm = ByteArray(byteCount)
             for (at in 0 until samples.buffer.size) {
                 val value = buffer[at].toInt()
-                bytes[at * 2] = (value and 0xFF).toByte()
-                bytes[at * 2 + 1] = ((value shr 8) and 0xFF).toByte()
+                pcm[at * 2] = (value and 0xFF).toByte()
+                pcm[at * 2 + 1] = ((value shr 8) and 0xFF).toByte()
             }
-            target.write(bytes, 0, bytes.size)
+            target.write(pcm, 0, byteCount)
             bitstream.closeFrame()
         }
     }
@@ -176,12 +198,20 @@ private class DesktopRadio : RadioPlayer {
         return opened
     }
 
-    private fun closeLine() {
-        val current = line ?: return
-        line = null
-        runCatching { current.stop() }
-        runCatching { current.flush() }
-        runCatching { current.close() }
+    /** Закрывает только ресурсы своего [Playback], даже если уже играет другой. */
+    private fun close(playback: Playback?) {
+        playback ?: return
+        val source = playback.source
+        playback.source = null
+        runCatching { source?.close() }
+        val line = playback.line
+        playback.line = null
+        runCatching { line?.stop() }
+        runCatching { line?.flush() }
+        runCatching { line?.close() }
+        val connection = playback.connection
+        playback.connection = null
+        runCatching { connection?.disconnect() }
     }
 
     /**

@@ -11,6 +11,7 @@ import java.awt.geom.AffineTransform
 import java.awt.image.AffineTransformOp
 import java.awt.image.BufferedImage
 import java.io.ByteArrayOutputStream
+import java.io.ByteArrayInputStream
 import java.io.File
 import javax.imageio.ImageIO
 import kotlinx.coroutines.Dispatchers
@@ -66,7 +67,19 @@ actual fun rememberCoverPicker(onPicked: (PickedCover?) -> Unit): () -> Unit {
  * показа плиткой, а не для архива оригиналов.
  */
 actual fun prepareCover(bytes: ByteArray): PickedCover? {
-    var source = runCatching { ImageIO.read(bytes.inputStream()) }.getOrNull() ?: return null
+    var source = runCatching { ImageIO.read(bytes.inputStream()) }.getOrNull()
+    if (source == null) {
+        // Стандартный ImageIO в JRE не содержит WebP reader, хотя Skia,
+        // которым Wolfy рисует изображения, WebP понимает. Не отказываемся
+        // от нормальной WebP-обложки только из-за этого расхождения. Большую
+        // картинку здесь не храним: без ImageIO безопасно уменьшить её нельзя.
+        val pixels = encodedImagePixels(bytes) ?: return null
+        if (pixels <= 0L || pixels > MAX_DECODE_IMAGE_PIXELS) return null
+        val webp = webpDimensions(bytes) ?: return null
+        if (maxOf(webp.first, webp.second) > COVER_MAX_SIDE) return null
+        if (runCatching { Image.makeFromEncoded(bytes) }.getOrNull() == null) return null
+        return PickedCover(bytes = bytes, mime = "image/webp", extension = "webp")
+    }
     source = applyJpegOrientation(source, bytes)
 
     val side = maxOf(source.width, source.height)
@@ -105,8 +118,67 @@ actual fun prepareCover(bytes: ByteArray): PickedCover? {
     )
 }
 
-actual fun decodeImage(bytes: ByteArray): ImageBitmap? =
-    runCatching { Image.makeFromEncoded(bytes).toComposeImageBitmap() }.getOrNull()
+actual fun decodeImage(bytes: ByteArray): ImageBitmap? {
+    // ImageIO читает размеры через metadata, не декодируя полный растр.
+    // В JRE нет WebP reader, поэтому WebP-заголовок читаем сами. Проверка
+    // стоит перед Skia, чтобы ZIP/JPEG-bomb не успел выделить память.
+    val pixels = encodedImagePixels(bytes) ?: return null
+    if (pixels <= 0L || pixels > MAX_DECODE_IMAGE_PIXELS) return null
+    return runCatching { Image.makeFromEncoded(bytes).toComposeImageBitmap() }.getOrNull()
+}
+
+private fun encodedImagePixels(bytes: ByteArray): Long? {
+    val imageIoPixels = runCatching {
+        ImageIO.createImageInputStream(ByteArrayInputStream(bytes))?.use { input ->
+            val readers = ImageIO.getImageReaders(input)
+            if (!readers.hasNext()) return@use null
+            val reader = readers.next()
+            try {
+                reader.input = input
+                reader.getWidth(0).toLong() * reader.getHeight(0).toLong()
+            } finally {
+                reader.dispose()
+            }
+        }
+    }.getOrNull()
+    return imageIoPixels ?: webpDimensions(bytes)?.let { (width, height) ->
+        width.toLong() * height.toLong()
+    }
+}
+
+/** Возвращает размеры RIFF/WebP, не разжимая ни одного пикселя. */
+private fun webpDimensions(bytes: ByteArray): Pair<Int, Int>? {
+    fun u8(at: Int): Int = bytes[at].toInt() and 0xFF
+    fun tag(at: Int): String = if (at + 4 <= bytes.size) {
+        "${bytes[at].toInt().toChar()}${bytes[at + 1].toInt().toChar()}" +
+            "${bytes[at + 2].toInt().toChar()}${bytes[at + 3].toInt().toChar()}"
+    } else {
+        ""
+    }
+    fun u16(at: Int): Int = u8(at) or (u8(at + 1) shl 8)
+    fun u24(at: Int): Int = u8(at) or (u8(at + 1) shl 8) or (u8(at + 2) shl 16)
+
+    if (bytes.size < 30 || tag(0) != "RIFF" || tag(8) != "WEBP") return null
+    return when (tag(12)) {
+        "VP8X" -> {
+            val width = 1 + u24(24)
+            val height = 1 + u24(27)
+            width to height
+        }
+        "VP8 " -> {
+            // Key frame: 3 bytes frame tag, 3 bytes start code, затем W/H.
+            if (u8(23) != 0x9D || u8(24) != 0x01 || u8(25) != 0x2A) return null
+            (u16(26) and 0x3FFF) to (u16(28) and 0x3FFF)
+        }
+        "VP8L" -> {
+            if (u8(20) != 0x2F) return null
+            val width = 1 + u8(21) + ((u8(22) and 0x3F) shl 8)
+            val height = 1 + ((u8(22) shr 6) or (u8(23) shl 2) or ((u8(24) and 0x0F) shl 10))
+            width to height
+        }
+        else -> null
+    }
+}
 
 // --- Поворот JPEG по EXIF -----------------------------------------------------
 

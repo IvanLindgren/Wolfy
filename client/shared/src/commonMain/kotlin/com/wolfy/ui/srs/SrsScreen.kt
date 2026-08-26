@@ -3,7 +3,6 @@ package com.wolfy.ui.srs
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -39,6 +38,7 @@ import com.wolfy.srs.DeckStatus
 import com.wolfy.srs.Intensity
 import com.wolfy.srs.SrsUiState
 import com.wolfy.theme.WolfyTheme
+import com.wolfy.theme.settling
 import com.wolfy.widgets.Flame
 import com.wolfy.widgets.Rule
 import com.wolfy.widgets.SectionLabel
@@ -168,9 +168,9 @@ private fun StreakBanner(days: Int, best: Int) {
             )
             Text(
                 text = if (best > 0) {
-                    "Лучшая серия — " + plural(best, "день", "дня", "дней")
+                    "Лучшая серия: " + plural(best, "день", "дня", "дней")
                 } else {
-                    "Один ответ в день — и серия идёт"
+                    "Отвечайте каждый день, чтобы продолжить серию"
                 },
                 style = WolfyTheme.typography.caption,
                 // От цвета плашки, а не от `rule`: линейка в тёмных темах
@@ -209,20 +209,27 @@ private fun DeckCard(
     // Карту не сжимают, а вытягивают: при нажатии она поднимается над стопкой
     // и чуть заваливается — так её берут со стола. Пружина мягкая, чтобы
     // движение читалось как вес карты, а не как рывок.
-    val motion = spring<Float>(dampingRatio = Spring.DampingRatioLowBouncy, stiffness = Spring.StiffnessMediumLow)
+    val motion = WolfyTheme.motion
+    val take = motion.settling<Float>(
+        damping = Spring.DampingRatioLowBouncy,
+        stiffness = Spring.StiffnessMediumLow,
+    )
     val lift by animateDpAsState(
         targetValue = if (pressed && !empty) (-6).dp else 0.dp,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy, stiffness = Spring.StiffnessMediumLow),
+        animationSpec = motion.settling(
+            damping = Spring.DampingRatioLowBouncy,
+            stiffness = Spring.StiffnessMediumLow,
+        ),
         label = "lift",
     )
     val tilt by animateFloatAsState(
         targetValue = if (pressed && !empty) -2.5f else 0f,
-        animationSpec = motion,
+        animationSpec = take,
         label = "tilt",
     )
     val grow by animateFloatAsState(
         targetValue = if (pressed && !empty) 1.03f else 1f,
-        animationSpec = motion,
+        animationSpec = take,
         label = "grow",
     )
 
@@ -376,10 +383,10 @@ private fun WolfyLine(due: Int, streak: Int) {
 
     val line = when {
         due == 0 && streak > 0 -> "«На сегодня всё. Серия цела.»"
-        due == 0 -> "«Пусто. Почитайте — слова наберутся сами.»"
+        due == 0 -> "«Пусто. Почитайте, и слова наберутся сами.»"
         due > 30 -> "«Накопилось. Начнём с двадцати.»"
-        streak > 0 -> "«Кофе готов. Слова — тоже.»"
-        else -> "«Пять минут — и день не пропал.»"
+        streak > 0 -> "«Кофе готов. Слова тоже.»"
+        else -> "«Пять минут помогут не потерять день.»"
     }
     val sticker = when {
         due == 0 && streak > 0 -> Sticker.Celebrate

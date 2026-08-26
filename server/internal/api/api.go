@@ -751,9 +751,8 @@ func (s *Server) postSync(w http.ResponseWriter, r *http.Request) {
 }
 
 type ocrRequest struct {
-	// Image — снимок в base64. Не multipart намеренно: всё остальное в
-	// сервисе говорит на JSON, и заводить второй формат ради одного маршрута
-	// значит держать в голове два способа разбора запроса.
+	// Устаревшая JSON-форма. Оставлена только для приложений до 1.0.10:
+	// новые клиенты отправляют бинарный multipart и не создают Base64-копию.
 	Image string `json:"image"`
 	Mime  string `json:"mime"`
 }
@@ -773,24 +772,61 @@ func (s *Server) postOCR(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	var req ocrRequest
-	// Предел с запасом на base64: он раздувает данные на треть. Отсекаем
-	// заведомо большой JSON до декодирования base64.
-	limit := int64(ocr.MaxImageBytes)*4/3 + 4096
-	// Дополнительный жёсткий лимит на тело для защиты от бага клиента.
-	if r.ContentLength > limit+16<<10 {
+	// У multipart есть только небольшой заголовочный оверхед. Старый JSON
+	// несёт Base64 и потому ему требуется более высокий лимит; поддержку
+	// держим лишь на период обновления уже установленных приложений.
+	const multipartOverhead = 64 << 10
+	multipartLimit := int64(ocr.MaxImageBytes) + multipartOverhead
+	jsonLimit := int64(ocr.MaxImageBytes)*4/3 + multipartOverhead
+	isMultipart := strings.HasPrefix(strings.ToLower(r.Header.Get("Content-Type")), "multipart/form-data")
+	limit := jsonLimit
+	if isMultipart {
+		limit = multipartLimit
+	}
+	if r.ContentLength > limit {
 		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "снимок слишком большой"})
 		return
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit+16<<10)).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "снимок не разобран"})
-		return
-	}
 
-	image, err := base64.StdEncoding.DecodeString(strings.TrimSpace(req.Image))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "снимок не разобран"})
-		return
+	var image []byte
+	var mime string
+	if isMultipart {
+		// MaxBytesReader ограничивает и тело с неизвестным Content-Length,
+		// например chunked upload. ReadAll ниже дополнительно ставит предел
+		// именно на файл, а не на всё тело формы.
+		r.Body = http.MaxBytesReader(w, r.Body, multipartLimit)
+		if err := r.ParseMultipartForm(multipartLimit); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "снимок не разобран"})
+			return
+		}
+		file, header, err := r.FormFile("image")
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "снимок не разобран"})
+			return
+		}
+		defer file.Close()
+		image, err = io.ReadAll(io.LimitReader(file, int64(ocr.MaxImageBytes)+1))
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "снимок не разобран"})
+			return
+		}
+		mime = strings.TrimSpace(r.FormValue("mime"))
+		if mime == "" {
+			mime = header.Header.Get("Content-Type")
+		}
+	} else {
+		var req ocrRequest
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, jsonLimit)).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "снимок не разобран"})
+			return
+		}
+		var err error
+		image, err = base64.StdEncoding.DecodeString(strings.TrimSpace(req.Image))
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "снимок не разобран"})
+			return
+		}
+		mime = req.Mime
 	}
 	// Дополнительная проверка декодированного размера до вызова сервиса,
 	// чтобы не тратить слот глобального семафора на заведомо большой снимок.
@@ -799,7 +835,7 @@ func (s *Server) postOCR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := s.ocr.Recognize(r.Context(), image, req.Mime)
+	result, err := s.ocr.Recognize(r.Context(), image, mime)
 	switch {
 	case errors.Is(err, ocr.ErrTooLarge):
 		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": err.Error()})

@@ -3,6 +3,7 @@ package com.wolfy.ffi
 import com.sun.jna.Library
 import com.sun.jna.Native
 import com.sun.jna.Pointer
+import com.sun.jna.ptr.LongByReference
 import kotlinx.serialization.json.Json
 
 /**
@@ -43,6 +44,8 @@ internal interface CoreLibrary : Library {
     fun wolfy_book_open(path: ByteArray): Long
     fun wolfy_book_metadata(handle: Long): Pointer?
     fun wolfy_book_chapter(handle: Long, index: Long): Pointer?
+    fun wolfy_book_resource(handle: Long, path: ByteArray, outLen: LongByReference): Pointer?
+    fun wolfy_bytes_free(bytes: Pointer?, len: Long)
     fun wolfy_book_prepared_chapter(handle: Long, index: Long): Pointer?
     fun wolfy_text_anchors(text: ByteArray): Pointer?
     fun wolfy_book_chapter_anchors(handle: Long, index: Long): Pointer?
@@ -134,6 +137,28 @@ internal class JnaWolfyCore(private val library: CoreLibrary) : WolfyCore {
         val raw = library.wolfy_book_chapter(handle, index.toLong())
             .takeString("глава $index")
         return json.decodeFromString(raw)
+    }
+
+    override fun bookResource(handle: Long, path: String): ByteArray? {
+        if (path.isBlank()) return null
+        val length = LongByReference(0)
+        val pointer = try {
+            library.wolfy_book_resource(handle, path.toUtf8(), length)
+        } catch (_: UnsatisfiedLinkError) {
+            // Старое ядро рядом со свежим клиентом: картинка остаётся
+            // подписью, а чтение книги не ломается.
+            return null
+        } ?: return null
+        val size = length.value
+        if (size < 0 || size > Int.MAX_VALUE) {
+            library.wolfy_bytes_free(pointer, size.coerceAtLeast(0))
+            return null
+        }
+        return try {
+            pointer.getByteArray(0, size.toInt())
+        } finally {
+            library.wolfy_bytes_free(pointer, size)
+        }
     }
 
     override fun preparedChapter(handle: Long, index: Int): PreparedChapter {

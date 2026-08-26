@@ -63,8 +63,16 @@ class SyncService(
      * Возвращает `true`, если обмен состоялся. Одновременный второй вызов
      * ничего не делает и отвечает `false` — не ошибка, просто уже идёт.
      */
-    suspend fun sync(): Boolean {
-        if (!gate.tryLock()) return false
+    suspend fun sync(waitForRunning: Boolean = true): Boolean {
+        // Фоновый опрос не выстраивается в очередь за уже идущим обменом:
+        // через минуту он проверит снова. Нажатая человеком кнопка, напротив,
+        // честно ждёт тот же обмен и показывает его итог, а не отвечает
+        // ложным «ничего не сделано».
+        if (waitForRunning) {
+            gate.lock()
+        } else if (!gate.tryLock()) {
+            return false
+        }
         try {
             _status.value = _status.value.copy(running = true, error = null)
 

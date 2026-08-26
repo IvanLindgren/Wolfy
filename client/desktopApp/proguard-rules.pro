@@ -2,6 +2,10 @@
 # вывести эти связи статически, поэтому весь мост должен остаться неизменным.
 -keep class com.sun.jna.** { *; }
 -keep interface com.wolfy.ffi.CoreLibrary { *; }
+# Платформенные JNA-мосты (например, удержание экрана) тоже вызываются по
+# имени метода. Правило общее, чтобы следующая маленькая системная функция не
+# сломалась только после обфускации release-пакета.
+-keep interface * implements com.sun.jna.Library { *; }
 -keepclasseswithmembers,includedescriptorclasses class * {
     native <methods>;
 }

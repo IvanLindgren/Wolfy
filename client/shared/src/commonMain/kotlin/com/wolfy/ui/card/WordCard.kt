@@ -4,9 +4,7 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -56,8 +54,17 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.wolfy.ffi.Finding
+import com.wolfy.platform.rememberClipboard
+import com.wolfy.resources.Res
+import com.wolfy.resources.copy_quote
+import com.wolfy.resources.quote_clipboard_label
+import com.wolfy.resources.quote_copied
+import com.wolfy.resources.quote_copy_failed
 import com.wolfy.theme.Curves
 import com.wolfy.theme.WolfyTheme
+import com.wolfy.theme.paced
+import com.wolfy.theme.settling
+import com.wolfy.ui.nav.FLIGHT_CARDS
 import com.wolfy.widgets.Appear
 import com.wolfy.widgets.CefrBadge
 import com.wolfy.widgets.DependencyArcs
@@ -69,9 +76,10 @@ import com.wolfy.widgets.SectionLabel
 import com.wolfy.widgets.SentenceGraph
 import com.wolfy.widgets.SentenceTree
 import com.wolfy.widgets.WolfyCompanion
-import com.wolfy.ui.nav.FLIGHT_CARDS
 import com.wolfy.widgets.pressable
 import com.wolfy.widgets.rememberLaunchPad
+import kotlinx.coroutines.delay
+import org.jetbrains.compose.resources.stringResource
 
 /**
  * Карточка слова, всплывающая снизу.
@@ -106,10 +114,15 @@ fun WordCardSheet(
         // 520 точек на телефоне закрыли бы почти всё.
         val maxCardHeight = maxHeight * 0.90f
         // Затемнение фона: страница остаётся видна, но уходит на второй план.
+        //
+        // Темп — из темы. Значения по умолчанию у `fadeIn` и у пружины ниже
+        // своих собственных, и настройка «уменьшить движение» до них не
+        // доходила: карточка выезжала снизу ровно так же, как и без неё.
+        val motion = WolfyTheme.motion
         AnimatedVisibility(
             visible = state != null,
-            enter = fadeIn(),
-            exit = fadeOut(),
+            enter = fadeIn(motion.paced(motion.quick)),
+            exit = fadeOut(motion.paced(motion.quick)),
         ) {
             Box(
                 Modifier
@@ -125,13 +138,13 @@ fun WordCardSheet(
             // Пружина без отскока: карточка должна ощущаться как лист бумаги,
             // который положили на страницу, а не как выпрыгнувший элемент.
             enter = slideInVertically(
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioNoBouncy,
-                    stiffness = Spring.StiffnessMediumLow,
-                ),
+                animationSpec = motion.settling(),
                 initialOffsetY = { it },
             ),
-            exit = slideOutVertically(targetOffsetY = { it }),
+            exit = slideOutVertically(
+                animationSpec = motion.paced(motion.quick),
+                targetOffsetY = { it },
+            ),
         ) {
             if (state != null) {
                 CardBody(
@@ -738,12 +751,12 @@ private fun SentenceTranslation(state: WordCardState) {
             color = WolfyTheme.colors.ink,
         )
         state.translation is TranslationState.Loading -> Text(
-            "Перевод фиразы загружается…",
+            "Перевод фразы загружается…",
             style = WolfyTheme.typography.caption,
             color = WolfyTheme.colors.inkMuted,
         )
         state.translation is TranslationState.Failed -> Text(
-            (state.translation as TranslationState.Failed).message,
+            state.translation.message,
             style = WolfyTheme.typography.caption,
             color = WolfyTheme.colors.inkMuted,
         )
@@ -1037,7 +1050,7 @@ private fun WolfyPhraseTip(state: WordCardState) {
     val tip = if (state.grammar.isEmpty()) {
         "Вульфи: здесь важнее порядок и смысл слов, чем отдельное грамматическое правило."
     } else {
-        "Вульфи: цвет показывает часть речи, а скобка — слова, которые работают вместе."
+        "Вульфи: цвет показывает часть речи, а скобка соединяет слова, которые работают вместе."
     }
     WolfyTip(tip)
 }
@@ -1293,14 +1306,61 @@ private fun PhraseSaveButton(state: WordCardState, onSave: () -> Unit) {
         }
         if (waiting) {
             Text(
-                text = "Фраза сохраняется вместе с русским переводом — он вот-вот приедет.",
+                text = "Фраза сохранится вместе с русским переводом. Он скоро появится.",
                 style = WolfyTheme.typography.caption,
                 color = colors.inkMuted,
                 textAlign = TextAlign.Center,
             )
         }
+        CopyQuote(sentence = state.context, translation = ready)
     }
 }
+
+/**
+ * Забрать фразу с собой.
+ *
+ * Подписью, а не кнопкой: сохранение фразы в колоду — то, ради чего сюда
+ * пришли, и второй такой же кнопкой рядом выбор превратился бы в задачу.
+ * Копирование стоит ниже и говорит вполголоса.
+ *
+ * После нажатия подпись сама рассказывает, что случилось, и через пару секунд
+ * возвращается. Своего окошка с сообщением здесь нет: на Android система с 13-й
+ * версии показывает такое сама, и два уведомления об одном действии читаются
+ * как сбой.
+ */
+@Composable
+private fun CopyQuote(sentence: String, translation: String) {
+    val quote = quoteOf(sentence, translation)
+    if (quote.isEmpty()) return
+
+    val clipboard = rememberClipboard()
+    val clipboardLabel = stringResource(Res.string.quote_clipboard_label)
+    var feedback by remember(quote) { mutableStateOf(CopyFeedback.Idle) }
+    LaunchedEffect(feedback) {
+        if (feedback == CopyFeedback.Idle) return@LaunchedEffect
+        delay(SAID_ENOUGH)
+        feedback = CopyFeedback.Idle
+    }
+
+    Text(
+        text = when (feedback) {
+            CopyFeedback.Idle -> stringResource(Res.string.copy_quote)
+            CopyFeedback.Copied -> stringResource(Res.string.quote_copied)
+            CopyFeedback.Failed -> stringResource(Res.string.quote_copy_failed)
+        },
+        style = WolfyTheme.typography.caption,
+        color = if (feedback == CopyFeedback.Idle) WolfyTheme.colors.accent else WolfyTheme.colors.inkMuted,
+        textAlign = TextAlign.Center,
+        modifier = Modifier.pressable {
+            feedback = if (clipboard.put(quote, clipboardLabel)) CopyFeedback.Copied else CopyFeedback.Failed
+        },
+    )
+}
+
+private enum class CopyFeedback { Idle, Copied, Failed }
+
+/** Сколько подпись держит ответ, прежде чем снова стать предложением нажать. */
+private const val SAID_ENOUGH = 2_000L
 
 // --- Помощники ---------------------------------------------------------------
 

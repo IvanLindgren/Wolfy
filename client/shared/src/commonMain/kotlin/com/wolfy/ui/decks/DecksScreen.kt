@@ -237,7 +237,7 @@ private fun EmptyDecks() {
             color = WolfyTheme.colors.ink,
         )
         Text(
-            text = "Нажмите по слову в книге и добавьте его в колоду — оно появится здесь.",
+            text = "Нажмите на слово в книге и добавьте его в колоду. Оно появится здесь.",
             style = WolfyTheme.typography.caption,
             color = WolfyTheme.colors.inkMuted,
         )

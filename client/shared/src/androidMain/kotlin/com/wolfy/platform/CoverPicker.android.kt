@@ -184,5 +184,13 @@ private fun applyExif(source: Bitmap, bytes: ByteArray): Bitmap {
     return rotated
 }
 
-actual fun decodeImage(bytes: ByteArray): ImageBitmap? =
-    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+actual fun decodeImage(bytes: ByteArray): ImageBitmap? {
+    // Bounds читаются без выделения всего растра. Иначе маленький архивный
+    // JPEG с десятками миллионов пикселей мог бы уронить читалку до того, как
+    // успеет сработать LRU-кэш.
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+    val pixels = bounds.outWidth.toLong() * bounds.outHeight.toLong()
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0 || pixels > MAX_DECODE_IMAGE_PIXELS) return null
+    return BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+}

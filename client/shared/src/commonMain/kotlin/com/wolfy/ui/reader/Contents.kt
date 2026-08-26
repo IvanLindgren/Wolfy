@@ -1,8 +1,6 @@
 package com.wolfy.ui.reader
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -34,6 +32,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.wolfy.theme.WolfyTheme
+import com.wolfy.theme.paced
+import com.wolfy.theme.settling
 import com.wolfy.widgets.Rule
 import com.wolfy.widgets.SectionLabel
 import com.wolfy.widgets.pressable
@@ -63,7 +63,15 @@ fun ContentsSheet(
     BoxWithConstraints(modifier.fillMaxSize()) {
         val maxSheetHeight = maxHeight * 0.7f
 
-        AnimatedVisibility(visible = visible, enter = fadeIn(), exit = fadeOut()) {
+        // Темп листа берётся из темы, а не из пружины по умолчанию: пружина
+        // не знает про «уменьшить движение» и выезжает всегда, а обещали
+        // читателю обратное.
+        val motion = WolfyTheme.motion
+        AnimatedVisibility(
+            visible = visible,
+            enter = fadeIn(motion.paced(motion.quick)),
+            exit = fadeOut(motion.paced(motion.quick)),
+        ) {
             Box(
                 Modifier
                     .fillMaxSize()
@@ -76,13 +84,13 @@ fun ContentsSheet(
             visible = visible,
             modifier = Modifier.align(Alignment.BottomCenter),
             enter = slideInVertically(
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioNoBouncy,
-                    stiffness = Spring.StiffnessMediumLow,
-                ),
+                animationSpec = motion.settling(),
                 initialOffsetY = { it },
             ),
-            exit = slideOutVertically(targetOffsetY = { it }),
+            exit = slideOutVertically(
+                animationSpec = motion.paced(motion.quick),
+                targetOffsetY = { it },
+            ),
         ) {
             val list = rememberLazyListState()
             LaunchedEffect(visible, current) {

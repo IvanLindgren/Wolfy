@@ -12,7 +12,11 @@ import io.ktor.client.request.post
 import io.ktor.client.request.put
 import io.ktor.client.request.parameter
 import io.ktor.client.request.setBody
+import io.ktor.client.request.forms.MultiPartFormDataContent
+import io.ktor.client.request.forms.formData
 import io.ktor.http.ContentType
+import io.ktor.http.Headers
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.http.decodeURLQueryComponent
@@ -44,6 +48,11 @@ class WolfyApi(
     },
     private val client: HttpClient = defaultClient(),
 ) {
+    /** Освобождает сокеты и потоки HTTP-клиента при закрытии приложения. */
+    fun close() {
+        client.close()
+    }
+
     suspend fun signIn(email: String, password: String): AuthOutcome = try {
         val response = client.post("$baseUrl/v1/auth/login") {
             contentType(ContentType.Application.Json)
@@ -258,6 +267,36 @@ class WolfyApi(
         }
     }
 
+    /** Свежий номер газеты. Газета открыта и не требует входа. */
+    suspend fun newspaper(perSection: Int = 6): NewspaperResult = try {
+        val response = client.get("$baseUrl/v1/newspaper") {
+            parameter("limit", perSection)
+        }
+        if (response.status == HttpStatusCode.OK) {
+            NewspaperResult.Ready(response.body())
+        } else {
+            NewspaperResult.Failed("Газета пока не загрузилась. Попробуйте ещё раз.")
+        }
+    } catch (_: Exception) {
+        NewspaperResult.Failed("Нет связи с газетой.")
+    }
+
+    /** Полный текст заметки, подготовленный сервером для спокойного чтения. */
+    suspend fun newspaperArticle(link: String): NewspaperArticleResult = try {
+        val response = client.post("$baseUrl/v1/newspaper/article") {
+            contentType(ContentType.Application.Json)
+            setBody(NewspaperArticleRequest(link))
+            timeout { requestTimeoutMillis = 60_000 }
+        }
+        if (response.status == HttpStatusCode.OK) {
+            NewspaperArticleResult.Ready(response.body())
+        } else {
+            NewspaperArticleResult.Failed("Не удалось открыть заметку.")
+        }
+    } catch (_: Exception) {
+        NewspaperArticleResult.Failed("Нет связи с газетой.")
+    }
+
     suspend fun likeDiscoveryItem(itemId: String): ActionResult = authorizedPost(
         "/v1/discovery/items/$itemId/like",
     )
@@ -415,7 +454,20 @@ class WolfyApi(
                 HttpStatusCode.Unauthorized -> SyncResult.Failed("нужно войти заново")
                 HttpStatusCode.PayloadTooLarge ->
                     SyncResult.Failed("библиотека слишком велика для одной отправки")
-                else -> SyncResult.Failed("сервер не принял изменения")
+                else -> {
+                    val reason = runCatching { response.body<ApiErrorBody>() }
+                        .getOrNull()
+                        ?.let { it.error.ifBlank { it.message } }
+                        .orEmpty()
+                    SyncResult.Failed(
+                        when {
+                            reason.contains("номер", ignoreCase = true) ->
+                                "Нашли старые данные. Обновите библиотеку и повторите синхронизацию."
+                            reason.isNotBlank() -> reason
+                            else -> "Не удалось отправить изменения. Попробуйте ещё раз."
+                        },
+                    )
+                }
             }
         } catch (e: Exception) {
             SyncResult.Failed("нет связи с сервером")
@@ -434,8 +486,28 @@ class WolfyApi(
         return try {
             val response = client.post("$baseUrl/v1/ocr") {
                 header("Authorization", "Bearer $token")
-                contentType(ContentType.Application.Json)
-                setBody(OcrRequest(image = encodeBase64(photo.bytes), mime = photo.mime))
+                // Не Base64 в JSON: он раздувает снимок примерно на треть и
+                // одновременно держит в памяти ByteArray и большую строку.
+                // Multipart передаёт исходные байты напрямую. Поле mime
+                // оставлено явным: старые прокси иногда теряют тип файла.
+                setBody(
+                    MultiPartFormDataContent(
+                        formData {
+                            append(
+                                key = "image",
+                                value = photo.bytes,
+                                headers = Headers.build {
+                                    append(HttpHeaders.ContentType, photo.mime)
+                                    append(
+                                        HttpHeaders.ContentDisposition,
+                                        "form-data; name=\"image\"; filename=\"page.${photo.mime.substringAfterLast('/', "jpg")}\"",
+                                    )
+                                },
+                            )
+                            append("mime", photo.mime)
+                        },
+                    ),
+                )
                 timeout { requestTimeoutMillis = 120_000 }
             }
             when (response.status) {
@@ -734,9 +806,6 @@ sealed interface OcrResult {
 }
 
 @Serializable
-private data class OcrRequest(val image: String, val mime: String)
-
-@Serializable
 private data class OcrResponse(val text: String = "", val model: String = "")
 
 /** Результат обмена с сервером. */
@@ -796,6 +865,60 @@ private data class RemoteBookRequest(val url: String)
 
 @Serializable
 private data class ApiErrorBody(val error: String = "", val message: String = "")
+
+@Serializable
+data class NewsTopic(val code: String = "", val title: String = "")
+
+@Serializable
+data class NewsArticle(
+    val id: String = "",
+    val topic: String = "",
+    val title: String = "",
+    val summary: String = "",
+    val source: String = "",
+    val author: String = "",
+    val link: String = "",
+    val published: Long = 0,
+    val imageUrl: String = "",
+    val words: Int = 0,
+)
+
+@Serializable
+data class NewsSection(
+    val topic: String = "",
+    val title: String = "",
+    val articles: List<NewsArticle> = emptyList(),
+)
+
+@Serializable
+data class NewsIssue(
+    val date: String = "",
+    val sections: List<NewsSection> = emptyList(),
+    val topics: List<NewsTopic> = emptyList(),
+)
+
+@Serializable
+data class NewsReading(
+    val title: String = "",
+    val author: String = "",
+    val source: String = "",
+    val link: String = "",
+    val paragraphs: List<String> = emptyList(),
+    val words: Int = 0,
+)
+
+@Serializable
+private data class NewspaperArticleRequest(val url: String)
+
+sealed interface NewspaperResult {
+    data class Ready(val issue: NewsIssue) : NewspaperResult
+    data class Failed(val message: String) : NewspaperResult
+}
+
+sealed interface NewspaperArticleResult {
+    data class Ready(val reading: NewsReading) : NewspaperArticleResult
+    data class Failed(val message: String) : NewspaperArticleResult
+}
 
 /** Результат скачивания книги с публичного адреса. */
 sealed interface RemoteBookResult {

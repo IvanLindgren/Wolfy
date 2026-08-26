@@ -391,7 +391,8 @@ pub struct ChapterDto {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BlockDto {
-    /// `heading` | `paragraph` | `quote` | `listItem` | `image` | `divider`.
+    /// `heading` | `paragraph` | `quote` | `listItem` | `image` | `divider`
+    /// | `math` | `table` | `pre`.
     pub kind: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
@@ -403,6 +404,12 @@ pub struct BlockDto {
     pub path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alt: Option<String>,
+    /// Исходник формулы (MathML/TeX) для блока `math`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// Строки таблицы для блока `table`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rows: Option<Vec<Vec<String>>>,
 }
 
 impl From<&Chapter> for ChapterDto {
@@ -422,6 +429,8 @@ impl From<&Block> for BlockDto {
             level: None,
             path: None,
             alt: None,
+            source: None,
+            rows: None,
         };
         match block {
             Block::Heading { level, text } => {
@@ -445,6 +454,21 @@ impl From<&Block> for BlockDto {
                 dto.kind = "image";
                 dto.path = Some(path.clone());
                 dto.alt = alt.clone();
+            }
+            Block::Math { source, fallback } => {
+                dto.kind = "math";
+                dto.source = Some(source.clone());
+                dto.text = Some(fallback.clone());
+            }
+            Block::Table { rows } => {
+                dto.kind = "table";
+                dto.rows = Some(rows.clone());
+            }
+            // Переносы строк в предварительно отформатированном тексте
+            // значимы — клиент обязан показывать их как есть.
+            Block::Preformatted(text) => {
+                dto.kind = "pre";
+                dto.text = Some(text.clone());
             }
             Block::Divider => {}
         }

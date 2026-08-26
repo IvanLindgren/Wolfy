@@ -3,7 +3,9 @@ package com.wolfy.data.library
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.channels.FileChannel
+import java.nio.file.CopyOption
 import java.nio.file.Files
+import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.security.MessageDigest
@@ -15,7 +17,13 @@ import java.util.zip.GZIPInputStream
  * Обе платформы работают на JVM, и различие между ними ровно одно: где лежит
  * каталог приложения. Оно и вынесено в аргумент, а всё остальное — общий код.
  */
-internal class FileLibraryStore(private val directory: File) : LibraryStore {
+internal class FileLibraryStore(
+    private val directory: File,
+    private val moveFile: (Path, Path, Array<out CopyOption>) -> Path = { source, target, options ->
+        Files.move(source, target, *options)
+    },
+    private val renameFile: (File, File) -> Boolean = { source, target -> source.renameTo(target) },
+) : LibraryStore {
 
     private val books = File(directory, "books")
 
@@ -50,15 +58,12 @@ internal class FileLibraryStore(private val directory: File) : LibraryStore {
 
             // Попытка атомарной замены — идеальный случай.
             try {
-                Files.move(
+                moveFile(
                     temporary.toPath(),
                     index.toPath(),
-                    StandardCopyOption.ATOMIC_MOVE,
-                    StandardCopyOption.REPLACE_EXISTING,
+                    arrayOf(StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING),
                 )
-                try {
-                    FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { it.force(true) }
-                } catch (_: Exception) {}
+                forceDirectory()
                 return
             } catch (_: Exception) {
                 // Не все ФС умеют ATOMIC_MOVE (например, разные точки монтирования).
@@ -66,14 +71,12 @@ internal class FileLibraryStore(private val directory: File) : LibraryStore {
 
             // Неатомарная, но всё ещё replace — безопаснее delete+rename.
             try {
-                Files.move(
+                moveFile(
                     temporary.toPath(),
                     index.toPath(),
-                    StandardCopyOption.REPLACE_EXISTING,
+                    arrayOf(StandardCopyOption.REPLACE_EXISTING),
                 )
-                try {
-                    FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { it.force(true) }
-                } catch (_: Exception) {}
+                forceDirectory()
                 return
             } catch (_: Exception) {
                 // Падаем в ручной fallback ниже.
@@ -81,22 +84,17 @@ internal class FileLibraryStore(private val directory: File) : LibraryStore {
 
             // Ручной fallback для Windows, где renameTo не перезаписывает.
             index.delete()
-            if (!temporary.renameTo(index)) {
+            if (!renameFile(temporary, index)) {
                 // Последний шанс — прямая запись с fsync (не атомарно, но лучше потери).
                 FileOutputStream(index).use { out ->
                     out.write(bytes)
                     out.fd.sync()
                 }
-                try {
-                    FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { it.force(true) }
-                } catch (_: Exception) {}
             } else {
                 // renameTo сработал после delete — синхронизируем результат.
-                try {
-                    FileOutputStream(index).use { it.fd.sync() }
-                    FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { it.force(true) }
-                } catch (_: Exception) {}
+                forceFile(index)
             }
+            forceDirectory()
         } finally {
             try {
                 fos?.close()
@@ -105,6 +103,18 @@ internal class FileLibraryStore(private val directory: File) : LibraryStore {
             // его уже нет, иначе подчищаем.
             temporary.delete()
         }
+    }
+
+    private fun forceFile(file: File) {
+        try {
+            FileChannel.open(file.toPath(), StandardOpenOption.WRITE).use { it.force(true) }
+        } catch (_: Exception) {}
+    }
+
+    private fun forceDirectory() {
+        try {
+            FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { it.force(true) }
+        } catch (_: Exception) {}
     }
 
     override fun importBook(sourcePath: String, fileName: String): String {
@@ -132,6 +142,18 @@ internal class FileLibraryStore(private val directory: File) : LibraryStore {
         books.mkdirs()
         val file = File(books, fileName)
         file.writeText(text, Charsets.UTF_8)
+        return file.absolutePath
+    }
+
+    override fun appendText(fileName: String, text: String): String {
+        books.mkdirs()
+        val file = File(books, fileName)
+        // Append не открывает и не копирует уже собранную книгу. fsync нужен
+        // после каждой страницы: приложение могут закрыть ровно после OCR.
+        FileOutputStream(file, true).use { out ->
+            out.write(text.toByteArray(Charsets.UTF_8))
+            out.fd.sync()
+        }
         return file.absolutePath
     }
 

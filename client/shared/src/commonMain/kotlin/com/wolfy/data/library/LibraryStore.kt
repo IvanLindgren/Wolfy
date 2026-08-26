@@ -62,6 +62,14 @@ interface LibraryStore {
      */
     fun writeText(fileName: String, text: String): String
 
+    /**
+     * Дописывает текстовую книгу, не перечитывая её целиком.
+     *
+     * Нужен OCR-снимкам: размер уже собранной книги не должен превращать
+     * добавление одной страницы в O(total book size).
+     */
+    fun appendText(fileName: String, text: String): String
+
     /** Сохраняет загруженный EPUB без промежуточного файла платформы. */
     fun writeBook(fileName: String, bytes: ByteArray): String
 

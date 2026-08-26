@@ -36,6 +36,8 @@ data class LibraryUiState(
     val books: List<LibraryBook> = emptyList(),
     /** Все карточки всех колод: экраны берут отсюда счётчики и списки слов. */
     val cards: List<Card> = emptyList(),
+    /** Счётчики колод заранее, чтобы плитки не фильтровали весь список карт. */
+    val deckCounts: Map<String, Int> = emptyMap(),
     val shelves: List<Shelf> = emptyList(),
     /** Книга, к которой стоит вернуться, или `null`, если открытых нет. */
     val continueReading: LibraryBook? = null,
@@ -55,7 +57,7 @@ data class LibraryUiState(
     fun deck(bookId: String): List<Card> = cards.filter { it.bookId == bookId && !it.deleted }
 
     /** Сколько слов книги лежит в колоде. */
-    fun deckSize(bookId: String): Int = deck(bookId).size
+    fun deckSize(bookId: String): Int = deckCounts[bookId] ?: 0
 }
 
 /**
@@ -122,6 +124,11 @@ class LibraryViewModel(
                     .thenByDescending { it.addedAt },
             ),
             cards = library.cards.filterNot { it.deleted },
+            deckCounts = library.cards
+                .asSequence()
+                .filterNot { it.deleted }
+                .groupingBy { it.bookId }
+                .eachCount(),
             shelves = library.shelves,
             continueReading = library.visible
                 .filter { it.started && !it.finished && it.readable }
@@ -266,20 +273,38 @@ class LibraryViewModel(
     // --- обложки ---
 
     /** Декодированные картинки по книгам; ключ — путь, чтобы видеть смену. */
-    private val coverCache = mutableMapOf<String, Pair<String, ImageBitmap?>>()
+    // `null to null` — проверили: своей обложки нет. Такой negative cache
+    // не запускает бесконечный I/O-цикл у плитки без картинки.
+    private val coverCache = mutableMapOf<String, Pair<String?, ImageBitmap?>>()
+    private val coverJobs = mutableMapOf<String, kotlinx.coroutines.Job>()
 
     /**
      * Своя обложка книги, готовая к показу.
      *
-     * `null` — своей обложки нет, и плитка рисуется набранной. Чтение и
-     * декодирование дешёвые: картинка при записи ужата до размера плитки.
+     * `null` — обложка ещё грузится или её нет. Метод не ходит на диск: его
+     * вызывает Composition, где даже `listFiles()` уже заметный jank.
      */
-    fun coverFor(bookId: String): ImageBitmap? {
-        val path = store.findCover(bookId) ?: return null
-        coverCache[bookId]?.let { (cached, bitmap) -> if (cached == path) return bitmap }
-        val bitmap = store.readBinary(path)?.let { bytes -> runCatching { decodeImage(bytes) }.getOrNull() }
-        coverCache[bookId] = path to bitmap
-        return bitmap
+    fun coverFor(bookId: String): ImageBitmap? = coverCache[bookId]?.second
+
+    /** Запрашивается только видимой плиткой; I/O и decode происходят в фоне. */
+    fun requestCover(bookId: String) {
+        if (coverCache.containsKey(bookId)) return
+        if (coverJobs.containsKey(bookId)) return
+        coverJobs[bookId] = viewModelScope.launch {
+            val loaded = withContext(Dispatchers.IO) {
+                val path = store.findCover(bookId)
+                val bitmap = path?.let { file ->
+                    store.readBinary(file)?.let { bytes -> runCatching { decodeImage(bytes) }.getOrNull() }
+                }
+                path to bitmap
+            }
+            coverJobs.remove(bookId)
+            val (path, bitmap) = loaded
+            coverCache[bookId] = path to bitmap
+            // StateFlow даёт Composition новый кадр только после готового
+            // bitmap; никаких чтений/декодирования по пути Composable.
+            coversVersion.value += 1
+        }
     }
 
     /** Ставит книге обложку из галереи. `null` — картинка не подошла. */
@@ -288,21 +313,23 @@ class LibraryViewModel(
             message.value = "Картинка не подошла: нужен файл png, jpg или webp до 24 МБ."
             return
         }
-        viewModelScope.launch(Dispatchers.IO) {
-            runCatching { store.writeCover(bookId, picked.extension, picked.bytes) }
-                .onSuccess {
-                    coverCache.remove(bookId)
-                    coversVersion.value += 1
-                }
-                .onFailure { message.value = "Обложку не получилось сохранить: ${it.message}" }
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) { store.writeCover(bookId, picked.extension, picked.bytes) }
+            }.onSuccess {
+                coverJobs.remove(bookId)?.cancel()
+                coverCache.remove(bookId)
+                requestCover(bookId)
+            }.onFailure { message.value = "Обложку не получилось сохранить: ${it.message}" }
         }
     }
 
     /** Убирает свою обложку: книга возвращается к набранной. */
     fun clearCover(bookId: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            store.deleteCover(bookId)
-            coverCache.remove(bookId)
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { store.deleteCover(bookId) }
+            coverJobs.remove(bookId)?.cancel()
+            coverCache[bookId] = null to null
             coversVersion.value += 1
         }
     }

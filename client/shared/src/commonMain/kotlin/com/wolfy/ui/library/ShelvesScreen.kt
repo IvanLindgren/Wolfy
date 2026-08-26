@@ -127,7 +127,7 @@ fun ShelvesScreen(
                     Rule()
                     SectionLabel(
                         if (board.hovered == UNSHELVED) {
-                            "Не разобрано — отпустите здесь"
+                            "Не разобрано. Отпустите здесь"
                         } else {
                             "Не разобрано"
                         },
@@ -249,7 +249,7 @@ private fun ShelfCard(
         if (expanded) {
             if (books.isEmpty()) {
                 Text(
-                    text = "Полка пуста. Книги для неё — ниже, в «Не разобрано».",
+                    text = "Полка пуста. Книги для неё лежат ниже, в «Не разобрано».",
                     style = WolfyTheme.typography.caption,
                     color = colors.inkMuted,
                 )
@@ -418,7 +418,7 @@ private fun NewShelfRow(onCreate: (String) -> Unit) {
             decorationBox = { field ->
                 if (name.isEmpty()) {
                     Text(
-                        text = "Новая полка — например, «Классика»",
+                        text = "Новая полка, например «Классика»",
                         style = WolfyTheme.typography.body,
                         color = colors.inkMuted,
                     )

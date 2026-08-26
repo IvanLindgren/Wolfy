@@ -8,11 +8,15 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.FileProvider
 import java.io.ByteArrayOutputStream
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Съёмка страницы на Android.
@@ -33,6 +37,7 @@ actual fun rememberPhotoPicker(
 ): () -> Unit {
     val context = LocalContext.current
     val callback = rememberUpdatedState(onPicked)
+    val scope = rememberCoroutineScope()
 
     // Файл под снимок готовится заранее: камера пишет в него сама, и сказать
     // ей, куда писать, надо до запуска.
@@ -41,20 +46,30 @@ actual fun rememberPhotoPicker(
 
     val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { taken ->
         if (!taken) return@rememberLauncherForActivityResult
-        val bytes = runCatching { target.readBytes() }.getOrNull() ?: return@rememberLauncherForActivityResult
-        callback.value(PickedPhoto(compressPhoto(bytes), "image/jpeg"))
-        // Снимок уже сжат и отправлен: держать оригинал в кэше незачем.
-        target.delete()
+        scope.launch {
+            val photo = withContext(Dispatchers.Default) {
+                val bytes = runCatching { target.readBytes() }.getOrNull() ?: return@withContext null
+                PickedPhoto(compressPhoto(bytes), "image/jpeg")
+            }
+            // Снимок уже сжат и отправлен: держать оригинал в кэше незачем.
+            target.delete()
+            photo?.let(callback.value)
+        }
     }
 
     val gallery = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia(),
     ) { picked ->
         val source = picked ?: return@rememberLauncherForActivityResult
-        val bytes = runCatching {
-            context.contentResolver.openInputStream(source)?.use { it.readBytes() }
-        }.getOrNull() ?: return@rememberLauncherForActivityResult
-        callback.value(PickedPhoto(compressPhoto(bytes), "image/jpeg"))
+        scope.launch {
+            val photo = withContext(Dispatchers.Default) {
+                val bytes = runCatching {
+                    context.contentResolver.openInputStream(source)?.use { it.readBytes() }
+                }.getOrNull() ?: return@withContext null
+                PickedPhoto(compressPhoto(bytes), "image/jpeg")
+            }
+            photo?.let(callback.value)
+        }
     }
 
     return {

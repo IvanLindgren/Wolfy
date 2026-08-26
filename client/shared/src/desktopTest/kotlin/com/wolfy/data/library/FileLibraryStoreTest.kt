@@ -1,6 +1,7 @@
 package com.wolfy.data.library
 
 import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.util.zip.GZIPOutputStream
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
@@ -23,6 +24,42 @@ class FileLibraryStoreTest {
 
             assertFails { store.installDictionary(gzip("not a wolfy dictionary")) }
             assertEquals(path, store.dictionaryPath(), "битая загрузка затёрла исправный файл")
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun fallback_rename_не_обнуляет_сохранённый_json() {
+        val directory = createTempDirectory("wolfy-store-fallback").toFile()
+        try {
+            val expected = "{\"books\":[{\"id\":\"book-1\"}],\"revision\":7}"
+            val store = FileLibraryStore(
+                directory = directory,
+                moveFile = { _, _, _ -> throw IOException("forced move failure") },
+                renameFile = { source, target -> source.renameTo(target) },
+            )
+
+            store.save("library", expected)
+
+            val saved = java.io.File(directory, "library.json")
+            assertTrue(saved.isFile)
+            assertEquals(expected, saved.readText(Charsets.UTF_8))
+            assertTrue(saved.readBytes().contentEquals(expected.toByteArray(Charsets.UTF_8)))
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun снимок_дописывается_без_перезаписи_прежнего_текста() {
+        val directory = createTempDirectory("wolfy-store-append").toFile()
+        try {
+            val store = FileLibraryStore(directory)
+            store.writeText("snapshots.txt", "Первая страница")
+            val path = store.appendText("snapshots.txt", "\n\nВторая страница")
+
+            assertEquals("Первая страница\n\nВторая страница", java.io.File(path).readText())
         } finally {
             directory.deleteRecursively()
         }

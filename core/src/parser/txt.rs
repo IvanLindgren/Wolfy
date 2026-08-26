@@ -99,58 +99,150 @@ impl Book for TxtBook {
 
 /// Декодирует байты, определяя кодировку.
 ///
-/// UTF-8 проверяется первым — так записано подавляющее большинство файлов.
-/// Если не сошлось, книга почти наверняка в windows-1251: русские тексты из
-/// старых библиотек до сих пор ходят именно в ней, и открыть их важнее, чем
-/// поддержать полный список кодировок.
+/// Порядок строгий: сначала BOM'ы (они однозначны), затем проверка UTF-8 как
+/// самого частого варианта, и только потом легаси-кодировки. Считать любой
+/// non-UTF8 файл windows-1251 нельзя: cp866 и koi8-r до сих пор живут в
+/// старых архивах, и их перекодированный мусор выглядит как «текст», пока
+/// читатель не откроет первую страницу.
 fn decode(bytes: &[u8]) -> String {
     // BOM снимается явно: иначе первым символом книги станет невидимый
     // «\u{feff}», и первое слово перестанет находиться в словаре.
-    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
+        return match std::str::from_utf8(rest) {
+            Ok(text) => text.to_string(),
+            Err(_) => legacy_decode(rest),
+        };
+    }
+    // UTF-16LE: «FF FE». UTF-32LE начинается с «FF FE 00 00» и тут не
+    // поддерживается сознательно — перепутать его с LE-текстом опасно.
+    if bytes.starts_with(&[0xFF, 0xFE]) {
+        return encoding_rs::UTF_16LE.decode(&bytes[2..]).0.into_owned();
+    }
+    if bytes.starts_with(&[0xFE, 0xFF]) {
+        return encoding_rs::UTF_16BE.decode(&bytes[2..]).0.into_owned();
+    }
 
     match std::str::from_utf8(bytes) {
         Ok(text) => text.to_string(),
-        Err(_) => encoding_rs::WINDOWS_1251.decode(bytes).0.into_owned(),
+        Err(_) => legacy_decode(bytes),
     }
+}
+
+/// Легаси-декодирование: перебираем три исторические кириллические кодировки
+/// и оставляем ту, чей результат похож на живой русский текст.
+///
+/// Признак похожести — доля гласных среди кириллических букв: у осмысленного
+/// текста она стабильно держится около 40%, а у перекодированного мусора
+/// проваливается, потому что буквы выпадают случайно.
+fn legacy_decode(bytes: &[u8]) -> String {
+    const CANDIDATES: [&encoding_rs::Encoding; 3] = [
+        encoding_rs::WINDOWS_1251,
+        encoding_rs::KOI8_R,
+        encoding_rs::IBM866,
+    ];
+
+    let mut best: Option<(String, i64)> = None;
+    for encoding in CANDIDATES {
+        let (text, _, _) = encoding.decode(bytes);
+        let text = text.into_owned();
+        let deviation = match russian_deviation(&text) {
+            Some(deviation) => deviation,
+            // Слишком мало кириллицы для суждения — кандидат не выигрывает.
+            None => continue,
+        };
+        if best
+            .as_ref()
+            .is_none_or(|(_, best_deviation)| deviation < *best_deviation)
+        {
+            best = Some((text, deviation));
+        }
+    }
+
+    // Ни один кандидат не набрал достаточно кириллицы (короткий текст или
+    // вообще не русский файл) — тогда windows-1251 честный выбор по
+    // умолчанию: она чаще остальных встречается в русских книгах.
+    best.map(|(text, _)| text)
+        .unwrap_or_else(|| encoding_rs::WINDOWS_1251.decode(bytes).0.into_owned())
+}
+
+/// Расхождение доли гласных с нормой живого русского текста (0 — идеально).
+fn russian_deviation(text: &str) -> Option<i64> {
+    let mut vowels = 0usize;
+    let mut total = 0usize;
+    for ch in text.chars() {
+        if !matches!(ch, 'а'..='я' | 'А'..='Я' | 'ё' | 'Ё') {
+            continue;
+        }
+        total += 1;
+        if matches!(
+            ch.to_ascii_lowercase(),
+            'а' | 'е' | 'и' | 'о' | 'у' | 'ы' | 'э' | 'ю' | 'я' | 'ё'
+        ) {
+            vowels += 1;
+        }
+    }
+    // Меньше дюжины букв — статистика пустая, решать рано.
+    if total < 12 {
+        return None;
+    }
+    let share = (vowels * 100 / total) as i64;
+    Some((share - 42).abs())
 }
 
 /// Делит текст на главы и блоки.
 ///
-/// Абзац — это кусок между пустыми строками. Заголовок — короткая одиночная
-/// строка без точки на конце, вокруг которой пусто: так набирают «CHAPTER III»
-/// и «Глава третья» во всех текстовых книгах, что реально встречаются.
+/// Абзац — это кусок между пустыми строками. Разбор идёт по состоянию строк,
+/// а не по literal-разбиванию: концы строки бывают LF, CRLF и одиночный CR,
+/// и файл с «\r\n\r\n» обязан делиться так же, как файл с «\n\n». Пустой
+/// строкой считается любая, где только пробелы, а несколько пустых подряд
+/// не порождают пустых блоков.
 fn split_chapters(text: &str) -> Vec<Chapter> {
     let mut chapters: Vec<Chapter> = Vec::new();
     let mut current = Chapter::default();
+    let mut paragraph = String::new();
+    let mut paragraph_lines = 0usize;
+    let mut saw_blank = false;
 
-    for raw in text.split("\n\n") {
-        let block_text = normalize(raw);
-        if block_text.is_empty() {
+    for raw in lines_any(text) {
+        if raw.trim().is_empty() {
+            flush_paragraph(
+                &mut paragraph,
+                &mut paragraph_lines,
+                &mut current,
+                &mut chapters,
+            );
+            saw_blank = true;
             continue;
         }
 
-        if is_heading(&block_text) {
-            // Заголовок начинает новую главу — но только если в предыдущей
-            // уже что-то было. Иначе «CHAPTER I» сразу после названия книги
-            // породило бы пустую главу.
-            if !current.blocks.is_empty() {
-                chapters.push(std::mem::take(&mut current));
-            }
-            current.title = Some(block_text.clone());
-            current.blocks.push(Block::Heading {
-                level: 2,
-                text: block_text,
-            });
-            continue;
+        // Книга без единой пустой строки («стена текста») всё равно не должна
+        // превращаться в один гигантский абзац. Если пустых разделителей не
+        // было вовсе, режем по концам предложений, когда накопленное уже
+        // велико; обычные книги с пустыми строками этот путь не трогает.
+        if !saw_blank
+            && paragraph.chars().count() > WALL_PARAGRAPH_LIMIT
+            && paragraph.ends_with(['.', '!', '?', '»', '"'])
+        {
+            flush_paragraph(
+                &mut paragraph,
+                &mut paragraph_lines,
+                &mut current,
+                &mut chapters,
+            );
         }
 
-        if is_divider(&block_text) {
-            current.blocks.push(Block::Divider);
-            continue;
+        if !paragraph.is_empty() {
+            paragraph.push(' ');
         }
-
-        current.blocks.push(Block::Paragraph(block_text));
+        paragraph.push_str(raw.trim());
+        paragraph_lines += 1;
     }
+    flush_paragraph(
+        &mut paragraph,
+        &mut paragraph_lines,
+        &mut current,
+        &mut chapters,
+    );
 
     if !current.blocks.is_empty() {
         chapters.push(current);
@@ -163,34 +255,85 @@ fn split_chapters(text: &str) -> Vec<Chapter> {
     chapters
 }
 
-/// Схлопывает переносы внутри абзаца в пробелы.
+/// Предел одного абзаца для книг вообще без пустых строк.
+const WALL_PARAGRAPH_LIMIT: usize = 2000;
+
+/// Закрывает накопленный абзац и решает, чем он был.
 ///
-/// В текстовых книгах строки жёстко обрезаны по 70–80 символов, и без этого
-/// шага каждая строка стала бы отдельным абзацем, а газетная выключка по
-/// ширине потеряла бы смысл.
-fn normalize(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len());
-    for line in raw.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        if !out.is_empty() {
-            out.push(' ');
-        }
-        out.push_str(line);
+/// Заголовок и разделитель опознаются только у короткого блока из одной-двух
+/// строк: многострочный капслок — это вырванный кусок набранного капслоком
+/// текста, а не глава, и дробить по нему книгу нельзя. Исключение — явное
+/// ключевое слово («CHAPTER», «Глава»): такие строки не теряются даже в
+/// длинных блоках.
+fn flush_paragraph(
+    paragraph: &mut String,
+    paragraph_lines: &mut usize,
+    current: &mut Chapter,
+    chapters: &mut Vec<Chapter>,
+) {
+    let text = std::mem::take(paragraph);
+    let lines = std::mem::take(paragraph_lines);
+    if text.is_empty() {
+        return;
     }
-    out
+
+    if is_divider(&text) {
+        current.blocks.push(Block::Divider);
+        return;
+    }
+
+    if keyword_heading(&text) || (lines <= 2 && caps_heading(&text)) {
+        // Заголовок начинает новую главу — но только если в предыдущей уже
+        // что-то было. Иначе «CHAPTER I» сразу после названия книги породило
+        // бы пустую главу.
+        if !current.blocks.is_empty() {
+            chapters.push(std::mem::take(current));
+        }
+        current.title = Some(text.clone());
+        current.blocks.push(Block::Heading { level: 2, text });
+        return;
+    }
+
+    current.blocks.push(Block::Paragraph(text));
 }
 
-/// Похож ли блок на заголовок главы.
+/// Строки текста при любом варианте конца строки: LF, CRLF или одиночный CR.
+fn lines_any(text: &str) -> impl Iterator<Item = &str> {
+    let mut rest = text;
+    std::iter::from_fn(move || {
+        if rest.is_empty() {
+            return None;
+        }
+        let end = rest.find(['\r', '\n']).unwrap_or(rest.len());
+        let line = &rest[..end];
+        rest = &rest[end..];
+        // Снимаем сам конец строки, учитывая пару «\r\n».
+        if let Some(after) = rest.strip_prefix('\r') {
+            rest = after.strip_prefix('\n').unwrap_or(after);
+        } else if let Some(after) = rest.strip_prefix('\n') {
+            rest = after;
+        }
+        Some(line)
+    })
+}
+
+/// Похож ли блок на заголовок главы: капслок или ключевое слово.
+///
+/// Живёт для тестов: разбор пользуется частями напрямую, чтобы учесть число
+/// строк абзаца.
+#[cfg(test)]
 fn is_heading(text: &str) -> bool {
+    keyword_heading(text) || caps_heading(text)
+}
+
+/// Капслочный заголовок: «CHAPTER III», «THE OLD LIBRARY».
+fn caps_heading(text: &str) -> bool {
     let length = text.chars().count();
     if length == 0 || length > 60 {
         return false;
     }
     // Точка в конце — признак обычного предложения, а не заголовка.
-    if text.ends_with(['.', ',', ';', ':']) {
+    if text.ends_with(['.', ',', ';', ':', '!', '?']) {
         return false;
     }
 
@@ -199,18 +342,63 @@ fn is_heading(text: &str) -> bool {
         return false;
     }
 
-    // Набрано капслоком — «CHAPTER III», «THE OLD LIBRARY».
-    if letters.chars().all(char::is_uppercase) {
-        return true;
+    // Набрано капслоком и при этом короткое: длинные капслочные абзацы —
+    // это текст, набранный заглавными, а не заголовок.
+    letters.chars().all(char::is_uppercase) && text.split_whitespace().count() <= 6
+}
+
+/// Заголовок по ключевому слову: «Глава третья», «PART TWO», «Книга вторая».
+fn keyword_heading(text: &str) -> bool {
+    if text.chars().count() > 80 {
+        return false;
+    }
+    if text.ends_with(['.', ',', ';', ':', '!', '?']) {
+        return false;
     }
 
-    // Начинается со слова «глава» или «chapter».
-    let first = text
-        .split_whitespace()
+    let mut words = text.split_whitespace();
+    let first = words
         .next()
         .unwrap_or_default()
+        .trim_end_matches(['.', ':', ','])
         .to_lowercase();
-    matches!(first.as_str(), "глава" | "chapter" | "part" | "часть")
+    // Для общих слов вроде «часть» рядом обязано стоять число: иначе «Часть
+    // разговора» посреди текста стала бы новой главой.
+    let second_is_number = words
+        .next()
+        .map(|word| number_like(word.trim_end_matches(['.', ',', ':'])))
+        .unwrap_or(false);
+
+    match first.as_str() {
+        "глава" | "chapter" => true,
+        "часть" | "part" | "книга" | "book" => second_is_number,
+        _ => false,
+    }
+}
+
+/// Похож ли слово на номер главы: арабская цифра, римская цифра или
+/// числительное прописью.
+fn number_like(word: &str) -> bool {
+    let lower = word.to_lowercase();
+    if lower.is_empty() {
+        return false;
+    }
+    if lower.chars().all(|c| c.is_ascii_digit()) {
+        return true;
+    }
+    if lower.chars().all(|c| matches!(c, 'i' | 'v' | 'x' | 'l' | 'c' | 'd' | 'm')) {
+        return true;
+    }
+    matches!(
+        lower.as_str(),
+        "один" | "одна" | "два" | "две" | "три" | "четыре" | "пять" | "шесть" | "семь"
+            | "восемь" | "девять" | "десять" | "первая" | "вторая" | "третья" | "четвертая"
+            | "пятая" | "шестая" | "седьмая" | "восьмая" | "девятая" | "десятая" | "первый"
+            | "второй" | "третий" | "четвертый" | "пятый" | "1-я" | "2-я" | "1-й" | "2-й"
+            | "one" | "two" | "three" | "four" | "five" | "six" | "seven" | "eight" | "nine"
+            | "ten" | "eleven" | "twelve" | "first" | "second" | "third" | "fourth" | "fifth"
+            | "sixth" | "seventh" | "eighth" | "ninth" | "tenth"
+    )
 }
 
 /// Разделитель сцен: строка из звёздочек, точек или тире.
@@ -377,5 +565,231 @@ mod tests {
         let big = "a".repeat(crate::parser::limits::MAX_TOTAL_TEXT_BYTES + 1);
         let err = TxtBook::from_bytes(big.as_bytes(), None).expect_err("общий текст слишком велик");
         assert!(err.describe().contains("слишком велика"), "{}", err.describe());
+    }
+
+    // --- концы строк -------------------------------------------------------
+
+    #[test]
+    fn crlf_абзацы_разделяются_как_lf() {
+        let path = книга(
+            "wolfy_txt_crlf_paragraphs.txt",
+            b"The library smelled of dust.\r\n\r\nEvelyn pushed the door.\r\n",
+        );
+        let mut book = TxtBook::open(&path).expect("книга открывается");
+
+        assert_eq!(
+            book.chapter(0).expect("глава").blocks,
+            vec![
+                Block::Paragraph("The library smelled of dust.".to_string()),
+                Block::Paragraph("Evelyn pushed the door.".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn одиночный_cr_тоже_конец_строки() {
+        let path = книга(
+            "wolfy_txt_cr.txt",
+            b"First paragraph.\r\rSecond paragraph.\r",
+        );
+        let mut book = TxtBook::open(&path).expect("книга открывается");
+
+        assert_eq!(
+            book.chapter(0).expect("глава").blocks,
+            vec![
+                Block::Paragraph("First paragraph.".to_string()),
+                Block::Paragraph("Second paragraph.".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn смешанные_концы_строк_читаются_целиком() {
+        let path = книга(
+            "wolfy_txt_mixed_endings.txt",
+            b"One.\r\nTwo.\nThree.\r\rFour.\r\n",
+        );
+        let mut book = TxtBook::open(&path).expect("книга открывается");
+
+        let chapter = book.chapter(0).expect("глава");
+        let text = chapter.plain_text();
+        for word in ["One.", "Two.", "Three.", "Four."] {
+            assert!(text.contains(word), "потерян кусок «{word}»");
+        }
+    }
+
+    #[test]
+    fn сто_абзацев_crlf_сохраняются_полностью() {
+        let mut content = String::new();
+        for n in 1..=100 {
+            content.push_str(&format!("Абзац номер {n} про старую библиотеку.\r\n\r\n"));
+        }
+        let path = книга("wolfy_txt_100_crlf.txt", content.as_bytes());
+        let mut book = TxtBook::open(&path).expect("книга открывается");
+
+        let blocks = book.chapter(0).expect("глава").blocks;
+        assert_eq!(blocks.len(), 100, "каждый абзац — отдельный блок");
+        // Текст каждого абзаца сохранён полностью.
+        assert!(blocks.iter().any(|b| b.text() == Some("Абзац номер 100 про старую библиотеку.")));
+        assert!(blocks.iter().any(|b| b.text() == Some("Абзац номер 57 про старую библиотеку.")));
+    }
+
+    #[test]
+    fn crlf_главы_делятся_по_ключевому_слову() {
+        let path = книга(
+            "wolfy_txt_crlf_chapters.txt",
+            "CHAPTER I\r\n\r\nThe door opened.\r\n\r\nCHAPTER II\r\n\r\nEvelyn stepped in.\r\n"
+                .as_bytes(),
+        );
+        let book = TxtBook::open(&path).expect("книга открывается");
+
+        assert_eq!(book.contents().len(), 2);
+        assert_eq!(book.contents()[0].title.as_deref(), Some("CHAPTER I"));
+        assert_eq!(book.contents()[1].title.as_deref(), Some("CHAPTER II"));
+    }
+
+    #[test]
+    fn пустые_строки_из_пробелов_тоже_разделяют() {
+        let path = книга(
+            "wolfy_txt_blank_spaces.txt",
+            b"First.\n   \n\t\nSecond.\n\n\n\nThird.\n",
+        );
+        let mut book = TxtBook::open(&path).expect("книга открывается");
+
+        let blocks = book.chapter(0).expect("глава").blocks;
+        assert_eq!(
+            blocks,
+            vec![
+                Block::Paragraph("First.".to_string()),
+                Block::Paragraph("Second.".to_string()),
+                Block::Paragraph("Third.".to_string()),
+            ],
+            "пробельные строки разделяют, лишние пустые не создают блоков"
+        );
+    }
+
+    // --- кодировки ----------------------------------------------------------
+
+    #[test]
+    fn utf16le_bom_читается() {
+        // encoding_rs::encode() для UTF-16 отдаёт UTF-8, поэтому байты
+        // фикстуры собираются вручную.
+        let mut bytes = vec![0xFF, 0xFE];
+        for unit in "Глава первая".encode_utf16() {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        let path = книга("wolfy_txt_utf16le.txt", &bytes);
+        let book = TxtBook::open(&path).expect("книга открывается");
+
+        assert_eq!(book.contents()[0].title.as_deref(), Some("Глава первая"));
+    }
+
+    #[test]
+    fn utf16be_bom_читается() {
+        let mut bytes = vec![0xFE, 0xFF];
+        for unit in "Глава вторая".encode_utf16() {
+            bytes.extend_from_slice(&unit.to_be_bytes());
+        }
+        let path = книга("wolfy_txt_utf16be.txt", &bytes);
+        let book = TxtBook::open(&path).expect("книга открывается");
+
+        assert_eq!(book.contents()[0].title.as_deref(), Some("Глава вторая"));
+    }
+
+    #[test]
+    fn koi8_r_опознаётся_среди_легаси_кодировок() {
+        // «Старая библиотека пахла пылью и кожаными переплётами» в koi8-r.
+        let (bytes, _, _) =
+            encoding_rs::KOI8_R.encode("Старая библиотека пахла пылью и кожаными переплётами.");
+        let path = книга("wolfy_txt_koi8.txt", bytes.as_ref());
+        let mut book = TxtBook::open(&path).expect("книга открывается");
+
+        let text = book.chapter(0).expect("глава").plain_text();
+        assert!(
+            text.contains("переплётами"),
+            "koi8-r должен декодироваться в осмысленный текст: {text}"
+        );
+    }
+
+    #[test]
+    fn cp866_опознаётся_среди_легаси_кодировок() {
+        let (bytes, _, _) =
+            encoding_rs::IBM866.encode("Полка за полкой стояли под потолком в тишине.");
+        let path = книга("wolfy_txt_cp866.txt", bytes.as_ref());
+        let mut book = TxtBook::open(&path).expect("книга открывается");
+
+        let text = book.chapter(0).expect("глава").plain_text();
+        assert!(
+            text.contains("потолком"),
+            "cp866 должен декодироваться в осмысленный текст: {text}"
+        );
+    }
+
+    #[test]
+    fn английский_non_utf8_не_ломается_на_легаси_переборе() {
+        // cp1252-байты без кириллицы: перебор не должен выбрать мусор.
+        let path = книга(
+            "wolfy_txt_cp1252.txt",
+            &[b'T', b'h', 0xE9, b' ', b'd', b'o', b'o', b'r', b'.', 0x0A],
+        );
+        let mut book = TxtBook::open(&path).expect("книга открывается");
+        assert!(book
+            .chapter(0)
+            .expect("глава")
+            .plain_text()
+            .starts_with("Th"));
+    }
+
+    // --- заголовки -----------------------------------------------------------
+
+    #[test]
+    fn многострочный_капслок_не_становится_главой() {
+        // Длинный кусок, набранный капслоком, — это текст, а не заголовок.
+        let path = книга(
+            "wolfy_txt_caps_wall.txt",
+            "THE LIBRARY WAS CLOSED\nFOR THE WHOLE SUMMER\nAND NOBODY CAME HERE\n\nОбычный текст дальше.\n".as_bytes(),
+        );
+        let book = TxtBook::open(&path).expect("книга открывается");
+
+        assert_eq!(book.contents().len(), 1, "капслочная стена не дробит книгу");
+    }
+
+    #[test]
+    fn часть_без_номера_не_главa_а_часть_с_номером_глава() {
+        assert!(!is_heading("Часть разговора осталась за кадром."));
+        assert!(is_heading("Часть вторая"));
+        assert!(is_heading("Part Two"));
+        assert!(!is_heading("Book was already open on the table"));
+        assert!(is_heading("Книга вторая"));
+        assert!(is_heading("Глава третья"));
+        assert!(is_heading("CHAPTER IV. THE OLD LIBRARY"));
+    }
+
+    #[test]
+    fn стена_текста_без_пустых_строк_режется_на_абзацы() {
+        // Книга вообще без пустых строк: абзацы восстанавливаются по концам
+        // предложений, когда накопилось больше предела.
+        let sentence = "Старая библиотека хранила тысячи историй на пыльных полках. ";
+        let mut content = String::new();
+        for _ in 0..60 {
+            let line = sentence.trim_end();
+            content.push_str(line);
+            content.push('\n');
+        }
+        let path = книга("wolfy_txt_wall.txt", content.as_bytes());
+        let mut book = TxtBook::open(&path).expect("книга открывается");
+
+        let blocks = book.chapter(0).expect("глава").blocks;
+        assert!(
+            blocks.len() > 1,
+            "стена текста не должна стать одним гигантским абзацем"
+        );
+        // И ничего не потерялось.
+        let joined: String = blocks
+            .iter()
+            .filter_map(|b| b.text())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(joined.contains("хранила тысячи историй"));
     }
 }

@@ -8,7 +8,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -17,6 +16,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.wolfy.theme.WolfyTheme
+import com.wolfy.theme.still
 
 /**
  * Огонёк серии занятий.
@@ -41,15 +42,25 @@ fun Flame(
     // Живой огонь чуть дышит. Полторы секунды и три процента — движение на
     // грани заметности: оно оживляет экран, но не тянет на себя взгляд, когда
     // читатель пришёл заниматься, а не любоваться.
-    val breath by rememberInfiniteTransition(label = "flame").animateFloat(
-        initialValue = 1f,
-        targetValue = if (alive) 1.06f else 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1_500),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "breath",
-    )
+    //
+    // Бесконечное движение выключается целиком, а не ускоряется до нуля:
+    // попросивший покоя просил в том числе и о том, чтобы на экране ничего не
+    // шевелилось само по себе. Заодно это снимает вечно идущий кадровый такт
+    // там, где смотреть не на что.
+    val motion = WolfyTheme.motion
+    val breath = if (motion.still || !alive) {
+        1f
+    } else {
+        rememberInfiniteTransition(label = "flame").animateFloat(
+            initialValue = 1f,
+            targetValue = 1.06f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 1_500),
+                repeatMode = RepeatMode.Reverse,
+            ),
+            label = "breath",
+        ).value
+    }
 
     Canvas(modifier.size(size)) {
         scale(scaleX = 1f, scaleY = breath, pivot = center.copy(y = this.size.height)) {

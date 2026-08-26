@@ -328,10 +328,7 @@ fn migrate_uuid(state: &LibraryState, fresh_ids: &mut impl Iterator<Item = Strin
         })
         .collect();
 
-    if renamed.is_empty() {
-        return state.clone();
-    }
-
+    let mut cards_changed = false;
     let cards: Vec<Card> = state
         .cards
         .iter()
@@ -340,17 +337,28 @@ fn migrate_uuid(state: &LibraryState, fresh_ids: &mut impl Iterator<Item = Strin
                 .iter()
                 .find(|(old, _)| *old == card.book_id)
                 .map(|(_, fresh)| fresh.clone());
-            match owner {
-                Some(owner) => Card {
-                    book_id: owner,
-                    rev: 0,
-                    dirty: true,
-                    ..card.clone()
-                },
-                None => card.clone(),
+            let new_id = if looks_like_uuid(&card.id) {
+                None
+            } else {
+                fresh_ids.next()
+            };
+            if owner.is_none() && new_id.is_none() {
+                return card.clone();
+            }
+            cards_changed = true;
+            Card {
+                id: new_id.unwrap_or_else(|| card.id.clone()),
+                book_id: owner.unwrap_or_else(|| card.book_id.clone()),
+                rev: 0,
+                dirty: true,
+                ..card.clone()
             }
         })
         .collect();
+
+    if renamed.is_empty() && !cards_changed {
+        return state.clone();
+    }
 
     LibraryState {
         books,
@@ -882,6 +890,42 @@ mod tests {
         assert_eq!(after.books[0].id, UUID);
         assert_eq!(after.books[0].rev, 7, "нетронутая книга потеряла ревизию");
         assert!(!after.books[0].dirty, "нетронутая книга пошла на отправку");
+    }
+
+    #[test]
+    fn карточка_со_старым_номером_получает_uuid() {
+        let mut карточка = Card::new("card-1", UUID, "library");
+        карточка.book_id = UUID.to_string();
+        карточка.dirty = false;
+        карточка.rev = 9;
+        let state = LibraryState {
+            books: vec![книга(UUID, "Гэтсби", NOW)],
+            cards: vec![карточка],
+            ..Default::default()
+        };
+        let fresh = "3f1c2b4a-0000-4000-8000-000000000002";
+        let after = migrate(&state, &mut std::iter::once(fresh.to_string()));
+
+        assert_eq!(after.cards[0].id, fresh);
+        assert_eq!(after.cards[0].book_id, UUID);
+        assert_eq!(after.cards[0].rev, 0);
+        assert!(after.cards[0].dirty);
+    }
+
+    #[test]
+    fn миграция_uuid_идемпотентна() {
+        let fresh = "3f1c2b4a-0000-4000-8000-000000000002";
+        let mut карточка = Card::new(fresh, UUID, "library");
+        карточка.dirty = false;
+        карточка.rev = 9;
+        let state = LibraryState {
+            books: vec![книга(UUID, "Гэтсби", NOW)],
+            cards: vec![карточка],
+            ..Default::default()
+        };
+        let after = migrate(&state, &mut std::iter::empty());
+
+        assert_eq!(after, state);
     }
 
     #[test]

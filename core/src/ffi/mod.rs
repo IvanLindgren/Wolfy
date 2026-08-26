@@ -283,6 +283,73 @@ pub extern "C" fn wolfy_book_chapter(handle: i64, index: usize) -> *mut c_char {
     })
 }
 
+/// Загружает один бинарный ресурс открытой книги (сейчас — иллюстрацию EPUB).
+///
+/// В отличие от глав, байты не кодируются в JSON/Base64: это добавило бы
+/// треть памяти к каждой картинке и лишнюю полную копию на UI-пути. Владелец
+/// обязан один раз вызвать [`wolfy_bytes_free`] с тем же указателем и длиной.
+/// При ошибке возвращается `null`, длина становится нулевой, а причина лежит
+/// в [`wolfy_last_error`] текущего потока.
+///
+/// # Safety
+/// `path` — корректная UTF-8 C-строка, `out_len` — доступный указатель на
+/// `size_t`. Результат нельзя читать после `wolfy_bytes_free`.
+#[no_mangle]
+pub unsafe extern "C" fn wolfy_book_resource(
+    handle: i64,
+    path: *const c_char,
+    out_len: *mut usize,
+) -> *mut u8 {
+    if out_len.is_null() {
+        set_error("не передана длина ресурса");
+        return std::ptr::null_mut();
+    }
+    // Даже при ошибке вызывающий не увидит случайное старое значение.
+    unsafe { *out_len = 0 };
+
+    let produced = catch_unwind(AssertUnwindSafe(|| {
+        let path = unsafe { read_string(path) }?;
+        with_book(handle, |book| book.resource(&path))
+    }));
+
+    let bytes = match produced {
+        Ok(Some(Ok(bytes))) => bytes,
+        Ok(Some(Err(error))) => {
+            set_error(&error.describe());
+            return std::ptr::null_mut();
+        }
+        Ok(None) => return std::ptr::null_mut(),
+        Err(_) => {
+            set_error("внутренняя ошибка ядра при чтении ресурса");
+            return std::ptr::null_mut();
+        }
+    };
+
+    // `Vec::from_raw_parts(ptr, len, len)` был бы неверен: capacity Vec
+    // может отличаться от len. Box<[u8]> хранит ровно известный размер и
+    // поэтому симметрично освобождается функцией ниже.
+    let length = bytes.len();
+    let pointer = Box::into_raw(bytes.into_boxed_slice()) as *mut u8;
+    unsafe { *out_len = length };
+    clear_error();
+    pointer
+}
+
+/// Освобождает байты, полученные от [`wolfy_book_resource`].
+///
+/// # Safety
+/// `bytes` и `len` должны быть возвращены одной успешной операцией
+/// `wolfy_book_resource`; повторный вызов с тем же указателем запрещён.
+#[no_mangle]
+pub unsafe extern "C" fn wolfy_bytes_free(bytes: *mut u8, len: usize) {
+    if bytes.is_null() {
+        return;
+    }
+    // SAFETY: ресурс передаётся как Box<[u8]> с ровно `len` элементами.
+    let slice = std::ptr::slice_from_raw_parts_mut(bytes, len);
+    drop(unsafe { Box::from_raw(slice) });
+}
+
 /// Читает главу вместе с токенами и предложениями — один тяжёлый переход.
 ///
 /// Смещения токенов — в единицах UTF-16, текст токенов не дублируется.
@@ -1167,6 +1234,22 @@ mod tests {
         unsafe { wolfy_string_free(std::ptr::null_mut()) };
     }
 
+    #[test]
+    fn ресурс_книги_проходит_бинарным_ffi_без_base64() {
+        let handle = вставить_mock_книгу_без_задержки();
+        let path = CString::new("images/lamp.jpg").expect("строка");
+        let mut len = 0usize;
+
+        let raw = unsafe { wolfy_book_resource(handle, path.as_ptr(), &mut len) };
+
+        assert!(!raw.is_null(), "ресурс должен прийти, ошибка: {:?}", ошибка());
+        assert_eq!(len, 3);
+        let bytes = unsafe { std::slice::from_raw_parts(raw, len) };
+        assert_eq!(bytes, &[7, 8, 9]);
+        unsafe { wolfy_bytes_free(raw, len) };
+        wolfy_book_close(handle);
+    }
+
     // --- §14: FFI registry не должен глобально умирать от паники одного объекта ---
 
     use crate::parser::{Block, Chapter, ChapterInfo, Metadata};
@@ -1199,7 +1282,7 @@ mod tests {
             })
         }
         fn resource(&mut self, _path: &str) -> crate::Result<Vec<u8>> {
-            Ok(vec![])
+            Ok(vec![7, 8, 9])
         }
     }
 

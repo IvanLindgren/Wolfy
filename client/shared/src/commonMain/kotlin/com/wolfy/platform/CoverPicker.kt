@@ -59,3 +59,6 @@ const val COVER_MAX_SIDE = 1024
 
 /** Исходники тяжелее в память не читаются вовсе. */
 const val COVER_MAX_BYTES = 24 * 1024 * 1024
+
+/** Общий предел уже распакованного растра: защита от image bomb. */
+const val MAX_DECODE_IMAGE_PIXELS = 30_000_000L

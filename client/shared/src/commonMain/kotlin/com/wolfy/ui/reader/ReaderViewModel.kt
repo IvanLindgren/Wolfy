@@ -1,6 +1,7 @@
 package com.wolfy.ui.reader
 
 import androidx.compose.runtime.Immutable
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.wolfy.data.TranslateResult
@@ -13,7 +14,9 @@ import com.wolfy.ffi.Chapter
 import com.wolfy.ffi.CoreException
 import com.wolfy.ffi.ParsedText
 import com.wolfy.ffi.ReadingSegment
+import com.wolfy.ffi.readableText
 import com.wolfy.platform.refreshBookNudge
+import com.wolfy.platform.decodeImage
 import com.wolfy.ffi.PreparedChapter
 import com.wolfy.ffi.Sentence
 import com.wolfy.ffi.Token
@@ -31,7 +34,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Состояние экрана чтения.
@@ -104,6 +111,10 @@ data class ReaderBlock(
     val parsed: ParsedText?,
     val imagePath: String?,
     val alt: String?,
+    /** Исходник MathML/TeX; текст уже содержит readable fallback. */
+    val source: String? = null,
+    /** Строки таблицы для сохранения её структуры в UI. */
+    val rows: List<List<String>>? = null,
     /**
      * Докуда набирать слово полужирным: по числу на токен блока.
      *
@@ -151,6 +162,25 @@ class ReaderViewModel(
     /** Номер открытой книги в ядре. Пока он есть, ядро держит её файл. */
     private var handle: Long? = null
 
+    /**
+     * Номер сессии читалки. Нативное чтение не всегда успевает отмениться
+     * мгновенно, поэтому одного `Job.cancel()` недостаточно: запоздавшему
+     * результату запрещено публиковаться или закрывать новую книгу.
+     */
+    private var generation = 0L
+
+    /** Отдельный номер запроса карточки: один и тот же токен могут нажать дважды. */
+    private var cardGeneration = 0L
+
+    private var openJob: Job? = null
+    private var chapterJob: Job? = null
+    private var analysisJob: Job? = null
+    private var anchorJob: Job? = null
+    private var segmentJob: Job? = null
+    /** Отложенная запись места: тяжёлая сессия библиотеки не трогает Main. */
+    private var progressJob: Job? = null
+    private val progressMutex = Mutex()
+
     /** Запрос перевода для текущей карточки — новый тап отменяет предыдущий. */
     private var translationJob: Job? = null
 
@@ -168,6 +198,97 @@ class ReaderViewModel(
     private var deckJob: Job? = null
 
     /**
+     * Прогресс прокрутки намеренно живёт отдельно от [ReaderState]: обновлять
+     * тяжёлый список блоков на каждом scroll frame означало бы пересобирать
+     * всю страницу. Верхняя полоса подписывается только на это маленькое
+     * состояние.
+     */
+    private val _withinChapterProgress = MutableStateFlow(0f)
+    val withinChapterProgress: StateFlow<Float> = _withinChapterProgress.asStateFlow()
+
+    /** Готовые картинки текущей книги. Пустой map не держит главу в памяти. */
+    private val _images = MutableStateFlow<Map<String, ImageBitmap?>>(emptyMap())
+    val images: StateFlow<Map<String, ImageBitmap?>> = _images.asStateFlow()
+    private val imageCache = mutableMapOf<String, CachedImage>()
+    private val imageOrder = mutableListOf<String>()
+    private val imageJobs = mutableMapOf<String, Job>()
+    private var imageCacheBytes = 0L
+
+    private data class CachedImage(val bitmap: ImageBitmap?, val bytes: Long)
+
+    private fun owns(session: Long, id: String, expectedHandle: Long? = null): Boolean =
+        session == generation && bookId == id && (expectedHandle == null || handle == expectedHandle)
+
+    private fun ownsCard(session: Long, id: String, request: Long, block: Int, token: Token): Boolean {
+        val current = _state.value
+        val card = current.card ?: return false
+        return owns(session, id) &&
+            cardGeneration == request &&
+            current.selectedBlock == block &&
+            card.token.start == token.start &&
+            card.token.end == token.end
+    }
+
+    /**
+     * Подгружает ровно видимую иллюстрацию. Ресурс и декодирование идут вне
+     * Main, а небольшой LRU не позволяет длинной иллюстрированной книге
+     * удержать все растрированные страницы разом.
+     */
+    fun loadImage(path: String) {
+        if (path.isBlank()) return
+        imageCache[path]?.let {
+            touchImage(path)
+            return
+        }
+        if (imageJobs.containsKey(path)) return
+        val id = bookId ?: return
+        val openedHandle = handle ?: return
+        val session = generation
+        imageJobs[path] = viewModelScope.launch {
+            val bitmap = withContext(Dispatchers.Default) {
+                runCatching { core.bookResource(openedHandle, path) }
+                    .getOrNull()
+                    ?.let(::decodeImage)
+            }
+            imageJobs.remove(path)
+            if (!owns(session, id, openedHandle)) return@launch
+            rememberImage(path, bitmap)
+        }
+    }
+
+    private fun touchImage(path: String) {
+        imageOrder.remove(path)
+        imageOrder.add(path)
+    }
+
+    private fun rememberImage(path: String, bitmap: ImageBitmap?) {
+        imageCache.remove(path)?.let { imageCacheBytes -= it.bytes }
+        touchImage(path)
+        // После безопасной platform-decode считаем уже готовый растр. Это
+        // реальная память, а не размер сжатого JPEG в ZIP.
+        val bytes = bitmap?.let { it.width.toLong() * it.height.toLong() * 4L } ?: 0L
+        // Один растр не имеет права пробить весь бюджет LRU: лучше честно
+        // оставить caption, чем удержать 100+ MiB на одном развороте.
+        val cached = if (bytes > IMAGE_CACHE_BYTES) CachedImage(null, 0L) else CachedImage(bitmap, bytes)
+        imageCache[path] = cached
+        imageCacheBytes += cached.bytes
+        while (imageCacheBytes > IMAGE_CACHE_BYTES && imageOrder.size > 1) {
+            val evicted = imageOrder.removeAt(0)
+            imageCache.remove(evicted)?.let { imageCacheBytes -= it.bytes }
+        }
+        _images.value = imageCache.mapValues { it.value.bitmap }
+    }
+
+    private fun clearImages() {
+        imageJobs.values.forEach(Job::cancel)
+        imageJobs.clear()
+        imageCache.clear()
+        imageOrder.clear()
+        imageCacheBytes = 0L
+        _images.value = emptyMap()
+    }
+
+    /**
      * Открывает книгу библиотеки на том месте, где читатель остановился.
      *
      * Название и число глав ядро узнаёт только сейчас — при добавлении книги
@@ -177,6 +298,14 @@ class ReaderViewModel(
     fun open(book: LibraryBook) {
         closeCurrent()
         bookId = book.id
+        val session = generation
+        _withinChapterProgress.value = book.progress.withinChapter.coerceIn(0f, 1f)
+
+        _state.value = ReaderState(
+            loading = true,
+            savedLemmas = library.deck(book.id).map { it.lemma }.toSet(),
+            startAt = book.progress.withinChapter,
+        )
 
         // Колода читается из библиотеки подпиской, а не копией: слово можно
         // убрать и на экране повторений, и подсветка на странице обязана
@@ -184,20 +313,21 @@ class ReaderViewModel(
         deckJob = viewModelScope.launch {
             library.state.collect { current ->
                 val deck = current.deck(book.id).map { it.lemma }.toSet()
-                _state.update { it.copy(savedLemmas = deck) }
+                if (owns(session, book.id)) {
+                    _state.update { it.copy(savedLemmas = deck) }
+                }
             }
         }
 
-        viewModelScope.launch {
-            _state.update {
-                ReaderState(
-                    loading = true,
-                    savedLemmas = library.deck(book.id).map { it.lemma }.toSet(),
-                    startAt = book.progress.withinChapter,
-                )
-            }
+        openJob = viewModelScope.launch {
             try {
                 val opened = withContext(Dispatchers.Default) { core.openBook(book.path) }
+                if (!owns(session, book.id)) {
+                    // `openBook` успел создать именно свой handle уже после
+                    // отмены: освобождаем его, не трогая handle новой сессии.
+                    withContext(Dispatchers.Default) { core.closeBook(opened.handle) }
+                    return@launch
+                }
                 handle = opened.handle
                 val title = opened.info.title?.takeIf { it.isNotBlank() } ?: book.title
                 _state.update {
@@ -211,16 +341,24 @@ class ReaderViewModel(
                         },
                     )
                 }
-                library.describe(
-                    id = book.id,
-                    title = title,
-                    author = opened.info.author,
-                    chapters = opened.info.chapters.size,
+                withContext(Dispatchers.Default) {
+                    library.describe(
+                        id = book.id,
+                        title = title,
+                        author = opened.info.author,
+                        chapters = opened.info.chapters.size,
+                    )
+                }
+                loadChapter(
+                    index = book.progress.chapter.coerceIn(0, (opened.info.chapters.size - 1).coerceAtLeast(0)),
+                    session = session,
+                    initialPlace = book.progress.withinChapter,
                 )
-                loadChapter(book.progress.chapter.coerceIn(0, (opened.info.chapters.size - 1).coerceAtLeast(0)))
             } catch (e: CoreException) {
-                _state.update {
-                    it.copy(loading = false, error = e.message ?: "книга не открылась")
+                if (owns(session, book.id)) {
+                    _state.update {
+                        it.copy(loading = false, error = e.message ?: "книга не открылась")
+                    }
                 }
             }
         }
@@ -269,14 +407,20 @@ class ReaderViewModel(
     fun planSegment(from: Int) {
         val handle = handle ?: return
         if (segmentWords <= 0) return
+        val id = bookId ?: return
+        val session = generation
         val index = _state.value.chapterIndex
-        viewModelScope.launch {
+        val words = segmentWords
+        segmentJob?.cancel()
+        segmentJob = viewModelScope.launch {
             val found = withContext(Dispatchers.Default) {
-                runCatching { core.chapterSegment(handle, index, from, segmentWords) }.getOrNull()
+                runCatching { core.chapterSegment(handle, index, from, words) }.getOrNull()
             }
             // Отрезок мерили по главе `index`; если читатель успел уйти в
             // другую, он описывает уже не тот текст.
-            _state.update { if (it.chapterIndex == index) it.copy(segment = found) else it }
+            if (owns(session, id, handle) && segmentWords == words) {
+                _state.update { if (it.chapterIndex == index) it.copy(segment = found) else it }
+            }
         }
     }
 
@@ -285,24 +429,40 @@ class ReaderViewModel(
         emphasizeStems = on
         val blocks = _state.value.blocks
         if (blocks.isEmpty()) return
+        val id = bookId ?: return
+        val session = generation
+        val openedHandle = handle ?: return
         val index = _state.value.chapterIndex
-        viewModelScope.launch {
+        anchorJob?.cancel()
+        anchorJob = viewModelScope.launch {
             val next = withContext(Dispatchers.Default) { blocks.withAnchors(core, on) }
             // Абзацы взяты из главы `index`, а якоря считались по одному
             // вызову ядра на абзац — за это время можно успеть перелистнуть.
             // Записать их обратно вслепую значит показать текст прошлой главы
             // под заголовком нынешней.
             _state.update {
-                if (it.chapterIndex == index && emphasizeStems == on) it.copy(blocks = next) else it
+                if (owns(session, id, openedHandle) && it.chapterIndex == index && emphasizeStems == on) {
+                    it.copy(blocks = next)
+                } else {
+                    it
+                }
             }
         }
     }
 
     /** Читает главу и разбирает её текст. */
-    fun loadChapter(index: Int) {
+    fun loadChapter(index: Int) = loadChapter(index, generation, initialPlace = null)
+
+    private fun loadChapter(index: Int, session: Long, initialPlace: Float?) {
         val handle = handle ?: return
+        val id = bookId ?: return
+        if (!owns(session, id, handle)) return
         flushPlace()
-        viewModelScope.launch {
+        invalidateCard()
+        chapterJob?.cancel()
+        anchorJob?.cancel()
+        segmentJob?.cancel()
+        chapterJob = viewModelScope.launch {
             _state.update { it.copy(loading = true, card = null) }
             try {
                 val (title, blocks) = withContext(Dispatchers.Default) {
@@ -316,6 +476,8 @@ class ReaderViewModel(
                     }
                     title to blocks.withAnchors(core, emphasizeStems)
                 }
+                if (!owns(session, id, handle)) return@launch
+                val restore = initialPlace?.coerceIn(0f, 1f) ?: 0f
                 _state.update {
                     it.copy(
                         loading = false,
@@ -324,6 +486,7 @@ class ReaderViewModel(
                         blocks = blocks,
                         // Новая глава — новый отрезок: старый мерил чужой текст.
                         segment = null,
+                        startAt = restore,
                         error = null,
                     )
                 }
@@ -333,12 +496,14 @@ class ReaderViewModel(
                 // «не сохраню».
                 // Переход к другой главе начинает её с начала: место внутри
                 // главы имеет смысл только для той главы, где его записали.
-                val restore = _state.value.startAt.takeIf { it > 0f } ?: 0f
                 lastReportedPlace = restore
-                bookId?.let { library.rememberProgress(it, index, restore) }
+                _withinChapterProgress.value = restore
+                library.rememberProgress(id, index, restore)
             } catch (e: CoreException) {
-                _state.update {
-                    it.copy(loading = false, error = e.message ?: "глава не прочиталась")
+                if (owns(session, id, handle)) {
+                    _state.update {
+                        it.copy(loading = false, error = e.message ?: "глава не прочиталась")
+                    }
                 }
             }
         }
@@ -360,6 +525,9 @@ class ReaderViewModel(
      * анимацию — он идёт параллельно и независимо.
      */
     fun onWordTap(block: Int, token: Token, parsed: ParsedText) {
+        val id = bookId ?: return
+        val session = generation
+        val request = ++cardGeneration
         val context = parsed.sentenceAt(token.start)?.text ?: token.text
 
         // Shell сразу — анимация не ждёт даже локального разбора.
@@ -396,6 +564,7 @@ class ReaderViewModel(
         }
 
         // Отменяем предыдущие запросы — новый тап перекрывает старый.
+        analysisJob?.cancel()
         definitionJob?.cancel()
         translationJob?.cancel()
 
@@ -407,7 +576,7 @@ class ReaderViewModel(
             val sentenceResult = sentence?.await()
             _state.update { current ->
                 val card = current.card ?: return@update current
-                if (current.selectedBlock != block || card.token.start != token.start) return@update current
+                if (!ownsCard(session, id, request, block, token)) return@update current
                 current.copy(
                     card = card.copy(
                         translation = when (wordResult) {
@@ -423,7 +592,7 @@ class ReaderViewModel(
         }
 
         // Локальный разбор одним переходом — в фоне, не блокируя анимацию.
-        viewModelScope.launch {
+        analysisJob = viewModelScope.launch {
             try {
                 val inspected = withContext(Dispatchers.Default) {
                     try {
@@ -436,7 +605,7 @@ class ReaderViewModel(
                     val sentenceTokens = inspected.toTokens(context)
                     _state.update { current ->
                         val card = current.card ?: return@update current
-                        if (current.selectedBlock != block || card.token.start != token.start) return@update current
+                        if (!ownsCard(session, id, request, block, token)) return@update current
                         current.copy(
                             card = card.copy(
                                 analysis = inspected.word,
@@ -451,12 +620,13 @@ class ReaderViewModel(
                         )
                     }
                     // Определение — после того как узнали лемму.
+                    if (!ownsCard(session, id, request, block, token)) return@launch
                     definitionJob?.cancel()
                     definitionJob = viewModelScope.launch {
                         val entry = dictionary.define(inspected.word.lemma)
                         _state.update { current ->
                             val card = current.card ?: return@update current
-                            if (current.selectedBlock != block || card.token.start != token.start) return@update current
+                            if (!ownsCard(session, id, request, block, token)) return@update current
                             current.copy(card = card.copy(definition = entry?.let(DefinitionState::Ready) ?: DefinitionState.Missing))
                         }
                     }
@@ -467,7 +637,7 @@ class ReaderViewModel(
                     val sentenceTokens = withContext(Dispatchers.Default) { core.tokenize(context).tokens }
                     _state.update { current ->
                         val card = current.card ?: return@update current
-                        if (current.selectedBlock != block || card.token.start != token.start) return@update current
+                        if (!ownsCard(session, id, request, block, token)) return@update current
                         current.copy(
                             card = card.copy(
                                 analysis = analysis,
@@ -479,11 +649,13 @@ class ReaderViewModel(
                             ),
                         )
                     }
+                    if (!ownsCard(session, id, request, block, token)) return@launch
+                    definitionJob?.cancel()
                     definitionJob = viewModelScope.launch {
                         val entry = dictionary.define(analysis.lemma)
                         _state.update { current ->
                             val card = current.card ?: return@update current
-                            if (current.selectedBlock != block || card.token.start != token.start) return@update current
+                            if (!ownsCard(session, id, request, block, token)) return@update current
                             current.copy(card = card.copy(definition = entry?.let(DefinitionState::Ready) ?: DefinitionState.Missing))
                         }
                     }
@@ -495,8 +667,7 @@ class ReaderViewModel(
     }
 
     fun dismissCard() {
-        translationJob?.cancel()
-        definitionJob?.cancel()
+        invalidateCard()
         _state.update { it.copy(card = null, selectedBlock = -1) }
     }
 
@@ -576,9 +747,11 @@ class ReaderViewModel(
      */
     fun rememberPlace(withinChapter: Float) {
         val id = bookId ?: return
+        val place = withinChapter.coerceIn(0f, 1f)
+        _withinChapterProgress.value = place
         val previous = lastReportedPlace
-        if (previous != null && kotlin.math.abs(previous - withinChapter) < 0.02f) return
-        lastReportedPlace = withinChapter
+        if (previous != null && kotlin.math.abs(previous - place) < 0.02f) return
+        lastReportedPlace = place
 
         // Запись библиотеки — это сериализация всего списка книг и карточек и
         // поход на диск. Во время быстрой прокрутки доля меняется десятки раз
@@ -587,12 +760,12 @@ class ReaderViewModel(
         // значение дописывается при закрытии книги и при смене главы.
         val now = clock()
         if (now - lastWriteAt < WRITE_EVERY) {
-            pendingPlace = withinChapter
+            pendingPlace = place
             return
         }
         lastWriteAt = now
         pendingPlace = null
-        library.rememberProgress(id, _state.value.chapterIndex, withinChapter)
+        writeProgress(id, _state.value.chapterIndex, place)
     }
 
     /** Дописывает отложенную долю главы: при смене главы и при закрытии книги. */
@@ -601,19 +774,61 @@ class ReaderViewModel(
         val place = pendingPlace ?: return
         pendingPlace = null
         lastWriteAt = clock()
-        library.rememberProgress(id, _state.value.chapterIndex, place)
+        writeProgress(id, _state.value.chapterIndex, place)
+    }
+
+    private fun writeProgress(id: String, chapter: Int, place: Float) {
+        // CoreSession.run может сериализовать всю библиотеку. Даже раз в три
+        // секунды это недопустимо на scroll callback. На закрытии последняя
+        // отложенная доля добавляется в эту же последовательную очередь.
+        progressJob = viewModelScope.launch(Dispatchers.Default) {
+            // Порядок важнее отмены: старый progress не должен завершиться
+            // после более нового и вернуть книгу назад на пару процентов.
+            progressMutex.withLock { library.rememberProgress(id, chapter, place) }
+        }
+    }
+
+    /**
+     * Завершает уже поставленную в очередь запись перед закрытием Session.
+     *
+     * Это только путь завершения процесса, не scroll hot path. Ограничение
+     * времени не даёт зависшему диску повесить выход из приложения навечно.
+     */
+    fun flushProgressBlocking(timeoutMs: Long = 1_500L) {
+        runBlocking {
+            withTimeoutOrNull(timeoutMs) {
+                progressMutex.withLock { }
+            }
+        }
     }
 
     /** Закрывает книгу, не закрывая экран, — перед открытием следующей. */
     fun closeCurrent() {
+        // Сначала инвалидируем все результаты. Отмена coroutine не может
+        // прервать уже начатый JNA/сетевой вызов, а проверка generation может.
+        generation += 1
+        invalidateCard()
+        openJob?.cancel()
+        chapterJob?.cancel()
+        anchorJob?.cancel()
+        segmentJob?.cancel()
+        openJob = null
+        chapterJob = null
+        anchorJob = null
+        segmentJob = null
         flushPlace()
         deckJob?.cancel()
         deckJob = null
-        handle?.let(core::closeBook)
+        val closingHandle = handle
         handle = null
         bookId = null
         lastReportedPlace = null
         pendingPlace = null
+        _withinChapterProgress.value = 0f
+        clearImages()
+        // Закрываем ровно тот handle, который принадлежал предыдущей
+        // сессии; запоздавший `open` закрывает свой handle выше сам.
+        closingHandle?.let(core::closeBook)
         // Место в книге изменилось — виджет на рабочем столе должен узнать об
         // этом сейчас, а не через полчаса, когда система соберётся сама.
         // Именно здесь, а не в flushPlace: тот зовётся раз в три секунды на
@@ -622,9 +837,22 @@ class ReaderViewModel(
         refreshBookNudge()
     }
 
+    /** Отменяет всю цепочку карточки и делает её результаты устаревшими. */
+    private fun invalidateCard() {
+        cardGeneration += 1
+        analysisJob?.cancel()
+        translationJob?.cancel()
+        definitionJob?.cancel()
+        analysisJob = null
+        translationJob = null
+        definitionJob = null
+    }
+
     private companion object {
         /** Как редко место в книге доходит до диска. */
         const val WRITE_EVERY = 3_000L
+        /** Не больше 32 MiB готовых растров на открытую книгу. */
+        const val IMAGE_CACHE_BYTES = 32L * 1024L * 1024L
     }
 
     override fun onCleared() {
@@ -663,16 +891,19 @@ private fun Chapter.toReaderBlocks(core: WolfyCore): List<ReaderBlock> {
     return blocks.map { block ->
         // Разбираем только то, по чему можно тапнуть: у разделителя и
         // картинки текста нет, и звать ядро ради них незачем.
-        val parsed = block.text?.takeIf { it.isNotBlank() }?.let(core::tokenize)
+        val text = block.readableText().orEmpty()
+        val parsed = text.takeIf { it.isNotBlank() }?.let(core::tokenize)
         val firstToken = if (parsed == null || parsed.tokens.isEmpty()) -1 else at
         if (parsed != null) at += parsed.tokens.size
         ReaderBlock(
             kind = block.kind,
-            text = block.text.orEmpty(),
+            text = text,
             level = block.level,
             parsed = parsed,
             imagePath = block.path,
             alt = block.alt,
+            source = block.source,
+            rows = block.rows,
             firstToken = firstToken,
         )
     }
@@ -685,23 +916,48 @@ private fun Chapter.toReaderBlocks(core: WolfyCore): List<ReaderBlock> {
  * Построение блоков повторяет `Chapter::plain_text` — пустая строка между
  * текстовыми блоками, и гарантирует те же индексы, что и прямая токенизация.
  */
-private fun PreparedChapter.toReaderBlocks(): List<ReaderBlock> {
+internal fun PreparedChapter.toReaderBlocks(): List<ReaderBlock> {
     val plain = plainText()
-    // Глобальные токены с текстом, нарезанным из plain (UTF-16 совместимо)
-    val globalTokens = tokens.map { c ->
-        Token(
-            kind = c.kind,
-            start = c.start,
-            end = c.end,
-            text = plain.substring(c.start, c.end),
-        )
-    }
-    var at = 0
-    var firstText = true
-    val out = mutableListOf<ReaderBlock>()
+    // Курсоры проходят компактные массивы один раз. Прежняя версия для
+    // каждого блока заново фильтровала все токены и предложения, а затем ещё
+    // считала префикс токенов для каждого предложения: большая глава
+    // превращалась в O(blocks * tokens). Смещения JVM строк — UTF-16, как и
+    // у FFI, поэтому нарезка безопасна и для emoji/non-BMP.
+    var tokenCursor = 0
+    var sentenceCursor = 0
+    var plainAt = 0
+    var hasTextBefore = false
+    val out = ArrayList<ReaderBlock>(blocks.size)
     for (block in blocks) {
-        val text = block.text.orEmpty()
-        val isText = !block.text.isNullOrBlank() && block.kind != "image" && block.kind != "divider"
+        val blockText = block.readableText()
+        val text = blockText.orEmpty()
+        val blockStart: Int
+        val blockEnd: Int
+        if (blockText != null) {
+            if (hasTextBefore) plainAt += 2
+            blockStart = plainAt
+            blockEnd = blockStart + blockText.length
+            plainAt = blockEnd
+            hasTextBefore = true
+        } else {
+            blockStart = plainAt
+            blockEnd = plainAt
+        }
+
+        // Пропускаем данные до текущего блока. Корректный ответ ядра не даёт
+        // пересекающихся токенов, но `end <= start` делает путь устойчивым к
+        // пустому/старому ответу без квадратичного поиска.
+        while (tokenCursor < tokens.size && tokens[tokenCursor].end <= blockStart) tokenCursor++
+        val tokenStart = tokenCursor
+        while (tokenCursor < tokens.size && tokens[tokenCursor].start < blockEnd) tokenCursor++
+        val tokenEnd = tokenCursor
+
+        while (sentenceCursor < sentences.size && sentences[sentenceCursor].end <= blockStart) sentenceCursor++
+        val sentenceStart = sentenceCursor
+        while (sentenceCursor < sentences.size && sentences[sentenceCursor].start < blockEnd) sentenceCursor++
+        val sentenceEnd = sentenceCursor
+
+        val isText = !blockText.isNullOrBlank() && block.kind != "image" && block.kind != "divider"
         if (!isText) {
             out.add(
                 ReaderBlock(
@@ -711,43 +967,38 @@ private fun PreparedChapter.toReaderBlocks(): List<ReaderBlock> {
                     parsed = null,
                     imagePath = block.path,
                     alt = block.alt,
+                    source = block.source,
+                    rows = block.rows,
                 ),
             )
             continue
         }
-        if (!firstText) at += 2
-        firstText = false
-        val blockStart = at
-        val blockEnd = at + text.length
-        // Токены, принадлежащие блоку (фильтруем по глобальному start)
-        val indices = globalTokens.indices.filter { i ->
-            val s = globalTokens[i].start
-            s >= blockStart && s < blockEnd
-        }
-        val localTokens = indices.map { gi ->
-            val g = globalTokens[gi]
-            Token(
-                kind = g.kind,
-                start = g.start - blockStart,
-                end = g.end - blockStart,
-                text = g.text,
+
+        val localTokens = ArrayList<Token>(tokenEnd - tokenStart)
+        for (globalIndex in tokenStart until tokenEnd) {
+            val token = tokens[globalIndex]
+            // Некорректное пересечение границы не должно ронять книгу.
+            if (token.start < blockStart || token.end > blockEnd) continue
+            localTokens += Token(
+                kind = token.kind,
+                start = token.start - blockStart,
+                end = token.end - blockStart,
+                text = plain.substring(token.start, token.end),
             )
         }
-        // Предложения блока — те, чей start внутри блока
-        val localSentences = sentences
-            .filter { it.start >= blockStart && it.start < blockEnd }
-            .map { s ->
-                // Мапим token indexes
-                val localFirst = indices.count { it < s.firstToken }
-                val localLast = indices.count { it < s.lastToken }
-                Sentence(
-                    start = s.start - blockStart,
-                    end = s.end - blockStart,
-                    firstToken = localFirst,
-                    lastToken = localLast,
-                    text = plain.substring(s.start, s.end),
-                )
-            }
+
+        val localSentences = ArrayList<Sentence>(sentenceEnd - sentenceStart)
+        for (globalIndex in sentenceStart until sentenceEnd) {
+            val sentence = sentences[globalIndex]
+            if (sentence.start < blockStart || sentence.end > blockEnd) continue
+            localSentences += Sentence(
+                start = sentence.start - blockStart,
+                end = sentence.end - blockStart,
+                firstToken = (sentence.firstToken - tokenStart).coerceIn(0, localTokens.size),
+                lastToken = (sentence.lastToken - tokenStart).coerceIn(0, localTokens.size),
+                text = plain.substring(sentence.start, sentence.end),
+            )
+        }
         val parsed = if (localTokens.isEmpty() && localSentences.isEmpty()) null else ParsedText(
             tokens = localTokens,
             sentences = localSentences,
@@ -760,10 +1011,11 @@ private fun PreparedChapter.toReaderBlocks(): List<ReaderBlock> {
                 parsed = parsed,
                 imagePath = block.path,
                 alt = block.alt,
-                firstToken = indices.firstOrNull() ?: -1,
+                source = block.source,
+                rows = block.rows,
+                firstToken = tokenStart.takeIf { tokenEnd > tokenStart } ?: -1,
             ),
         )
-        at = blockEnd
     }
     return out
 }

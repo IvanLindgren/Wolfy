@@ -97,6 +97,17 @@ char *wolfy_book_metadata(int64_t handle);
  */
 char *wolfy_book_chapter(int64_t handle, size_t index);
 
+/*
+ * Загружает бинарный ресурс открытой книги (например, иллюстрацию EPUB).
+ *
+ * Байты не Base64/JSON: это не создаёт лишнюю копию в памяти. При успехе
+ * возвращает указатель и записывает длину в out_len. Освободите результат
+ * ровно один раз wolfy_bytes_free(pointer, out_len). При ошибке возвращает
+ * NULL, out_len становится 0, подробность доступна через wolfy_last_error.
+ */
+uint8_t *wolfy_book_resource(int64_t handle, const char *path, size_t *out_len);
+void wolfy_bytes_free(uint8_t *bytes, size_t len);
+
 /* Закрывает книгу и отпускает её файл. Неизвестный номер безопасен. */
 void wolfy_book_close(int64_t handle);
 

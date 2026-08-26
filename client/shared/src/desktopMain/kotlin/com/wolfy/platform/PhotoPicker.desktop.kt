@@ -2,12 +2,16 @@ package com.wolfy.platform
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.rememberCoroutineScope
 import java.awt.FileDialog
 import java.awt.Frame
 import java.awt.image.BufferedImage
 import java.io.ByteArrayOutputStream
 import java.io.File
 import javax.imageio.ImageIO
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Выбор снимка на Windows.
@@ -22,6 +26,7 @@ actual fun rememberPhotoPicker(
     onPicked: (PickedPhoto) -> Unit,
 ): () -> Unit {
     val callback = rememberUpdatedState(onPicked)
+    val scope = rememberCoroutineScope()
 
     return {
         val dialog = FileDialog(null as Frame?, "Выберите снимок страницы", FileDialog.LOAD)
@@ -32,13 +37,13 @@ actual fun rememberPhotoPicker(
         val name = dialog.file
         if (directory != null && name != null) {
             val file = File(directory, name)
-            if (file.isFile) {
-                callback.value(
-                    PickedPhoto(
-                        bytes = compressPhoto(file.readBytes()),
-                        mime = "image/jpeg",
-                    ),
-                )
+            scope.launch {
+                val photo = withContext(Dispatchers.Default) {
+                    if (!file.isFile) return@withContext null
+                    val bytes = runCatching { file.readBytes() }.getOrNull() ?: return@withContext null
+                    PickedPhoto(bytes = compressPhoto(bytes), mime = "image/jpeg")
+                }
+                photo?.let(callback.value)
             }
         }
     }

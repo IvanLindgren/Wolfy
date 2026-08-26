@@ -92,7 +92,7 @@ fun CatalogScreen(
             )
             Text(
                 text = "Открытая библиотека: свободные книги на английском. " +
-                    "Найдите классику — от Конан Дойла до Уэллса.",
+                    "Найдите классику от Конан Дойла до Уэллса.",
                 style = WolfyTheme.typography.caption,
                 color = colors.inkMuted,
             )

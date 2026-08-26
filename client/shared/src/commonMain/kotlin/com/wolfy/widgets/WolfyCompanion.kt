@@ -6,7 +6,6 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -37,6 +36,9 @@ import androidx.compose.ui.unit.dp
 import com.wolfy.resources.Res
 import com.wolfy.resources.wolfy_card
 import com.wolfy.theme.WolfyTheme
+import com.wolfy.theme.paced
+import com.wolfy.theme.settling
+import com.wolfy.theme.still
 import kotlin.math.abs
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.painterResource
@@ -70,15 +72,24 @@ fun WolfyCompanion(
 
     // Дыхание: Вульфи живой и когда его не трогают. Три процента за две
     // секунды — на грани заметности, как и огонёк серии.
-    val breath by rememberInfiniteTransition(label = "wolfy").animateFloat(
-        initialValue = 1f,
-        targetValue = 1.03f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 2_000),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "breath",
-    )
+    //
+    // В тишине он не дышит вовсе. Движение, которое идёт само и не
+    // прекращается, — первое, от чего избавляются, включая «уменьшить
+    // движение»; отвечать на прикосновение это ему не мешает.
+    val motion = WolfyTheme.motion
+    val breath = if (motion.still) {
+        1f
+    } else {
+        rememberInfiniteTransition(label = "wolfy").animateFloat(
+            initialValue = 1f,
+            targetValue = 1.03f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 2_000),
+                repeatMode = RepeatMode.Reverse,
+            ),
+            label = "breath",
+        ).value
+    }
 
     // Направление предыдущего движения и сколько прошли в нём. Перемена
     // направления — это и есть одно поглаживание; считать по расстоянию
@@ -89,14 +100,16 @@ fun WolfyCompanion(
     Box(
         modifier
             .size(size)
-            .pointerInput(Unit) {
+            // Ключ — темп: в тишине возврат должен быть мгновенным, а
+            // захваченное лямбдой значение само не меняется.
+            .pointerInput(motion) {
                 detectDragGestures(
                     onDragEnd = {
                         stroke.reset()
                         scope.launch {
-                            tilt.animateTo(0f, spring(dampingRatio = Spring.DampingRatioMediumBouncy))
+                            tilt.animateTo(0f, motion.settling(Spring.DampingRatioMediumBouncy))
                         }
-                        scope.launch { squish.animateTo(1f, spring()) }
+                        scope.launch { squish.animateTo(1f, motion.settling()) }
                     },
                 ) { change, drag ->
                     change.consume()
@@ -112,13 +125,13 @@ fun WolfyCompanion(
                     }
                 }
             }
-            .pointerInput(Unit) {
+            .pointerInput(motion) {
                 detectTapGestures {
                     // Тычок — не ласка, но и без ответа его оставлять нельзя:
                     // короткий кивок говорит, что здесь вообще что-то живое.
                     scope.launch {
-                        squish.animateTo(0.9f, spring(stiffness = Spring.StiffnessHigh))
-                        squish.animateTo(1f, spring(dampingRatio = Spring.DampingRatioMediumBouncy))
+                        squish.animateTo(0.9f, motion.settling(stiffness = Spring.StiffnessHigh))
+                        squish.animateTo(1f, motion.settling(Spring.DampingRatioMediumBouncy))
                     }
                 }
             },
@@ -188,8 +201,12 @@ private class StrokeCounter {
 private fun FloatingHeart(color: Color, onDone: () -> Unit) {
     val rise = remember { Animatable(0f) }
 
+    val motion = WolfyTheme.motion
     LaunchedEffect(Unit) {
-        rise.animateTo(1f, tween(durationMillis = 1_100))
+        // Вдвое дольше самого долгого хода интерфейса: сердечко должно успеть
+        // всплыть и растаять, а не мигнуть. Число берётся из темпа, поэтому в
+        // тишине оно исчезает сразу — как и всё остальное.
+        rise.animateTo(1f, motion.paced(motion.flight * 2))
         onDone()
     }
 

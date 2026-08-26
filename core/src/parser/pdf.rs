@@ -157,13 +157,13 @@ impl Book for PdfBook {
 /// Режет извлечённый текст на главы по страницам.
 fn split_pages(pages: &[String]) -> Vec<Chapter> {
     let mut chapters = Vec::new();
-    for (number, page) in pages.iter().enumerate() {
+    for (index, page) in pages.iter().enumerate() {
         chapters.push(Chapter {
-            title: Some(format!("Страница {}", number + 1)),
+            title: Some(format!("Страница {}", index + 1)),
             // Пустая страница остаётся в книге: если её выкинуть, номер в
             // читалке перестанет совпадать с напечатанной колонцифрой, а
             // прогресс сдвинется после каждой иллюстрации без текстового слоя.
-            blocks: page_blocks(page),
+            blocks: page_blocks(page, index + 1),
         });
     }
 
@@ -177,31 +177,44 @@ fn split_pages(pages: &[String]) -> Vec<Chapter> {
 ///
 /// В извлечённом тексте строки обрезаны по ширине листа, поэтому абзац
 /// приходится склеивать обратно: новая строка продолжает предыдущую, если та
-/// не кончилась знаком препинания. Перенос слова через дефис в конце строки
-/// снимается — иначе «biblio-» и «graphy» стали бы двумя словами и ни одно из
-/// них не нашлось бы в словаре.
-fn page_blocks(page: &str) -> Vec<Block> {
+/// не кончилась знаком препинания.
+///
+/// Дефис в конце строки не выбрасывается: «well-\nknown» может быть и
+/// переносом, и честным составным словом на дефисе, а «state-of-\nthe-art»
+/// без дефиса превращается в кашу. Строки склеиваются без пробела, дефис
+/// остаётся на месте. Мягкий перенос (U+00AD) — единственный, чьё назначение
+/// однозначно: он служебный и убирается совсем.
+///
+/// Колонцифра вырезается только по совпадению контекста: строка стоит первой
+/// или последней на странице И равна её физическому номеру. Любое другое
+/// число («1984», год издания посреди страницы) — это содержимое.
+fn page_blocks(page: &str, page_number: usize) -> Vec<Block> {
     let mut blocks = Vec::new();
     let mut paragraph = String::new();
 
     let finish = |paragraph: &mut String, blocks: &mut Vec<Block>| {
         let text = paragraph.trim().to_string();
         paragraph.clear();
-        if !text.is_empty() && !is_page_number(&text) {
+        if !text.is_empty() {
             blocks.push(Block::Paragraph(text));
         }
     };
 
     for line in page.lines() {
+        // Мягкий перенос в начале строки не снимаем: он снимется при
+        // склейке, иначе потеряется признак «приклеить без пробела».
         let line = line.trim();
         if line.is_empty() {
             finish(&mut paragraph, &mut blocks);
             continue;
         }
 
-        if let Some(head) = paragraph.strip_suffix('-') {
-            // Перенос: приклеиваем без пробела.
-            paragraph = head.to_string();
+        if paragraph.ends_with('-') || paragraph.ends_with('\u{00ad}') {
+            // Перенос или составное слово: приклеиваем без пробела; обычный
+            // дефис сохраняем как часть слова, мягкий — снимаем.
+            if paragraph.ends_with('\u{00ad}') {
+                paragraph.pop();
+            }
             paragraph.push_str(line);
         } else {
             if !paragraph.is_empty() {
@@ -218,13 +231,30 @@ fn page_blocks(page: &str) -> Vec<Block> {
     }
 
     finish(&mut paragraph, &mut blocks);
+
+    // Колонцифра: только крайний блок и только при совпадении с номером.
+    for edge in [0, blocks.len().saturating_sub(1)] {
+        if blocks.len() < 2 {
+            break;
+        }
+        if matches_page_number(blocks[edge].text(), page_number) {
+            blocks.remove(edge);
+            break;
+        }
+    }
     blocks
 }
 
-/// Колонцифра: строка из одного числа. В текст книги она попадать не должна.
-fn is_page_number(text: &str) -> bool {
-    let trimmed = text.trim_matches(|c: char| !c.is_alphanumeric());
-    !trimmed.is_empty() && trimmed.chars().all(|c| c.is_ascii_digit())
+/// Крайняя строка — напечатанная колонцифра этой страницы?
+fn matches_page_number(text: Option<&str>, page_number: usize) -> bool {
+    let Some(text) = text else { return false };
+    let trimmed = text.trim_matches(|c: char| !c.is_ascii_digit());
+    if trimmed.is_empty() || !trimmed.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    trimmed
+        .parse::<usize>()
+        .is_ok_and(|value| value == page_number)
 }
 
 #[cfg(test)]
@@ -235,7 +265,7 @@ mod tests {
     fn строки_склеиваются_обратно_в_абзац() {
         let page = "The library smelled of dust,\nleather and old paper.";
         assert_eq!(
-            page_blocks(page),
+            page_blocks(page, 1),
             vec![Block::Paragraph(
                 "The library smelled of dust, leather and old paper.".to_string()
             )]
@@ -243,12 +273,23 @@ mod tests {
     }
 
     #[test]
-    fn перенос_через_дефис_снимается() {
-        // Иначе «biblio» и «graphy» пошли бы в словарь двумя словами, и ни
-        // одно из них там не нашлось бы.
-        let page = "She studied the biblio-\ngraphy for hours.";
+    fn перенос_сохраняет_дефис_в_составных_словах() {
+        // «well-known» и «state-of-the-art» — честные составные слова:
+        // выбрасывать дефис нельзя, иначе получится «wellknown».
+        let page = "It was a well-\nknown fact about state-of-\nthe-art printers.";
         assert_eq!(
-            page_blocks(page),
+            page_blocks(page, 1),
+            vec![Block::Paragraph(
+                "It was a well-known fact about state-of-the-art printers.".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn мягкий_перенос_снимается() {
+        let page = "She studied the biblio\u{00ad}\ngraphy for hours.";
+        assert_eq!(
+            page_blocks(page, 1),
             vec![Block::Paragraph(
                 "She studied the bibliography for hours.".to_string()
             )]
@@ -259,7 +300,7 @@ mod tests {
     fn пустая_строка_кончает_абзац() {
         let page = "First paragraph text.\n\nSecond paragraph text.";
         assert_eq!(
-            page_blocks(page),
+            page_blocks(page, 1),
             vec![
                 Block::Paragraph("First paragraph text.".to_string()),
                 Block::Paragraph("Second paragraph text.".to_string()),
@@ -268,11 +309,55 @@ mod tests {
     }
 
     #[test]
-    fn колонцифра_не_попадает_в_текст() {
+    fn колонцифра_совпадающая_со_страницей_убирается() {
+        // Последняя строка страницы 87 — «87»: это напечатанный номер.
         let page = "The door opened.\n\n87";
         assert_eq!(
-            page_blocks(page),
+            page_blocks(page, 87),
             vec![Block::Paragraph("The door opened.".to_string())]
+        );
+        // Первая строка тоже может быть колонцифрой.
+        let page = "42\n\nThe door opened.";
+        assert_eq!(
+            page_blocks(page, 42),
+            vec![Block::Paragraph("The door opened.".to_string())]
+        );
+    }
+
+    #[test]
+    fn число_не_совпавшее_с_номером_остаётся_текстом() {
+        let page = "In 1984 everything changed.\n\n7";
+        assert_eq!(
+            page_blocks(page, 3),
+            vec![
+                Block::Paragraph("In 1984 everything changed.".to_string()),
+                Block::Paragraph("7".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn название_1984_не_вырезается() {
+        let page = "1984\n\nGeorge Orwell wrote a grim novel.";
+        assert_eq!(
+            page_blocks(page, 2).len(),
+            2,
+            "«1984» в начале не той страницы — это текст"
+        );
+    }
+
+    #[test]
+    fn пустая_и_скан_страницы_в_смеси_сохраняются() {
+        let pages = vec![
+            "First page text.".to_string(),
+            String::new(),
+            "Text on scanned-mixed third.".to_string(),
+        ];
+        let chapters = split_pages(&pages);
+        assert_eq!(chapters.len(), 3);
+        assert!(
+            chapters[1].blocks.is_empty(),
+            "скан-страница не молча исчезает"
         );
     }
 

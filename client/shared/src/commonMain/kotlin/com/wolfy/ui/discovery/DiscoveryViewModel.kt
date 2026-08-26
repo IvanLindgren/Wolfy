@@ -17,6 +17,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -43,7 +44,19 @@ class DiscoveryViewModel(
     val state: StateFlow<DiscoveryUiState> = _state.asStateFlow()
 
     init {
-        if (session.token.value != null) refresh()
+        // ViewModel создаётся до того, как читатель войдёт в общий аккаунт.
+        // Поэтому одного снимка token при создании мало: лента должна сразу
+        // заметить вход и выход, сделанные на основном экране аккаунта.
+        viewModelScope.launch {
+            session.token.collectLatest { token ->
+                if (token == null) {
+                    _state.value = DiscoveryUiState()
+                } else {
+                    change { it.copy(signedIn = true, message = null) }
+                    refresh()
+                }
+            }
+        }
     }
 
     fun setEmail(value: String) = change { it.copy(email = value, message = null) }
@@ -68,7 +81,6 @@ class DiscoveryViewModel(
                 is LoginResult.Ready -> {
                     session.save(result.token)
                     change { it.copy(signedIn = true, loading = false, password = "") }
-                    refresh()
                 }
             }
         }

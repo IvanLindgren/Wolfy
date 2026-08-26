@@ -72,6 +72,13 @@ interface WolfyCore {
      */
     fun readChapter(handle: Long, index: Int): Chapter
 
+    /**
+     * Бинарный ресурс открытой книги. Возвращается только по запросу видимого
+     * блока; `null` означает отсутствующий/повреждённый/неподдерживаемый
+     * ресурс и должен деградировать в подпись картинки.
+     */
+    fun bookResource(handle: Long, path: String): ByteArray?
+
     /** Закрывает книгу и отпускает файл. */
     fun closeBook(handle: Long)
 
@@ -480,7 +487,7 @@ data class PreparedChapter(
      *
      * Тот же `plainText()`, что у [Chapter]: блоки склеиваются "\n\n".
      */
-    fun plainText(): String = blocks.mapNotNull { it.text }.joinToString("\n\n")
+    fun plainText(): String = blocks.mapNotNull { it.readableText() }.joinToString("\n\n")
 
     /**
      * Токены, восстановленные из компактного представления нарезанием строки главы.
@@ -580,7 +587,7 @@ data class Chapter(
      * фразе и уехал в контекст перевода вместе с ней.
      */
     fun plainText(): String = blocks
-        .mapNotNull { it.text }
+        .mapNotNull { it.readableText() }
         .joinToString("\n\n")
 }
 
@@ -592,7 +599,7 @@ data class Chapter(
  */
 @Serializable
 data class Block(
-    /** `heading`, `paragraph`, `quote`, `listItem`, `image` или `divider`. */
+    /** `heading`, `paragraph`, `quote`, `listItem`, `image`, `divider`, `math`, `table` или `pre`. */
     val kind: String,
     val text: String? = null,
     /** Уровень заголовка: 1 — часть, 2 — глава. */
@@ -600,7 +607,20 @@ data class Block(
     /** Путь к иллюстрации внутри книги. */
     val path: String? = null,
     val alt: String? = null,
+    /** Исходник MathML/TeX: fallback формулы находится в [text]. */
+    val source: String? = null,
+    /** Структура таблицы: границы строк и ячеек не теряются в FFI. */
+    val rows: List<List<String>>? = null,
 )
+
+/** Точно повторяет text fallback ядра для prepared-token offsets. */
+internal fun Block.readableText(): String? = text ?: rows
+    ?.asSequence()
+    ?.flatMap { it.asSequence() }
+    ?.map(String::trim)
+    ?.filter(String::isNotEmpty)
+    ?.joinToString(" ")
+    ?.takeIf(String::isNotEmpty)
 
 /**
  * Создаёт ядро для текущей платформы.

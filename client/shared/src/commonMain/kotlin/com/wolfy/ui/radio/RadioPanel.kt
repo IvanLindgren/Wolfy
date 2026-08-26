@@ -20,6 +20,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.focus.onFocusChanged
 import com.wolfy.platform.DefaultStations
 import com.wolfy.platform.RadioState
 import com.wolfy.platform.RadioStation
@@ -56,7 +57,7 @@ fun RadioPanel(
         SectionLabel("Радио под чтение")
         Text(
             text = "Ровный фон помогает не всем, поэтому по умолчанию тихо и " +
-                "выключено. Станции инструментальные: голос в фоне — это второй " +
+                "выключено. Станции инструментальные. Голос в фоне становится вторым " +
                 "текст, и читать под него нельзя.",
             style = WolfyTheme.typography.caption,
             color = colors.inkMuted,
@@ -84,7 +85,7 @@ fun RadioPanel(
         )
         Text(
             text = "HTTPS-адрес потока. У того, кто слушает под чтение, любимая " +
-                "станция обычно уже есть — наш список для тех, у кого её нет.",
+                "станция обычно уже есть. Наш список пригодится, если своей ещё нет.",
             style = WolfyTheme.typography.caption,
             color = colors.inkMuted,
         )
@@ -102,12 +103,17 @@ fun RadioPanel(
                 value = draft,
                 onValueChange = {
                     draft = it
-                    onOwnUrl(it)
                 },
                 singleLine = true,
                 textStyle = WolfyTheme.typography.body.copy(color = colors.ink),
                 cursorBrush = SolidColor(colors.accent),
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    // Файл настроек синхронизируется с диском. Писать его на
+                    // каждый символ URL означает fsync на каждый keypress;
+                    // черновик живёт в поле, а сохраняется при уходе фокуса
+                    // или перед запуском своей станции.
+                    .onFocusChanged { focus -> if (!focus.isFocused) onOwnUrl(draft.trim()) },
                 decorationBox = { field ->
                     Box {
                         if (draft.isEmpty()) {
@@ -126,7 +132,8 @@ fun RadioPanel(
                 text = if (state.station?.id == "own" && state.playing) "выключить" else "включить",
                 style = WolfyTheme.typography.button,
                 color = if (own == null) colors.inkMuted else colors.accent,
-                modifier = Modifier.pressable(enabled = own != null) {
+            modifier = Modifier.pressable(enabled = own != null) {
+                    onOwnUrl(draft.trim())
                     if (state.station?.id == "own" && state.playing) onStop() else own?.let(onStation)
                 },
             )

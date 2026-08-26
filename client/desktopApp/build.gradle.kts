@@ -28,6 +28,7 @@ kotlin {
             // приложения: ей нужны сами примитивы, а не только окно.
             implementation(compose.foundation)
             implementation(compose.material3)
+            implementation(compose.components.resources)
         }
     }
 }
@@ -131,7 +132,19 @@ val wolfyServerUrl = providers.gradleProperty("wolfyServerUrl")
  * приложении нет ни терминала, ни его переменных среды, поэтому версия
  * запекается тем же способом, что и адрес API.
  */
-val wolfyVersion = "1.0.7"
+val wolfyVersion = "1.0.10"
+
+// Compose Desktop не всегда считает javaOptions входом app-image. Тогда MSI
+// получает новый ProductVersion, а launcher остаётся со старой версией и
+// адресом сервера из кэша. Автообновление сравнивает именно версию launcher,
+// поэтому оба значения объявлены явными входами упаковочных задач.
+tasks.matching {
+    it.name.contains("Distributable", ignoreCase = true) ||
+        it.name.contains("packageRelease", ignoreCase = true)
+}.configureEach {
+    inputs.property("wolfyVersion", wolfyVersion)
+    inputs.property("wolfyServerUrl", wolfyServerUrl)
+}
 
 // Путь к ядру для запуска из исходников.
 //
@@ -167,6 +180,10 @@ compose.desktop {
         // WOLFY_SERVER_URL при запуске всё ещё может его переопределить.
         jvmArgs += "-Dwolfy.server.url=${wolfyServerUrl.get()}"
         jvmArgs += "-Dwolfy.version=$wolfyVersion"
+        // Skiko FrameWatcher периодически вызывает System.gc() после серии
+        // кадров. На Windows это давало измеренную STW-паузу 63 мс. G1 сам
+        // выбирает безопасный момент для сборки, явные вызовы Wolfy не нужны.
+        jvmArgs += "-XX:+DisableExplicitGC"
 
         // JNA находит C-функции динамически. Обычный shrink/optimize не видит
         // эти обращения и удаляет в release-сборке необходимые методы самой

@@ -1,11 +1,10 @@
 package com.wolfy.ui.reader
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,6 +13,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -41,6 +41,9 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.unit.dp
 import com.wolfy.ui.card.WordCardSheet
 import com.wolfy.ui.nav.shortcuts
@@ -48,6 +51,7 @@ import com.wolfy.ui.nav.LocalKeyboard
 import androidx.compose.ui.backhandler.BackHandler
 import androidx.compose.runtime.derivedStateOf
 import com.wolfy.data.FocusMode
+import com.wolfy.platform.KeepScreenAwake
 import com.wolfy.theme.ReadingTheme
 import kotlinx.coroutines.delay
 import com.wolfy.theme.WolfyTheme
@@ -74,6 +78,8 @@ import com.wolfy.widgets.SectionLabel
 @Composable
 fun ReaderScreen(
     state: ReaderState,
+    withinChapterProgress: Float,
+    images: Map<String, ImageBitmap?>,
     onWordTap: (Int, com.wolfy.ffi.Token, com.wolfy.ffi.ParsedText) -> Unit,
     onDismissCard: () -> Unit,
     onSaveWord: () -> Unit,
@@ -85,22 +91,33 @@ fun ReaderScreen(
     onScrolled: (Float) -> Unit,
     onChapter: (Int) -> Unit,
     onOpenRule: (String) -> Unit,
+    onImageVisible: (String) -> Unit,
     theme: ReadingTheme,
     fontScale: Float,
     lineScale: Float,
     onThemeChange: (ReadingTheme) -> Unit,
     onFontScaleChange: (Float) -> Unit,
     onLineScaleChange: (Float) -> Unit,
+    emphasizeStems: Boolean,
+    onEmphasizeStems: (Boolean) -> Unit,
     /*
      * Помощь вниманию. Всё выключено по умолчанию и приезжает из настроек,
      * общих с браузером: включив окно на телефоне, читатель ждёт его и там.
      */
     focusMode: FocusMode = FocusMode.Off,
+    onFocusModeChange: (FocusMode) -> Unit = {},
     pacerWpm: Int = 0,
+    onPacerChange: (Int) -> Unit = {},
+    segmentWords: Int = 0,
+    onSegmentWordsChange: (Int) -> Unit = {},
     onNextSegment: (Int) -> Unit = {},
     onStopSegments: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
+    // Пока книга открыта, системный таймер не должен гасить экран посреди
+    // абзаца. Эффект сам снимает запрет при выходе из читалки.
+    KeepScreenAwake()
+
     val colors = WolfyTheme.colors
     var contentsOpen by remember { mutableStateOf(false) }
     var readingSettingsOpen by remember { mutableStateOf(false) }
@@ -135,7 +152,15 @@ fun ReaderScreen(
         val sentence = sentences.getOrNull(paceSentence)
         if (sentence == null) {
             paceSentence = 0
-            scroll.animateScrollToItem((activeBlock + 1).coerceAtMost(state.blocks.size))
+            val next = activeBlock + 1
+            if (next < state.blocks.size) {
+                scroll.animateScrollToItem(next)
+            } else {
+                // `size` не является допустимым индексом LazyColumn. На
+                // последнем блоке ведущая строка заканчивает ход спокойно,
+                // а не падает попыткой прокрутиться за главу.
+                pacing = false
+            }
             return@LaunchedEffect
         }
         // Время предложения — по числу слов в нём: «Yes.» и придаточное на
@@ -148,7 +173,12 @@ fun ReaderScreen(
             paceSentence += 1
         } else {
             paceSentence = 0
-            scroll.animateScrollToItem((activeBlock + 1).coerceAtMost(state.blocks.size))
+            val next = activeBlock + 1
+            if (next < state.blocks.size) {
+                scroll.animateScrollToItem(next)
+            } else {
+                pacing = false
+            }
         }
     }
 
@@ -217,25 +247,11 @@ fun ReaderScreen(
         Column(Modifier.fillMaxSize()) {
             ReaderTopBar(
                 state = state,
+                withinChapterProgress = withinChapterProgress,
                 onClose = onClose,
                 onOpenContents = { contentsOpen = true },
                 onOpenSettings = { readingSettingsOpen = !readingSettingsOpen },
             )
-            AnimatedVisibility(
-                visible = readingSettingsOpen,
-                enter = fadeIn() + expandVertically(),
-                exit = fadeOut() + shrinkVertically(),
-            ) {
-                ReaderQuickSettings(
-                    theme = theme,
-                    fontScale = fontScale,
-                    lineScale = lineScale,
-                    onThemeChange = onThemeChange,
-                    onFontScaleChange = onFontScaleChange,
-                    onLineScaleChange = onLineScaleChange,
-                )
-            }
-
             AttentionBar(
                 state = state,
                 activeBlock = activeBlock,
@@ -259,9 +275,41 @@ fun ReaderScreen(
                     onPreviousChapter = onPreviousChapter,
                     onNextChapter = onNextChapter,
                     onScrolled = onScrolled,
+                    images = images,
+                    onImageVisible = onImageVisible,
                     modifier = Modifier.weight(1f),
                 )
             }
+        }
+
+        // Это overlay, а не разворачивающийся блок в Column: открытие текста
+        // не меняет высоту viewport и не сдвигает строку, на которой читатель
+        // остановился.
+        AnimatedVisibility(
+            visible = readingSettingsOpen,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = 48.dp)
+                .zIndex(2f),
+        ) {
+            ReaderQuickSettings(
+                theme = theme,
+                fontScale = fontScale,
+                lineScale = lineScale,
+                onThemeChange = onThemeChange,
+                onFontScaleChange = onFontScaleChange,
+                onLineScaleChange = onLineScaleChange,
+                emphasizeStems = emphasizeStems,
+                onEmphasizeStems = onEmphasizeStems,
+                focusMode = focusMode,
+                onFocusModeChange = onFocusModeChange,
+                pacerWpm = pacerWpm,
+                onPacerChange = onPacerChange,
+                segmentWords = segmentWords,
+                onSegmentWordsChange = onSegmentWordsChange,
+            )
         }
 
         ContentsSheet(
@@ -290,6 +338,7 @@ fun ReaderScreen(
 @Composable
 private fun ReaderTopBar(
     state: ReaderState,
+    withinChapterProgress: Float,
     onClose: () -> Unit,
     onOpenContents: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -297,7 +346,8 @@ private fun ReaderTopBar(
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
     val progress = if (state.chapterCount > 0) {
-        (state.chapterIndex + 1).toFloat() / state.chapterCount
+        ((state.chapterIndex + withinChapterProgress.coerceIn(0f, 1f)) / state.chapterCount)
+            .coerceIn(0f, 1f)
     } else {
         0f
     }
@@ -352,6 +402,14 @@ private fun ReaderQuickSettings(
     onThemeChange: (ReadingTheme) -> Unit,
     onFontScaleChange: (Float) -> Unit,
     onLineScaleChange: (Float) -> Unit,
+    emphasizeStems: Boolean,
+    onEmphasizeStems: (Boolean) -> Unit,
+    focusMode: FocusMode,
+    onFocusModeChange: (FocusMode) -> Unit,
+    pacerWpm: Int,
+    onPacerChange: (Int) -> Unit,
+    segmentWords: Int,
+    onSegmentWordsChange: (Int) -> Unit,
 ) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
@@ -396,6 +454,75 @@ private fun ReaderQuickSettings(
             onLess = { onLineScaleChange(lineScale - 0.1f) },
             onMore = { onLineScaleChange(lineScale + 0.1f) },
         )
+        QuickSwitch(
+            title = "Выделять основу слова",
+            on = emphasizeStems,
+            onChange = onEmphasizeStems,
+        )
+        QuickChoice(
+            title = "Окно чтения",
+            choices = listOf(
+                FocusMode.Off to "нет",
+                FocusMode.Sentence to "фраза",
+                FocusMode.Paragraph to "абзац",
+            ),
+            selected = focusMode,
+            onChange = onFocusModeChange,
+        )
+        QuickChoice(
+            title = "Ведущая строка",
+            choices = listOf(0 to "нет", 160 to "тихо", 220 to "обычно", 300 to "быстро"),
+            selected = pacerWpm,
+            onChange = onPacerChange,
+        )
+        QuickChoice(
+            title = "Отрезок",
+            choices = listOf(0 to "нет", 150 to "короткий", 400 to "средний", 900 to "длинный"),
+            selected = segmentWords,
+            onChange = onSegmentWordsChange,
+        )
+    }
+}
+
+@Composable
+private fun QuickSwitch(title: String, on: Boolean, onChange: (Boolean) -> Unit) {
+    val colors = WolfyTheme.colors
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, style = WolfyTheme.typography.body, color = colors.ink)
+        Text(
+            text = if (on) "включено" else "выключено",
+            style = WolfyTheme.typography.caption,
+            color = if (on) colors.accent else colors.inkMuted,
+            modifier = Modifier.pressable { onChange(!on) },
+        )
+    }
+}
+
+@Composable
+private fun <T> QuickChoice(
+    title: String,
+    choices: List<Pair<T, String>>,
+    selected: T,
+    onChange: (T) -> Unit,
+) {
+    val colors = WolfyTheme.colors
+    val spacing = WolfyTheme.spacing
+    Column(verticalArrangement = Arrangement.spacedBy(spacing.tight)) {
+        Text(title, style = WolfyTheme.typography.body, color = colors.ink)
+        Row(horizontalArrangement = Arrangement.spacedBy(spacing.medium)) {
+            choices.forEach { (value, label) ->
+                Text(
+                    text = label,
+                    style = WolfyTheme.typography.caption,
+                    color = if (value == selected) colors.accent else colors.inkMuted,
+                    modifier = Modifier.pressable { onChange(value) },
+                )
+            }
+        }
     }
 }
 
@@ -435,6 +562,8 @@ private fun ChapterBody(
     onPreviousChapter: () -> Unit,
     onNextChapter: () -> Unit,
     onScrolled: (Float) -> Unit,
+    images: Map<String, ImageBitmap?>,
+    onImageVisible: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val spacing = WolfyTheme.spacing
@@ -452,15 +581,24 @@ private fun ChapterBody(
     }
 
     LaunchedEffect(scroll, state.chapterIndex) {
-        snapshotFlow { scroll.firstVisibleItemIndex }
-            .collect { first ->
-                val total = scroll.layoutInfo.totalItemsCount
-                // Доля считается по номеру первого видимого блока, а не по
-                // пикселям: блоки разной высоты, и точность в пикселях всё
-                // равно была бы обманчивой. Для «вернуться туда же» хватает
-                // и такой.
-                if (total > 1) onScrolled(first.toFloat() / (total - 1))
+        snapshotFlow {
+            val layout = scroll.layoutInfo
+            val total = layout.totalItemsCount
+            if (total <= 1) {
+                0f
+            } else {
+                val first = scroll.firstVisibleItemIndex.coerceIn(0, total - 1)
+                val item = layout.visibleItemsInfo.firstOrNull { it.index == first }
+                // В длинном единственном абзаце индекс всегда нулевой. Его
+                // смещение внутри viewport всё равно сообщает, какую часть
+                // блока читатель уже прошёл, и именно оно не даёт 0% до
+                // самого конца главы.
+                val inItem = item?.let {
+                    (-it.offset).toFloat().coerceAtLeast(0f) / it.size.coerceAtLeast(1)
+                }?.coerceIn(0f, 1f) ?: 0f
+                ((first + inItem) / (total - 1).toFloat()).coerceIn(0f, 1f)
             }
+        }.collect { onScrolled(it) }
     }
 
     // Ленивый список, а не прокручиваемая колонка: глава романа — это сотни
@@ -482,7 +620,10 @@ private fun ChapterBody(
         ),
         verticalArrangement = Arrangement.spacedBy(spacing.medium),
     ) {
-        itemsIndexed(state.blocks) { index, block ->
+        itemsIndexed(
+            items = state.blocks,
+            contentType = { _, block -> block.kind },
+        ) { index, block ->
             BlockView(
                 index = index,
                 block = block,
@@ -501,6 +642,8 @@ private fun ChapterBody(
                 // Иначе абзац с тем же смещением подсветит своё слово заодно —
                 // смещения у блоков считаются каждое от своего начала.
                 selected = state.card?.token?.takeIf { index == state.selectedBlock },
+                image = block.imagePath?.let(images::get),
+                onImageVisible = onImageVisible,
                 onWordTap = onWordTap,
             )
         }
@@ -525,6 +668,8 @@ private fun BlockView(
     dimmed: Boolean,
     bright: IntRange?,
     selected: com.wolfy.ffi.Token?,
+    image: ImageBitmap?,
+    onImageVisible: (String) -> Unit,
     onWordTap: (Int, com.wolfy.ffi.Token, com.wolfy.ffi.ParsedText) -> Unit,
 ) {
     val parsed = block.parsed
@@ -561,7 +706,7 @@ private fun BlockView(
 
         "listItem" -> if (parsed != null) {
             Row {
-                Text("— ", style = WolfyTheme.typography.reader, color = WolfyTheme.colors.inkMuted)
+                Text("• ", style = WolfyTheme.typography.reader, color = WolfyTheme.colors.inkMuted)
                 ReaderParagraph(
                     parsed = parsed,
                     saved = savedLemmas,
@@ -584,9 +729,71 @@ private fun BlockView(
             )
         }
 
-        // Иллюстрации появятся вместе с загрузкой ресурсов из книги; пока
-        // показываем подпись, чтобы место картинки не пропадало молча.
-        "image" -> block.alt?.let { SectionLabel(it) }
+        "image" -> {
+            block.imagePath?.let { path ->
+                // При вытеснении из LRU `image` меняется на null: эффект
+                // попросит ресурс заново только если этот блок всё ещё
+                // видим, а не оставит его подписью навсегда.
+                LaunchedEffect(path, image) { onImageVisible(path) }
+            }
+            if (image != null) {
+                Image(
+                    bitmap = image,
+                    contentDescription = block.alt,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 480.dp),
+                )
+            }
+            // Подпись остаётся рядом с удачной картинкой и становится
+            // fallback, если ресурс испорчен или старая библиотека ядра ещё
+            // не умеет бинарный API.
+            block.alt?.let { SectionLabel(it) }
+        }
+
+        // Rich scientific renderer можно добавить отдельно; сейчас ни
+        // формула, ни её fallback не исчезают вместе с незнакомым MathML.
+        "math" -> Column(verticalArrangement = Arrangement.spacedBy(WolfyTheme.spacing.tight)) {
+            SectionLabel("Формула")
+            Text(block.text, style = WolfyTheme.typography.reader, color = WolfyTheme.colors.ink)
+        }
+
+        // В pre переносы/отступы — содержимое, не обычная вёрстка абзаца.
+        "pre" -> Text(
+            block.text,
+            style = WolfyTheme.typography.reader,
+            color = WolfyTheme.colors.ink,
+        )
+
+        "table" -> TableBlock(block.rows, block.text)
+
+        // Новое kind старого ядра/формата не должно превращаться в пустоту.
+        else -> if (block.text.isNotBlank()) {
+            Text(block.text, style = WolfyTheme.typography.reader, color = WolfyTheme.colors.ink)
+        }
+    }
+}
+
+@Composable
+private fun TableBlock(rows: List<List<String>>?, fallback: String) {
+    val spacing = WolfyTheme.spacing
+    val table = rows.orEmpty()
+    if (table.isEmpty()) {
+        Text(fallback, style = WolfyTheme.typography.reader, color = WolfyTheme.colors.ink)
+        return
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(spacing.tight)) {
+        table.forEach { row ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(spacing.small)) {
+                row.forEach { cell ->
+                    Text(
+                        cell,
+                        style = WolfyTheme.typography.caption,
+                        color = WolfyTheme.colors.ink,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
     }
 }
 

@@ -671,7 +671,7 @@ private fun Finished(state: TrainingState, onClose: () -> Unit) {
         )
         Text(
             text = if (nothing) {
-                "Сохраняйте слова и фразы при чтении — они появятся тут."
+                "Сохраняйте слова и фразы при чтении. Они появятся тут."
             } else {
                 plural(state.total, "карточка", "карточки", "карточек") +
                     " позади. Остальное дождётся следующего захода."
@@ -683,4 +683,3 @@ private fun Finished(state: TrainingState, onClose: () -> Unit) {
         PrimaryButton(text = "К колодам", onClick = onClose)
     }
 }
-

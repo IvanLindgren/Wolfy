@@ -95,6 +95,20 @@ pub enum Block {
     Image { path: String, alt: Option<String> },
     /// Разделитель сцен: звёздочки, пустая строка с отбивкой.
     Divider,
+    /// Формула или другое математическое содержимое.
+    ///
+    /// Богатого рендера формул у читалки нет, но терять их нельзя: храним
+    /// исходник (MathML/TeX) и читабельный запасной текст — из alttext,
+    /// annotation или собранный из содержимого.
+    Math { source: String, fallback: String },
+    /// Таблица строками и ячейками.
+    ///
+    /// Структура сохраняется осознанно минимальной: её достаточно, чтобы
+    /// показать таблицу как таблицу, а не потерять в потоке текста.
+    Table { rows: Vec<Vec<String>> },
+    /// Предварительно отформатированный текст: стихи, код, адреса — всё то,
+    /// где переносы строк и пробелы значимы и не схлопываются.
+    Preformatted(String),
 }
 
 impl Block {
@@ -104,9 +118,30 @@ impl Block {
             Block::Heading { text, .. }
             | Block::Paragraph(text)
             | Block::Quote(text)
-            | Block::ListItem(text) => Some(text),
-            Block::Image { .. } | Block::Divider => None,
+            | Block::ListItem(text)
+            | Block::Preformatted(text) => Some(text),
+            // У формулы читателю показывается запасной текст.
+            Block::Math { fallback, .. } => Some(fallback),
+            Block::Image { .. } | Block::Divider | Block::Table { .. } => None,
         }
+    }
+
+    /// Строки таблицы одной колонкой текста — для токенизатора и поиска.
+    fn table_text(rows: &[Vec<String>]) -> String {
+        let mut out = String::new();
+        for row in rows {
+            for cell in row {
+                let cell = cell.trim();
+                if cell.is_empty() {
+                    continue;
+                }
+                if !out.is_empty() {
+                    out.push(' ');
+                }
+                out.push_str(cell);
+            }
+        }
+        out
     }
 }
 
@@ -126,6 +161,18 @@ impl Chapter {
     pub fn plain_text(&self) -> String {
         let mut out = String::new();
         for block in &self.blocks {
+            // Таблицы в общем потоке текста: их содержимое должно попадать в
+            // токенизатор, иначе слова из ячеек перестанут находиться.
+            if let Block::Table { rows } = block {
+                let text = Block::table_text(rows);
+                if !text.is_empty() {
+                    if !out.is_empty() {
+                        out.push_str("\n\n");
+                    }
+                    out.push_str(&text);
+                }
+                continue;
+            }
             if let Some(text) = block.text() {
                 if !out.is_empty() {
                     out.push_str("\n\n");

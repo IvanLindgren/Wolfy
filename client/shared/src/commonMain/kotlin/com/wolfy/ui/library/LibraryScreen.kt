@@ -20,7 +20,10 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -48,6 +51,7 @@ import com.wolfy.widgets.pressable
  * вообще есть», и это сетка обложек. Списка строчками здесь нет намеренно:
  * книгу узнают в лицо, а не по строке в таблице.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LibraryScreen(
     state: LibraryUiState,
@@ -63,17 +67,27 @@ fun LibraryScreen(
     onCatalog: () -> Unit = {},
     /** Своя обложка книги, готовая к показу; `null` — обложки нет. */
     coverOf: (String) -> ImageBitmap? = { null },
+    /** Фоновая загрузка обложки только для видимой плитки. */
+    onCoverVisible: (String) -> Unit = {},
+    /** Обмен с облаком и проверка обновления по жесту пользователя. */
+    isRefreshing: Boolean = false,
+    onRefresh: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
 
+    PullToRefreshBox(
+        isRefreshing = isRefreshing,
+        onRefresh = onRefresh,
+        modifier = modifier.fillMaxSize(),
+    ) {
     LazyVerticalGrid(
         // Ширина плитки, а не число столбцов: на телефоне помещается три
         // обложки, на окне Windows — семь, и подбирать это руками под каждый
         // размер значит промахнуться на всех остальных.
         columns = GridCells.Adaptive(minSize = 108.dp),
-        modifier = modifier
+        modifier = Modifier
             .fillMaxSize()
             .background(colors.paper),
         contentPadding = PaddingValues(spacing.pageMargin),
@@ -83,6 +97,7 @@ fun LibraryScreen(
         item(span = { GridItemSpan(maxLineSpan) }) {
             Column(verticalArrangement = Arrangement.spacedBy(spacing.large)) {
                 state.continueReading?.let { current ->
+                    LaunchedEffect(current.id, state.coversVersion) { onCoverVisible(current.id) }
                     ContinueCard(
                         book = current,
                         savedWords = state.deckSize(current.id),
@@ -114,6 +129,7 @@ fun LibraryScreen(
         items(state.books, key = { it.id }) { book ->
             val key = "${book.id}:${state.coversVersion}"
             val cover = remember(key) { coverOf(book.id) }
+            LaunchedEffect(book.id, state.coversVersion) { onCoverVisible(book.id) }
             BookTile(
                 book = book,
                 savedWords = state.deckSize(book.id),
@@ -124,6 +140,7 @@ fun LibraryScreen(
                 onClearCover = { onClearCover(book) },
             )
         }
+    }
     }
 }
 
@@ -449,7 +466,7 @@ private fun EmptyLibrary(onImport: () -> Unit) {
             color = colors.ink,
         )
         Text(
-            text = "Добавьте книгу в epub, txt или pdf — или выберите свободную из каталога.",
+            text = "Добавьте книгу в epub, txt или pdf. Можно также выбрать бесплатную книгу из каталога.",
             style = WolfyTheme.typography.body,
             color = colors.inkMuted,
             textAlign = TextAlign.Center,

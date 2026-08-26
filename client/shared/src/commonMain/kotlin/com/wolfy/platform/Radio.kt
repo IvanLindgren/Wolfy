@@ -84,7 +84,7 @@ val DefaultStations: List<RadioStation> = listOf(
     RadioStation(
         id = "dronezone",
         title = "Drone Zone",
-        hint = "Ровный эмбиент без событий — самый незаметный фон",
+        hint = "Ровный эмбиент без событий, самый незаметный фон",
         url = "https://ice1.somafm.com/dronezone-128-mp3",
         source = "SomaFM",
     ),
@@ -105,7 +105,7 @@ val DefaultStations: List<RadioStation> = listOf(
     RadioStation(
         id = "lush",
         title = "Lush",
-        hint = "Мечтательный поп с голосом — если голос вам не мешает",
+        hint = "Мечтательный поп с голосом, если он вам не мешает",
         url = "https://ice1.somafm.com/lush-128-mp3",
         source = "SomaFM",
     ),

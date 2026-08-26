@@ -33,7 +33,10 @@ import com.wolfy.data.BookNudge
 import com.wolfy.data.bookNudge
 import com.wolfy.data.library.createLibraryStore
 import com.wolfy.data.library.lastReadBook
+import com.wolfy.resources.Res
+import com.wolfy.resources.wolfy_card
 import kotlinx.coroutines.delay
+import org.jetbrains.compose.resources.painterResource
 import java.awt.GraphicsEnvironment
 import java.util.Calendar
 import java.util.TimeZone
@@ -74,6 +77,7 @@ fun DesktopNudgePanel(onOpen: () -> Unit, onClose: () -> Unit) {
         onCloseRequest = onClose,
         state = state,
         title = "Wolfy",
+        icon = painterResource(Res.drawable.wolfy_card),
         undecorated = true,
         alwaysOnTop = true,
         resizable = false,
@@ -97,7 +101,7 @@ fun DesktopNudgePanel(onOpen: () -> Unit, onClose: () -> Unit) {
             )
             Row(Modifier.fillMaxWidth().height(1.dp).background(RULE)) {}
             Text(
-                text = shown?.place ?: "Добавьте книгу — и она появится здесь",
+                text = shown?.place ?: "Добавьте книгу, и она появится здесь",
                 color = INK_MUTED,
                 fontSize = 12.sp,
                 maxLines = 1,

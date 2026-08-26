@@ -66,7 +66,7 @@ fun ShortcutsSheet(visible: Boolean, onDismiss: () -> Unit) {
                 Group("В тренировке", trainingShortcuts)
                 Group("Везде", globalShortcutList)
                 Text(
-                    text = "«?» ещё раз или щелчок мимо — закрыть",
+                    text = "«?» ещё раз или щелчок мимо закроет подсказку",
                     style = WolfyTheme.typography.caption,
                     color = colors.inkMuted,
                     textAlign = TextAlign.Center,

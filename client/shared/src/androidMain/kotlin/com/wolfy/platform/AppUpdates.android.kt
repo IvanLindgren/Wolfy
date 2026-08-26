@@ -87,6 +87,7 @@ private class PlayUpdateController(
             InstallStatus.DOWNLOADING -> {
                 val total = install.totalBytesToDownload()
                 mutableState.value = AppUpdateState.Downloading(
+                    "Google Play",
                     if (total > 0) install.bytesDownloaded().toFloat() / total else 0f,
                 )
             }
@@ -100,9 +101,7 @@ private class PlayUpdateController(
         try {
             delay(4_000)
             while (true) {
-                runCatching { check() }.onFailure {
-                    mutableState.value = AppUpdateState.Failed("Google Play не проверил обновление")
-                }
+                checkNow()
                 delay(6 * 60 * 60_000L)
             }
         } finally {
@@ -111,9 +110,38 @@ private class PlayUpdateController(
     }
 
     override suspend fun install(): Boolean {
-        if (mutableState.value !is AppUpdateState.Ready) return false
-        withContext(Dispatchers.Main) { manager.completeUpdate() }
-        return true
+        return when (val current = mutableState.value) {
+            is AppUpdateState.Ready -> {
+                withContext(Dispatchers.Main) { manager.completeUpdate() }
+                true
+            }
+            is AppUpdateState.Available -> {
+                val info = manager.appUpdateInfo.await()
+                if (info.updateAvailability() != UpdateAvailability.UPDATE_AVAILABLE ||
+                    !info.isUpdateTypeAllowed(AppUpdateType.FLEXIBLE)
+                ) {
+                    mutableState.value = AppUpdateState.Failed("обновление больше недоступно")
+                    false
+                } else {
+                    withContext(Dispatchers.Main) {
+                        manager.startUpdateFlowForResult(
+                            info,
+                            activity,
+                            AppUpdateOptions.newBuilder(AppUpdateType.FLEXIBLE).build(),
+                            PLAY_UPDATE_REQUEST,
+                        )
+                    }
+                    false
+                }
+            }
+            else -> false
+        }
+    }
+
+    override suspend fun checkNow() {
+        runCatching { check() }.onFailure {
+            mutableState.value = AppUpdateState.Failed("Google Play не проверил обновление")
+        }
     }
 
     private suspend fun check() {
@@ -125,14 +153,10 @@ private class PlayUpdateController(
         if (info.updateAvailability() == UpdateAvailability.UPDATE_AVAILABLE &&
             info.isUpdateTypeAllowed(AppUpdateType.FLEXIBLE)
         ) {
-            withContext(Dispatchers.Main) {
-                manager.startUpdateFlowForResult(
-                    info,
-                    activity,
-                    AppUpdateOptions.newBuilder(AppUpdateType.FLEXIBLE).build(),
-                    PLAY_UPDATE_REQUEST,
-                )
-            }
+            // Проверка не должна внезапно открывать диалог Google Play:
+            // приложение может лишь предложить обновление, решение за
+            // читателем и отдельной кнопкой «установить».
+            mutableState.value = AppUpdateState.Available("Google Play")
         }
     }
 }

@@ -1,9 +1,7 @@
 package com.wolfy.platform
 
 import com.sun.net.httpserver.HttpServer
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import java.net.InetSocketAddress
@@ -41,11 +39,19 @@ class ReleaseDownloaderTest {
                 directory = directory,
                 launchInstaller = { true },
             )
-            val job = launch { downloader.monitor() }
-            val ready = withTimeout(12_000) {
+            downloader.checkNow()
+            val available = withTimeout(5_000) {
+                downloader.state.first { it is AppUpdateState.Available }
+            } as AppUpdateState.Available
+            assertEquals("1.0.8", available.version)
+            // Проверка не скачивает MSI сама: сеть и место на диске тратятся
+            // только после явного решения пользователя.
+            assertTrue(!directory.resolve("Wolfy-1.0.8.msi").exists())
+
+            downloader.install()
+            val ready = withTimeout(5_000) {
                 downloader.state.first { it is AppUpdateState.Ready }
             } as AppUpdateState.Ready
-            job.cancelAndJoin()
 
             assertEquals("1.0.8", ready.version)
             assertTrue(directory.resolve("Wolfy-1.0.8.msi").readBytes().contentEquals(bytes))

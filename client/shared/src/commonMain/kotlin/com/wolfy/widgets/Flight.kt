@@ -93,7 +93,9 @@ fun FlightOverlay(modifier: Modifier = Modifier) {
     val flight = controller.flight ?: return
     val progress = remember(flight.id) { Animatable(if (motion.flight == 0) 1f else 0f) }
 
-    LaunchedEffect(flight.id) {
+    // Переключение reduced motion завершает уже летящую карточку сразу, а не
+    // только влияет на следующий запуск анимации.
+    LaunchedEffect(flight.id, motion) {
         progress.animateTo(1f, tween(motion.flight, easing = Curves.Toss))
         controller.landed(flight.id)
     }

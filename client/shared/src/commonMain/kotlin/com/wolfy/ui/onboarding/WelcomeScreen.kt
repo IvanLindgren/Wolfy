@@ -135,7 +135,7 @@ private fun ReadingStep(onWord: () -> Unit) {
     val spacing = WolfyTheme.spacing
     Text("Читайте как читали", style = WolfyTheme.typography.screenTitle, color = colors.ink)
     Text(
-        "Коснитесь незнакомого слова прямо в книге — страница останется на месте.",
+        "Коснитесь незнакомого слова прямо в книге. Страница останется на месте.",
         style = WolfyTheme.typography.body,
         color = colors.inkMuted,
     )
@@ -191,7 +191,7 @@ private fun WordStep(analysis: WordAnalysis) {
 private fun TrainingStep(exercise: Exercise?) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
-    Text("Что прочитано — то и тренируется", style = WolfyTheme.typography.screenTitle, color = colors.ink)
+    Text("Тренируйте слова из своих книг", style = WolfyTheme.typography.screenTitle, color = colors.ink)
     Column(
         Modifier.fillMaxWidth().border(spacing.rule, colors.rule, RoundedCornerShape(spacing.large)).padding(spacing.large),
         verticalArrangement = Arrangement.spacedBy(spacing.small),

@@ -47,6 +47,15 @@ class CoreSession(
     private val core: WolfyCore,
     private val store: LibraryStore,
 ) {
+    // Одна нативная Session изменяема. Команды приходят и с UI, и с фоновых
+    // задач (progress/persist), поэтому вызовы через JNA нельзя пускать
+    // одновременно: даже корректные JSON-ответы тогда описывали бы чужую
+    // ревизию. `synchronized` здесь короткий — под ним только FFI/JSON, не
+    // запись файла, — и доступен на обеих JVM-платформах Wolfy.
+    private val coreLock = Any()
+
+    private inline fun <T> withCoreLock(block: () -> T): T = synchronized(coreLock, block)
+
     // Строгое открытие: `null`/empty -> Default, а непустой битый JSON -> ошибка,
     // а не молчаливый Default. После ошибки клиент не должен автоматически
     // сохранять пустое состояние поверх повреждённого (P12). Нативный atomic
@@ -138,9 +147,11 @@ class CoreSession(
      * а не на главном потоке.
      */
     fun run(command: JsonObject): Outcome {
-        val outcome = json.decodeFromString<Outcome>(
-            core.runCommand(handle, json.encodeToString(JsonObject.serializer(), command)),
-        )
+        val outcome = withCoreLock {
+            json.decodeFromString<Outcome>(
+                core.runCommand(handle, json.encodeToString(JsonObject.serializer(), command)),
+            )
+        }
 
         if (outcome.libraryChanged) {
             _library.value = readLibrary()
@@ -166,7 +177,7 @@ class CoreSession(
         // отдельным вызовом. Он ленивый: на новом ядре по FFI не ходим вовсе.
         val fallback: GenerationsDto? by lazy {
             try {
-                json.decodeFromString<GenerationsDto>(core.sessionGenerations(handle))
+                withCoreLock { json.decodeFromString<GenerationsDto>(core.sessionGenerations(handle)) }
             } catch (_: Throwable) {
                 null
             }
@@ -224,13 +235,13 @@ class CoreSession(
                     // но подтвердим именно gen — dirty для более нового останется true
                     // и следующий виток запишет его. Это сохраняет корректность
                     // (§17) ценой одной лишней записи, но без потери данных.
-                    val snapshot = core.sessionLibrary(handle)
+                    val snapshot = withCoreLock { core.sessionLibrary(handle) }
                     store.save(LIBRARY, snapshot)
                     try {
-                        core.sessionAckSaved(handle, gen, -1, -1)
+                        withCoreLock { core.sessionAckSaved(handle, gen, -1, -1) }
                     } catch (_: Exception) {
                         // fallback для старого ядра без ack: используем bool API
-                        try { core.sessionSaved(handle, true, false) } catch (_: Exception) {}
+                        try { withCoreLock { core.sessionSaved(handle, true, false) } } catch (_: Exception) {}
                     }
                 } catch (_: Exception) {
                     // Запись не удалась — не подтверждаем, dirty остаётся true,
@@ -239,24 +250,24 @@ class CoreSession(
             }
             setGen?.let { gen ->
                 try {
-                    val snapshot = core.sessionSettings(handle)
+                    val snapshot = withCoreLock { core.sessionSettings(handle) }
                     store.save(SETTINGS, snapshot)
                     try {
-                        core.sessionAckSaved(handle, -1, gen, -1)
+                        withCoreLock { core.sessionAckSaved(handle, -1, gen, -1) }
                     } catch (_: Exception) {
-                        try { core.sessionSaved(handle, false, true) } catch (_: Exception) {}
+                        try { withCoreLock { core.sessionSaved(handle, false, true) } } catch (_: Exception) {}
                     }
                 } catch (_: Exception) {}
             }
             pracGen?.let { gen ->
                 try {
-                    val snapshot = try { core.sessionPractice(handle) } catch (_: Exception) { null }
+                    val snapshot = try { withCoreLock { core.sessionPractice(handle) } } catch (_: Exception) { null }
                     if (snapshot != null) {
                         store.save(PRACTICE, snapshot)
                         try {
-                            core.sessionAckSaved(handle, -1, -1, gen)
+                            withCoreLock { core.sessionAckSaved(handle, -1, -1, gen) }
                         } catch (_: Exception) {
-                            try { core.sessionSavedWithPractice(handle, false, false, true) } catch (_: Exception) {}
+                            try { withCoreLock { core.sessionSavedWithPractice(handle, false, false, true) } } catch (_: Exception) {}
                         }
                     }
                 } catch (_: Exception) {}
@@ -303,12 +314,14 @@ class CoreSession(
         try { flushBlocking(2000L) } catch (_: Exception) {}
         // Отменяем scope после flush
         try { persistScope.cancel() } catch (_: Exception) {}
-        core.closeSession(handle)
+        withCoreLock { core.closeSession(handle) }
     }
 
-    private fun readLibrary(): LibraryState = json.decodeFromString(core.sessionLibrary(handle))
+    private fun readLibrary(): LibraryState =
+        withCoreLock { json.decodeFromString(core.sessionLibrary(handle)) }
 
-    private fun readSettings(): AppSettings = json.decodeFromString(core.sessionSettings(handle))
+    private fun readSettings(): AppSettings =
+        withCoreLock { json.decodeFromString(core.sessionSettings(handle)) }
 
     private companion object {
         /** Имена записей в хранилище — те же, что были до переезда логики. */

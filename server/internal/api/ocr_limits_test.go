@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -56,6 +57,42 @@ func TestOCRPerUserRateLimit(t *testing.T) {
 	wOther := makeReq("user2")
 	if wOther.Code == http.StatusTooManyRequests {
 		t.Fatal("другой пользователь ошибочно за-rate-limited")
+	}
+}
+
+func TestOCRAcceptsBinaryMultipartImage(t *testing.T) {
+	svc := ocr.New("key", "http://example.invalid", "model", time.Second)
+	srv := &Server{
+		ocr:      svc,
+		ocrLimit: newRateLimiter(10, 1, time.Minute),
+		log:      slog.Default(),
+	}
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("image", "page.jpg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write([]byte{0xFF, 0xD8, 0xFF}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.WriteField("mime", "image/jpeg"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/ocr", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req = req.WithContext(auth.WithUser(req.Context(), auth.User{ID: "u1"}))
+	w := httptest.NewRecorder()
+	srv.postOCR(w, req)
+	// У тестового vision-сервиса нет ключа/доступа, поэтому ответ не обязан
+	// быть 200. Важно, что multipart дошёл до OCR, а не отвергнут разбором.
+	if w.Code == http.StatusBadRequest || w.Code == http.StatusRequestEntityTooLarge {
+		t.Fatalf("multipart-снимок не разобран: %d, %s", w.Code, w.Body.String())
 	}
 }
 

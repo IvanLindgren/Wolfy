@@ -24,6 +24,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
@@ -32,6 +35,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.wolfy.data.DiscoveryItem
+import com.wolfy.data.library.LibraryBook
 import com.wolfy.theme.WolfyTheme
 import com.wolfy.widgets.Caption
 import com.wolfy.widgets.Rule
@@ -54,31 +58,72 @@ val DiscoveryGenres = listOf(
 )
 
 @Composable
-fun DiscoveryScreen(viewModel: DiscoveryViewModel, modifier: Modifier = Modifier) {
+fun DiscoveryScreen(
+    viewModel: DiscoveryViewModel,
+    newspaper: NewspaperViewModel,
+    onOpenBook: (LibraryBook) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val state by viewModel.state.collectAsState()
-    when {
-        !state.signedIn -> LoginScreen(
-            state = state,
-            onEmail = viewModel::setEmail,
-            onPassword = viewModel::setPassword,
-            onLogin = viewModel::login,
-            modifier = modifier,
-        )
-        state.needsOnboarding -> OnboardingScreen(
-            state = state,
-            onLevel = viewModel::setLevel,
-            onGenre = viewModel::toggleGenre,
-            onContinue = viewModel::saveOnboarding,
-            onLogout = viewModel::logout,
-            modifier = modifier,
-        )
-        else -> FeedScreen(
-            state = state,
-            onLike = viewModel::like,
-            onAdd = viewModel::add,
-            onRefresh = viewModel::refresh,
-            modifier = modifier,
-        )
+    var page by rememberSaveable { mutableStateOf(DiscoveryPage.Feed) }
+    Column(modifier.fillMaxSize().background(WolfyTheme.colors.paper)) {
+        DiscoverySwitcher(page = page, onPage = { page = it })
+        Box(Modifier.weight(1f)) {
+            if (page == DiscoveryPage.Newspaper) {
+                NewspaperScreen(newspaper, onOpenBook)
+            } else when {
+                !state.signedIn -> LoginScreen(
+                    state = state,
+                    onEmail = viewModel::setEmail,
+                    onPassword = viewModel::setPassword,
+                    onLogin = viewModel::login,
+                    modifier = Modifier,
+                )
+                state.needsOnboarding -> OnboardingScreen(
+                    state = state,
+                    onLevel = viewModel::setLevel,
+                    onGenre = viewModel::toggleGenre,
+                    onContinue = viewModel::saveOnboarding,
+                    onLogout = viewModel::logout,
+                    modifier = Modifier,
+                )
+                else -> FeedScreen(
+                    state = state,
+                    onLike = viewModel::like,
+                    onAdd = viewModel::add,
+                    onRefresh = viewModel::refresh,
+                    modifier = Modifier,
+                )
+            }
+        }
+    }
+}
+
+private enum class DiscoveryPage { Feed, Newspaper }
+
+@Composable
+private fun DiscoverySwitcher(page: DiscoveryPage, onPage: (DiscoveryPage) -> Unit) {
+    val spacing = WolfyTheme.spacing
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = spacing.pageMargin, vertical = spacing.medium),
+        horizontalArrangement = Arrangement.spacedBy(spacing.small),
+    ) {
+        listOf(DiscoveryPage.Feed to "Лента", DiscoveryPage.Newspaper to "Газета").forEach { (item, title) ->
+            val selected = item == page
+            Text(
+                text = title,
+                style = WolfyTheme.typography.button,
+                color = if (selected) WolfyTheme.colors.paper else WolfyTheme.colors.ink,
+                modifier = Modifier
+                    .background(
+                        if (selected) WolfyTheme.colors.ink else WolfyTheme.colors.surface,
+                        RoundedCornerShape(spacing.huge),
+                    )
+                    .border(spacing.rule, WolfyTheme.colors.rule, RoundedCornerShape(spacing.huge))
+                    .pressable { onPage(item) }
+                    .padding(horizontal = spacing.large, vertical = spacing.small),
+            )
+        }
     }
 }
 

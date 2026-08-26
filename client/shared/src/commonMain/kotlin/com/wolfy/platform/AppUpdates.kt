@@ -6,7 +6,10 @@ import kotlinx.coroutines.flow.StateFlow
 /** Состояние тихой фоновой загрузки обновления. */
 sealed interface AppUpdateState {
     data object Idle : AppUpdateState
-    data class Downloading(val progress: Float) : AppUpdateState
+    data object Checking : AppUpdateState
+    /** Найдена новая версия, но скачивание ещё ждёт решения читателя. */
+    data class Available(val version: String) : AppUpdateState
+    data class Downloading(val version: String, val progress: Float) : AppUpdateState
     data class Ready(val version: String) : AppUpdateState
     data class Failed(val reason: String) : AppUpdateState
 }
@@ -18,6 +21,8 @@ sealed interface AppUpdateState {
 interface AppUpdateController {
     val state: StateFlow<AppUpdateState>
     suspend fun monitor()
+    /** Быстрая ручная проверка: ничего не скачивает и не открывает системный UI. */
+    suspend fun checkNow()
     suspend fun install(): Boolean
 }
 

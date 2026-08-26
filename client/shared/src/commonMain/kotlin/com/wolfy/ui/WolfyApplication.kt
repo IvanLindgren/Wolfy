@@ -69,6 +69,7 @@ import com.wolfy.platform.rememberBrowserAuthLauncher
 import com.wolfy.platform.deviceName
 import com.wolfy.platform.devicePlatform
 import com.wolfy.platform.rememberAppUpdateController
+import com.wolfy.platform.AppUpdateController
 import androidx.compose.runtime.DisposableEffect
 import com.wolfy.data.library.LibraryStore
 import com.wolfy.data.loadRadio
@@ -83,6 +84,7 @@ import com.wolfy.srs.TrainingViewModel
 import com.wolfy.ui.decks.DecksScreen
 import com.wolfy.ui.discovery.DiscoveryScreen
 import com.wolfy.ui.discovery.DiscoveryViewModel
+import com.wolfy.ui.discovery.NewspaperViewModel
 import com.wolfy.ui.library.CatalogScreen
 import com.wolfy.ui.library.LibraryScreen
 import com.wolfy.ui.library.LibraryViewModel
@@ -109,8 +111,10 @@ import com.wolfy.widgets.FlightOverlay
 import com.wolfy.widgets.LocalFlight
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.coroutineScope
 
 /**
  * Версия по умолчанию — та, что зашита в общий модуль.
@@ -119,7 +123,7 @@ import kotlinx.coroutines.withContext
  * десктоп — запечённое сборкой `-Dwolfy.version`. Значение здесь остаётся
  * последним доводом для запуска из исходников и тестов.
  */
-const val APP_VERSION = "1.0.7"
+const val APP_VERSION = "1.0.10"
 
 /**
  * Корень приложения.
@@ -179,6 +183,7 @@ fun WolfyApplication(
             val dictionary = DictionaryManager(coreSession, store, api)
             Parts(
                 core = core,
+                coreSession = coreSession,
                 library = library,
                 settings = settings,
                 sync = SyncService(library, settings, api),
@@ -193,6 +198,7 @@ fun WolfyApplication(
                 training = TrainingViewModel(library, settings, coreSession),
                 session = session,
                 discovery = DiscoveryViewModel(api, session, library),
+                newspaper = NewspaperViewModel(api, library),
                 dictionary = dictionary,
                 api = api,
             )
@@ -213,6 +219,14 @@ fun WolfyApplication(
             if (message == null) Starting() else CoreUnavailable(message)
         }
         return
+    }
+
+    // `remember` не владеет нативными ресурсами: при закрытии окна Compose
+    // просто выбросит дерево. Явно закрываем сессию Rust, фоновые записи и
+    // HTTP-пул, чтобы последний прогресс успел попасть на диск, а файл книги
+    // не остался открытым в Windows.
+    DisposableEffect(parts) {
+        onDispose { parts.close() }
     }
 
     val settings by parts.settings.state.collectAsState()
@@ -359,6 +373,7 @@ fun WolfyApplication(
                 onReduceMotion = parts.settings::setReduceMotion,
                 onSignIn = parts.session::requestSignIn,
                 onSignOut = parts.session::clear,
+                updateController = updater,
             )
                     DictionaryOffer(
                         status = dictionaryStatus,
@@ -390,6 +405,7 @@ fun WolfyApplication(
 /** Всё, что живёт столько же, сколько само приложение. */
 private class Parts(
     val core: WolfyCore,
+    val coreSession: CoreSession,
     val library: Library,
     val settings: Settings,
     val sync: SyncService,
@@ -398,6 +414,7 @@ private class Parts(
     val training: TrainingViewModel,
     val session: AccountSession,
     val discovery: DiscoveryViewModel,
+    val newspaper: NewspaperViewModel,
     /**
      * Хранилище устройства.
      *
@@ -407,7 +424,18 @@ private class Parts(
     val store: LibraryStore,
     val dictionary: DictionaryManager,
     val api: WolfyApi,
-)
+) {
+    /**
+     * Ресурсы, не принадлежащие Compose: файл открытой книги, нативная
+     * сессия и HTTP-пул. Закрываются один раз вместе с корнем приложения.
+     */
+    fun close() {
+        reader.closeCurrent()
+        reader.flushProgressBlocking()
+        coreSession.close()
+        api.close()
+    }
+}
 
 @Composable
 private fun Shell(
@@ -426,6 +454,7 @@ private fun Shell(
     onReduceMotion: (Boolean) -> Unit,
     onSignIn: () -> Unit,
     onSignOut: () -> Unit,
+    updateController: AppUpdateController,
 ) {
     var section by remember { mutableStateOf(Section.Books) }
     val flightController = LocalFlight.current
@@ -437,6 +466,23 @@ private fun Shell(
     // в другой раздел и обратно.
     var reading by remember { mutableStateOf<LibraryBook?>(null) }
     val scope = rememberCoroutineScope()
+    var homeRefreshing by remember { mutableStateOf(false) }
+    fun refreshHome() {
+        if (homeRefreshing) return
+        scope.launch {
+            homeRefreshing = true
+            try {
+                // Проверка обновления не зависит от учётной записи. Обмен
+                // библиотекой, наоборот, не уходит в сеть без токена.
+                coroutineScope {
+                    if (signedIn) launch { parts.sync.sync() }
+                    launch { updateController.checkNow() }
+                }
+            } finally {
+                homeRefreshing = false
+            }
+        }
+    }
     val pronouncer = rememberPronouncer()
     val dictionaryStatus by parts.dictionary.status.collectAsState()
     // Открытый справочник. Пустая строка — открыт целиком, непустая — на
@@ -468,6 +514,14 @@ private fun Shell(
     val radio = remember { createRadioPlayer() }
     val radioState by radio.state.collectAsState()
     var radioPreferences by remember { mutableStateOf(parts.store.loadRadio()) }
+    var radioSaveJob by remember { mutableStateOf<Job?>(null) }
+    fun saveRadio(preferences: com.wolfy.data.RadioPreferences) {
+        // При нескольких быстрых кликах старая ожидающая запись уже не нужна.
+        // Сам I/O живёт вне главного потока; FileLibraryStore всё равно пишет
+        // атомарно, поэтому последняя завершившаяся запись остаётся целой.
+        radioSaveJob?.cancel()
+        radioSaveJob = scope.launch(Dispatchers.IO) { parts.store.saveRadio(preferences) }
+    }
     LaunchedEffect(radio) { radio.setVolume(radioPreferences.volume) }
     DisposableEffect(radio) { onDispose { radio.release() } }
 
@@ -481,6 +535,8 @@ private fun Shell(
 
     val catalogue by parts.catalogue.state.collectAsState()
     val readerState by parts.reader.state.collectAsState()
+    val readerProgress by parts.reader.withinChapterProgress.collectAsState()
+    val readerImages by parts.reader.images.collectAsState()
     val hub by parts.training.hub.collectAsState()
     val training by parts.training.training.collectAsState()
     // Разрешение на уведомления спрашивается перед первой тренировкой, а не
@@ -549,16 +605,19 @@ private fun Shell(
     val syncStatus by parts.sync.status.collectAsState()
     val motion = WolfyTheme.motion
 
-    // Обмен с сервером: при запуске и потом, пока есть что отправлять.
+    // Обмен с сервером: только после входа. Вышедшему из аккаунта незачем
+    // каждую минуту посылать библиотеку без токена; проверка обновления
+    // остаётся независимой и живёт выше, в AppUpdateController.
     //
     // Минута, а не секунда: синхронизация нужна, чтобы вечером продолжить на
     // телефоне то, что читал днём за компьютером, и опаздывать на минуту в
     // этой задаче нечем. Опрос чаще жёг бы батарею ради ничего.
     LaunchedEffect(parts, signedIn) {
+        if (!signedIn) return@LaunchedEffect
         parts.sync.sync()
         while (true) {
             delay(60_000)
-            if (parts.sync.hasPending()) parts.sync.sync()
+            if (parts.sync.hasPending()) parts.sync.sync(waitForRunning = false)
         }
     }
 
@@ -621,7 +680,7 @@ private fun Shell(
             // Файл, брошенный в окно. Самый естественный способ добавить книгу
             // на компьютере: она лежит в «Загрузках», окно открыто рядом, и
             // диалог выбора после этого — лишний шаг.
-            .fileDropTarget { paths -> paths.forEach { drop(parts, it) } },
+            .fileDropTarget { paths -> scope.launch { paths.forEach { drop(parts, it) } } },
     ) {
         // Переход между экранами показывается движением, а не подменой.
         // Мгновенная замена содержимого не отвечает на вопрос, что случилось:
@@ -647,6 +706,9 @@ private fun Shell(
                     onClearCover = { parts.catalogue.clearCover(it.id) },
                     onCatalog = { catalogOpen = true },
                     coverOf = parts.catalogue::coverFor,
+                    onCoverVisible = parts.catalogue::requestCover,
+                    isRefreshing = homeRefreshing,
+                    onRefresh = ::refreshHome,
                 )
 
                 is Route.Catalog -> CatalogScreen(
@@ -660,6 +722,8 @@ private fun Shell(
 
                 is Route.Reader -> ReaderScreen(
                     state = readerState,
+                    withinChapterProgress = readerProgress,
+                    images = readerImages,
                     onWordTap = parts.reader::onWordTap,
                     onDismissCard = parts.reader::dismissCard,
                     onSaveWord = parts.reader::toggleWord,
@@ -680,14 +744,21 @@ private fun Shell(
                         reference = rule
                         section = Section.More
                     },
+                    onImageVisible = parts.reader::loadImage,
                     theme = theme,
                     fontScale = fontScale,
                     lineScale = lineScale,
                     onThemeChange = onThemeChange,
                     onFontScaleChange = onFontScaleChange,
                     onLineScaleChange = onLineScaleChange,
+                    emphasizeStems = readingSettings.emphasizeStems,
+                    onEmphasizeStems = parts.settings::setEmphasizeStems,
                     focusMode = readingSettings.focus,
+                    onFocusModeChange = parts.settings::setFocusMode,
                     pacerWpm = readingSettings.pacerWpm,
+                    onPacerChange = parts.settings::setPacer,
+                    segmentWords = readingSettings.segmentWords,
+                    onSegmentWordsChange = parts.settings::setSegmentWords,
                     onNextSegment = parts.reader::planSegment,
                     onStopSegments = { parts.settings.setSegmentWords(0) },
                 )
@@ -700,7 +771,7 @@ private fun Shell(
                     onMove = parts.catalogue::moveToShelf,
                 )
 
-                Route.Discover -> DiscoveryScreen(parts.discovery)
+                Route.Discover -> DiscoveryScreen(parts.discovery, parts.newspaper, open)
 
                 Route.Training -> TrainingScreen(
                     state = training,
@@ -754,17 +825,17 @@ private fun Shell(
                     onRadioStation = { station ->
                         radio.play(station)
                         radioPreferences = radioPreferences.copy(stationId = station.id)
-                        parts.store.saveRadio(radioPreferences)
+                        saveRadio(radioPreferences)
                     },
                     onRadioStop = radio::stop,
                     onRadioVolume = { volume ->
                         radio.setVolume(volume)
                         radioPreferences = radioPreferences.copy(volume = volume)
-                        parts.store.saveRadio(radioPreferences)
+                        saveRadio(radioPreferences)
                     },
                     onRadioOwnUrl = { url ->
                         radioPreferences = radioPreferences.copy(ownUrl = url)
-                        parts.store.saveRadio(radioPreferences)
+                        saveRadio(radioPreferences)
                     },
                     onSignIn = onSignIn,
                     onSignOut = onSignOut,
@@ -885,11 +956,14 @@ private fun screenTransition(from: Int, to: Int, motion: WolfyMotion): ContentTr
  * читать целиком, а ошибка здесь дешёвая — читатель сразу увидит, что
  * получилось не то.
  */
-private fun drop(parts: Parts, path: String) {
+private suspend fun drop(parts: Parts, path: String) {
     val name = fileNameOf(path)
     if (looksLikePhoto(name)) {
-        val bytes = readBytes(path) ?: return
-        parts.catalogue.recognize(PickedPhoto(compressPhoto(bytes), "image/jpeg"))
+        val photo = withContext(Dispatchers.Default) {
+            val bytes = readBytes(path) ?: return@withContext null
+            PickedPhoto(compressPhoto(bytes), "image/jpeg")
+        } ?: return
+        parts.catalogue.recognize(photo)
     } else {
         parts.catalogue.import(PickedBook(path = path, name = name))
     }

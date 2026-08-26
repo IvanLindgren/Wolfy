@@ -89,7 +89,7 @@ fun DependencyArcs(
 @Composable
 fun GraphEmptyNote() {
     Text(
-        text = "Связей во фразе не нашлось: ядро пропускает неоднозначные — " +
+        text = "Связей во фразе не нашлось. Ядро пропускает неоднозначные, " +
             "неверный граф хуже неполного.",
         style = WolfyTheme.typography.caption,
         color = WolfyTheme.colors.inkMuted,

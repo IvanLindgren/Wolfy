@@ -134,7 +134,7 @@ class Library(
                 path = store.writeBook(fileName, bytes),
                 title = title,
                 author = author,
-                format = "epub",
+                format = fileName.substringAfterLast('.', "epub").lowercase(),
                 sourceKey = sourceKey,
                 addedAt = now(),
             ),
@@ -182,19 +182,26 @@ class Library(
     /** Дописывает снятую страницу в книгу снимков. */
     fun appendSnapshot(text: String): LibraryBook {
         val existing = state.value.books.firstOrNull { it.title == SNAPSHOTS && !it.deleted }
-        val before = if (existing != null && existing.readable) store.readText(existing.path) else ""
 
-        // Как склеивать страницы, знает ядро: между ними обязана быть пустая
-        // строка, иначе последняя фраза страницы слипнется с первой фразой
-        // следующей — и уедет вместе с ней в контекст перевода.
-        val whole = ask(
+        // Ядро по-прежнему нормализует новую страницу, но старый текст ему
+        // больше не передаётся: при сотне снимков его перечитывание и JSON
+        // copy на каждый OCR были O(total book size).
+        val page = ask(
             command("appendedPage") {
-                put("before", before)
+                put("before", "")
                 put("page", text)
             },
         ).text.orEmpty()
+        if (page.isBlank()) return existing ?: error("пустая первая страница снимков")
 
-        val path = store.writeText(SNAPSHOTS_FILE, whole)
+        val path = if (existing == null) {
+            store.writeText(SNAPSHOTS_FILE, page)
+        } else {
+            // Разделитель между страницами — часть формата снимков. Новые
+            // записи всегда заканчиваются текстом без хвостовых пробелов,
+            // поэтому append не требует читать прежний файл ради trimEnd().
+            store.appendText(SNAPSHOTS_FILE, "\n\n$page")
+        }
 
         if (existing != null) {
             send(
@@ -391,11 +398,11 @@ class Library(
      * Приводит прочитанное состояние к нынешнему виду.
      *
      * Номера для переезда придумывает клиент: своего источника случайности у
-     * ядра нет. С запасом — сколько книг, столько и номеров; лишние ядро
-     * просто не возьмёт.
+     * ядра нет. Свежий номер может понадобиться и старой книге, и старой
+     * карточке. Лишние номера ядро просто не возьмёт.
      */
     private fun migrate() {
-        val fresh = state.value.books.map { newId() }
+        val fresh = List(state.value.books.size + state.value.cards.size) { newId() }
         send(command("migrate") { put("freshIds", JsonArray(fresh.map(::JsonPrimitive))) })
     }
 

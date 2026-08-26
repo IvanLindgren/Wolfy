@@ -7,8 +7,12 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalContext
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Выбор книги на Android.
@@ -23,13 +27,16 @@ import java.io.File
 actual fun rememberBookPicker(onPicked: (PickedBook) -> Unit): () -> Unit {
     val context = LocalContext.current
     val callback = rememberUpdatedState(onPicked)
+    val scope = rememberCoroutineScope()
 
     val launcher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
-        val picked = copyToCache(context, uri) ?: return@rememberLauncherForActivityResult
-        callback.value(picked)
+        scope.launch {
+            val picked = withContext(Dispatchers.IO) { copyToCache(context, uri) }
+            picked?.let(callback.value)
+        }
     }
 
     return {

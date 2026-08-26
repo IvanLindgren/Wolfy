@@ -29,26 +29,46 @@ internal class ReleaseDownloader(
     private val mutableState = MutableStateFlow<AppUpdateState>(AppUpdateState.Idle)
     override val state: StateFlow<AppUpdateState> = mutableState.asStateFlow()
     private var ready: StagedUpdate? = null
+    private var available: UpdateManifest? = null
 
     override suspend fun monitor() {
         withContext(Dispatchers.IO) { restore() }
         // Первое сетевое обращение откладываем до первого кадра и запуска ядра.
         delay(INITIAL_DELAY_MS)
         while (true) {
-            runCatching { withContext(Dispatchers.IO) { checkAndDownload() } }
-                .onFailure { error ->
-                    if (ready == null) {
-                        mutableState.value = AppUpdateState.Failed(
-                            error.message?.take(160) ?: "обновление не проверено",
-                        )
-                    }
-                }
+            checkNow()
             delay(if (ready == null) RETRY_DELAY_MS else CHECK_DELAY_MS)
         }
     }
 
+    override suspend fun checkNow() {
+        if (ready == null) mutableState.value = AppUpdateState.Checking
+        runCatching { withContext(Dispatchers.IO) { checkAvailability() } }
+            .onFailure { error ->
+                if (ready == null) {
+                    mutableState.value = AppUpdateState.Failed(
+                        error.message?.take(160) ?: "обновление не проверено",
+                    )
+                }
+            }
+    }
+
     override suspend fun install(): Boolean {
-        val staged = ready ?: return false
+        val staged = ready
+        if (staged == null) {
+            val remote = available ?: return false
+            return runCatching {
+                withContext(Dispatchers.IO) { download(remote) }
+                // Пакет теперь Ready; отдельное нажатие даст читателю шанс
+                // выбрать момент перезапуска, а не оборвёт чтение самовольно.
+                false
+            }.getOrElse { error ->
+                mutableState.value = AppUpdateState.Failed(
+                    error.message?.take(160) ?: "обновление не скачалось",
+                )
+                false
+            }
+        }
         return withContext(Dispatchers.IO) {
             if (!staged.file.isFile || sha256(staged.file) != staged.manifest.sha256.lowercase()) {
                 clearStaged()
@@ -77,7 +97,7 @@ internal class ReleaseDownloader(
         mutableState.value = AppUpdateState.Ready(manifest.version)
     }
 
-    private fun checkAndDownload() {
+    private fun checkAvailability() {
         if (serverUrl.isBlank()) return
         val endpoint = serverUrl.trimEnd('/') + "/v1/update/latest?platform=" +
             encode(platform) + "&current=" + encode(currentVersion)
@@ -85,6 +105,7 @@ internal class ReleaseDownloader(
         try {
             when (connection.responseCode) {
                 HttpURLConnection.HTTP_NO_CONTENT -> {
+                    available = null
                     if (ready == null) mutableState.value = AppUpdateState.Idle
                     return
                 }
@@ -99,8 +120,13 @@ internal class ReleaseDownloader(
             require(manifest.sha256.matches(Regex("[0-9a-fA-F]{64}"))) { "неверная контрольная сумма" }
 
             val existing = ready
-            if (existing?.manifest?.version == manifest.version && existing.file.isFile) return
-            download(manifest)
+            if (existing?.manifest?.version == manifest.version && existing.file.isFile) {
+                available = null
+                mutableState.value = AppUpdateState.Ready(manifest.version)
+                return
+            }
+            available = manifest
+            mutableState.value = AppUpdateState.Available(manifest.version)
         } finally {
             connection.disconnect()
         }
@@ -135,6 +161,7 @@ internal class ReleaseDownloader(
                         copied += count
                         require(copied <= remote.size) { "пакет больше заявленного размера" }
                         mutableState.value = AppUpdateState.Downloading(
+                            remote.version,
                             (copied.toDouble() / remote.size.toDouble()).toFloat().coerceIn(0f, 1f),
                         )
                     }
@@ -151,6 +178,7 @@ internal class ReleaseDownloader(
             metadataTemporary.writeText(json.encodeToString(UpdateManifest.serializer(), local), Charsets.UTF_8)
             replace(metadataTemporary, metadata)
             ready = StagedUpdate(local, target)
+            available = null
             mutableState.value = AppUpdateState.Ready(local.version)
             directory.listFiles()?.filter { it != target && it != metadata }?.forEach { old ->
                 if (old.name.endsWith(".msi") || old.name.endsWith(".apk") || old.name.endsWith(".part")) old.delete()

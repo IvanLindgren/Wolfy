@@ -15,11 +15,15 @@ import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import com.wolfy.ui.APP_VERSION
 import com.wolfy.ui.WolfyApplication
+import com.wolfy.resources.Res
+import com.wolfy.resources.wolfy_card
+import org.jetbrains.compose.resources.painterResource
 import java.awt.GraphicsEnvironment
 import java.awt.SplashScreen
 
 fun main() = application {
     val state = rememberWindowState(size = defaultWindowSize())
+    val appIcon = painterResource(Res.drawable.wolfy_card)
 
     /*
      * Главное окно можно свернуть, а панель — оставить.
@@ -68,6 +72,7 @@ fun main() = application {
         onCloseRequest = { if (panelOpen) windowOpen = false else exitApplication() },
         title = "Wolfy",
         state = state,
+        icon = appIcon,
     ) {
         LaunchedEffect(Unit) { hideSplash() }
 

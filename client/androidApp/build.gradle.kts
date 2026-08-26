@@ -42,8 +42,8 @@ android {
         applicationId = "com.wolfy.reader"
         minSdk = libs.versions.androidMinSdk.get().toInt()
         targetSdk = libs.versions.androidTargetSdk.get().toInt()
-        versionCode = 6
-        versionName = "0.1.5"
+        versionCode = 8
+        versionName = "0.1.7"
         buildConfigField("String", "WOLFY_SERVER_URL", "\"${wolfyServerUrl.get()}\"")
     }
 

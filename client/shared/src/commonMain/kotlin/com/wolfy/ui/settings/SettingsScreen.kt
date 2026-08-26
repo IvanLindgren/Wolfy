@@ -98,168 +98,142 @@ fun SettingsScreen(
         verticalArrangement = Arrangement.spacedBy(spacing.large),
     ) {
         Text(
-            text = "Ещё",
+            text = "Настройки",
             style = WolfyTheme.typography.screenTitle,
             color = colors.ink,
         )
-        Rule(thick = true)
-
-        SectionLabel("Грамматика")
         Text(
-            text = "Справочник →",
-            style = WolfyTheme.typography.button,
-            color = colors.accent,
-            modifier = Modifier
-                .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.huge))
-                .pressable(onClick = onOpenReference)
-                .padding(horizontal = spacing.large, vertical = spacing.small),
-        )
-        Text(
-            text = "Времена, залог, модальные, неличные формы и условные — с теми же " +
-                "объяснениями, что в карточке слова.",
-            style = WolfyTheme.typography.caption,
+            "Всё важное собрано по темам. Нужный пункт видно сразу.",
+            style = WolfyTheme.typography.body,
             color = colors.inkMuted,
         )
 
-        Rule()
-        SectionLabel("Тема чтения")
-        ThemePicker(selected = theme, onSelect = onThemeChange)
-        Text(
-            text = "Тема меняет и страницу, и весь интерфейс: читалка не должна " +
-                "выглядеть гостем в собственном приложении.",
-            style = WolfyTheme.typography.caption,
-            color = colors.inkMuted,
-        )
+        SettingsCard("Вид и текст") {
+            SectionLabel("Тема")
+            ThemePicker(selected = theme, onSelect = onThemeChange)
+            Rule()
+            SectionLabel("Размер текста книги")
+            FontScale(scale = fontScale, onChange = onFontScaleChange)
+            MotionToggle(reduceMotion, onReduceMotion)
+        }
 
-        Rule()
-        SectionLabel("Размер текста")
-        FontScale(scale = fontScale, onChange = onFontScaleChange)
-        Text(
-            text = "Меняется только текст книги. Подписи интерфейса остаются как " +
-                "были: растянутые, они полезли бы друг на друга.",
-            style = WolfyTheme.typography.caption,
-            color = colors.inkMuted,
-        )
-
-        MotionToggle(reduceMotion, onReduceMotion)
-
-        Rule()
-        SectionLabel("Чтение")
-        SwitchRow(
-            title = "Полужирная основа",
-            hint = "Взгляд цепляется за начало слова, а окончание достраивает сам.",
-            on = emphasizeStems,
-            onChange = onEmphasizeStems,
-        )
-        ChoiceRow(
-            title = "Окно чтения",
-            hint = "Всё, кроме текущего места, притушено — как бумажная линейка с прорезью.",
-            options = FOCUS_TITLES.map { it.second },
-            selected = FOCUS_TITLES.indexOfFirst { it.first == focusMode }.coerceAtLeast(0),
-            onSelect = { onFocusMode(FOCUS_TITLES[it].first) },
-        )
-        ChoiceRow(
-            title = "Ведущая строка",
-            hint = "Окно едет само. Включается кнопкой в читалке, останавливается касанием.",
-            options = PACES.map { it.second },
-            selected = PACES.indexOfFirst { it.first == pacerWpm }.coerceAtLeast(0),
-            onSelect = { onPacer(PACES[it].first) },
-        )
-        ChoiceRow(
-            title = "Отрезок чтения",
-            hint = "Видимый конец подхода. Граница подтягивается к точке, а не рвёт фразу.",
-            options = SEGMENTS.map { it.second },
-            selected = SEGMENTS.indexOfFirst { it.first == segmentWords }.coerceAtLeast(0),
-            onSelect = { onSegmentWords(SEGMENTS[it].first) },
-        )
-
-        Rule()
-        RadioPanel(
-            state = radio,
-            ownUrl = radioOwnUrl,
-            onStation = onRadioStation,
-            onStop = onRadioStop,
-            onVolume = onRadioVolume,
-            onOwnUrl = onRadioOwnUrl,
-        )
-
-        Rule()
-        SectionLabel("Аккаунт")
-        Fact(
-            label = if (signedIn) "Выполнен вход" else "Состояние",
-            value = if (signedIn) accountEmail.ifBlank { "аккаунт Читавука" } else "без аккаунта",
-        )
-        Text(
-            text = if (signedIn) "Выйти" else "Войти",
-            style = WolfyTheme.typography.button,
-            color = colors.accent,
-            modifier = Modifier
-                .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.huge))
-                .pressable(onClick = if (signedIn) onSignOut else onSignIn)
-                .padding(horizontal = spacing.large, vertical = spacing.small),
-        )
-
-        Rule()
-        SectionLabel("Синхронизация")
-        SyncBlock(status = sync, signedIn = signedIn, onSyncNow = onSyncNow)
-
-        Rule()
-        SectionLabel("Перевод")
-        Fact(
-            label = "Аккаунт Читавука",
-            value = if (signedIn) "вход выполнен" else "не выполнен",
-        )
-        Text(
-            text = if (signedIn) {
-                "Контекстный перевод работает."
-            } else {
-                "Без входа читалка и разбор слов работают полностью — не " +
-                    "приходит только перевод из сети."
-            },
-            style = WolfyTheme.typography.caption,
-            color = colors.inkMuted,
-        )
-
-        Rule()
-        SectionLabel("Офлайн-словарь")
-        Fact(
-            label = "Состояние",
-            value = when (dictionary) {
-                DictionaryStatus.Ready -> "установлен"
-                DictionaryStatus.Offer, DictionaryStatus.Declined -> "не установлен"
-                is DictionaryStatus.Downloading -> dictionary.progress?.let {
-                    "установка ${(it * 100).toInt()}%"
-                } ?: "установка"
-                is DictionaryStatus.Failed -> "ошибка установки"
-            },
-        )
-        Text(
-            text = "Словарь добавляет русские переводы слов, МФА и английские " +
-                "толкования. Он работает без сети и занимает около 9 МБ.",
-            style = WolfyTheme.typography.caption,
-            color = colors.inkMuted,
-        )
-        if (dictionary !is DictionaryStatus.Ready) {
-            val downloading = dictionary is DictionaryStatus.Downloading
-            Text(
-                text = when {
-                    downloading -> "словарь устанавливается"
-                    dictionary is DictionaryStatus.Failed -> "повторить установку"
-                    else -> "установить словарь"
-                },
-                style = WolfyTheme.typography.button,
-                color = if (downloading) colors.inkMuted else colors.accent,
-                modifier = Modifier
-                    .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.huge))
-                    .pressable(enabled = !downloading, onClick = onDownloadDictionary)
-                    .padding(horizontal = spacing.large, vertical = spacing.small),
+        SettingsCard("Помощь при чтении") {
+            SwitchRow(
+                title = "Полужирная основа",
+                hint = "Начало слова заметнее, поэтому строку легче удерживать взглядом.",
+                on = emphasizeStems,
+                onChange = onEmphasizeStems,
+            )
+            ChoiceRow(
+                title = "Окно чтения",
+                hint = "Текст вокруг текущего места становится тише.",
+                options = FOCUS_TITLES.map { it.second },
+                selected = FOCUS_TITLES.indexOfFirst { it.first == focusMode }.coerceAtLeast(0),
+                onSelect = { onFocusMode(FOCUS_TITLES[it].first) },
+            )
+            ChoiceRow(
+                title = "Ведущая строка",
+                hint = "Строка движется сама с выбранной скоростью.",
+                options = PACES.map { it.second },
+                selected = PACES.indexOfFirst { it.first == pacerWpm }.coerceAtLeast(0),
+                onSelect = { onPacer(PACES[it].first) },
+            )
+            ChoiceRow(
+                title = "Отрезок чтения",
+                hint = "Показывает удобную границу одного подхода.",
+                options = SEGMENTS.map { it.second },
+                selected = SEGMENTS.indexOfFirst { it.first == segmentWords }.coerceAtLeast(0),
+                onSelect = { onSegmentWords(SEGMENTS[it].first) },
             )
         }
 
-        Rule()
-        SectionLabel("О приложении")
-        Fact(label = "Версия ядра", value = coreVersion)
-        Fact(label = "Сервис", value = serverUrl)
+        SettingsCard("Радио") {
+            RadioPanel(
+                state = radio,
+                ownUrl = radioOwnUrl,
+                onStation = onRadioStation,
+                onStop = onRadioStop,
+                onVolume = onRadioVolume,
+                onOwnUrl = onRadioOwnUrl,
+            )
+        }
+
+        SettingsCard("Аккаунт и синхронизация") {
+            Fact(
+                label = "Аккаунт",
+                value = if (signedIn) accountEmail.ifBlank { "Читавук" } else "вход не выполнен",
+            )
+            Text(
+                text = if (signedIn) "выйти" else "войти",
+                style = WolfyTheme.typography.button,
+                color = colors.accent,
+                modifier = Modifier
+                    .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.huge))
+                    .pressable(onClick = if (signedIn) onSignOut else onSignIn)
+                    .padding(horizontal = spacing.large, vertical = spacing.small),
+            )
+            Rule()
+            SyncBlock(status = sync, signedIn = signedIn, onSyncNow = onSyncNow)
+            Text(
+                if (signedIn) "Перевод из сети доступен." else "Войдите, чтобы пользоваться переводом из сети.",
+                style = WolfyTheme.typography.caption,
+                color = colors.inkMuted,
+            )
+        }
+
+        SettingsCard("Офлайн-словарь") {
+            Fact(
+                label = "Состояние",
+                value = when (dictionary) {
+                    DictionaryStatus.Ready -> "установлен"
+                    DictionaryStatus.Offer, DictionaryStatus.Declined -> "не установлен"
+                    is DictionaryStatus.Downloading -> dictionary.progress?.let {
+                        "установка ${(it * 100).toInt()}%"
+                    } ?: "установка"
+                    is DictionaryStatus.Failed -> "ошибка установки"
+                },
+            )
+            Text(
+                "Переводы, произношение и английские толкования работают без сети. Словарь занимает около 9 МБ.",
+                style = WolfyTheme.typography.caption,
+                color = colors.inkMuted,
+            )
+            if (dictionary !is DictionaryStatus.Ready) {
+                val downloading = dictionary is DictionaryStatus.Downloading
+                Text(
+                    text = when {
+                        downloading -> "словарь устанавливается"
+                        dictionary is DictionaryStatus.Failed -> "повторить установку"
+                        else -> "установить словарь"
+                    },
+                    style = WolfyTheme.typography.button,
+                    color = if (downloading) colors.inkMuted else colors.accent,
+                    modifier = Modifier
+                        .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.huge))
+                        .pressable(enabled = !downloading, onClick = onDownloadDictionary)
+                        .padding(horizontal = spacing.large, vertical = spacing.small),
+                )
+            }
+        }
+
+        SettingsCard("Справочник") {
+            Text(
+                "Времена, залог, модальные и условные формы с короткими примерами.",
+                style = WolfyTheme.typography.caption,
+                color = colors.inkMuted,
+            )
+            Text(
+                text = "открыть справочник →",
+                style = WolfyTheme.typography.button,
+                color = colors.accent,
+                modifier = Modifier.pressable(onClick = onOpenReference).padding(vertical = spacing.small),
+            )
+        }
+
+        SettingsCard("О приложении") {
+            Fact(label = "Версия ядра", value = coreVersion)
+            Fact(label = "Сервис", value = serverUrl)
+        }
 
         Row(
             Modifier.fillMaxWidth().padding(top = spacing.xlarge),
@@ -280,6 +254,23 @@ fun SettingsScreen(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun SettingsCard(title: String, content: @Composable () -> Unit) {
+    val colors = WolfyTheme.colors
+    val spacing = WolfyTheme.spacing
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(colors.surface, RoundedCornerShape(spacing.large))
+            .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.large))
+            .padding(spacing.large),
+        verticalArrangement = Arrangement.spacedBy(spacing.medium),
+    ) {
+        Text(title, style = WolfyTheme.typography.bookTitle, color = colors.ink)
+        content()
     }
 }
 
@@ -420,9 +411,8 @@ private fun SyncBlock(status: SyncStatus, signedIn: Boolean, onSyncNow: () -> Un
             Text(text = it, style = WolfyTheme.typography.caption, color = colors.accent)
         }
         Text(
-            text = "Между устройствами едут прогресс, полки и колоды. Файлы книг " +
-                "остаются на устройстве: книга — это ваш файл, и держать его у себя " +
-                "сервер не должен.",
+            text = "Прогресс, полки и карточки появятся на ваших устройствах. " +
+                "Сами файлы книг останутся только у вас.",
             style = WolfyTheme.typography.caption,
             color = colors.inkMuted,
         )

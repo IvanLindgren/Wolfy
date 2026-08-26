@@ -20,6 +20,7 @@ private class FakeStore(private val records: Map<String, String>) : LibraryStore
     override fun fingerprint(path: String): String = ""
     override fun readText(path: String): String = ""
     override fun writeText(fileName: String, text: String): String = ""
+    override fun appendText(fileName: String, text: String): String = ""
     override fun writeBook(fileName: String, bytes: ByteArray): String = ""
     override fun writeCover(bookId: String, extension: String, bytes: ByteArray): String = ""
     override fun findCover(bookId: String): String? = null

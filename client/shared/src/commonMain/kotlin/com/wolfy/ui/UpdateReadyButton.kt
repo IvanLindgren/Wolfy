@@ -32,7 +32,7 @@ import com.wolfy.platform.AppUpdateState
 import com.wolfy.theme.WolfyTheme
 import com.wolfy.widgets.pressable
 
-/** Кнопка появляется только после полной загрузки и проверки пакета. */
+/** Ненавязчивое предложение загрузить обновление либо перезапустить его. */
 @Composable
 internal fun UpdateReadyButton(
     controller: AppUpdateController,
@@ -41,8 +41,10 @@ internal fun UpdateReadyButton(
 ) {
     val state by controller.state.collectAsState()
     val ready = state as? AppUpdateState.Ready
+    val available = state as? AppUpdateState.Available
+    val version = ready?.version ?: available?.version
     AnimatedVisibility(
-        visible = ready != null,
+        visible = version != null,
         modifier = modifier.zIndex(20f),
         enter = fadeIn() + scaleIn(initialScale = 0.8f),
         exit = fadeOut() + scaleOut(targetScale = 0.8f),
@@ -55,7 +57,11 @@ internal fun UpdateReadyButton(
                 .border(WolfyTheme.spacing.rule, colors.rule, CircleShape)
                 .semantics {
                     role = Role.Button
-                    contentDescription = "Перезапустить и установить Wolfy ${ready?.version.orEmpty()}"
+                    contentDescription = if (ready != null) {
+                        "Перезапустить и установить Wolfy ${ready.version}"
+                    } else {
+                        "Загрузить обновление Wolfy ${available?.version.orEmpty()}"
+                    }
                 }
                 .pressable(onClick = onRestart),
             contentAlignment = Alignment.Center,
