@@ -112,30 +112,30 @@ fun SettingsScreen(
             ReaderPreview(fontScale, focusMode)
         }
 
-        SettingsCard("Помощь при чтении") {
+        SettingsCard("Чтение") {
             SwitchRow(
-                title = "Полужирная основа",
-                hint = "Начало слова заметнее, поэтому строку легче удерживать взглядом.",
+                title = "Выделять основу слова",
+                hint = "Начало слов будет заметнее.",
                 on = emphasizeStems,
                 onChange = onEmphasizeStems,
             )
             ChoiceRow(
-                title = "Окно чтения",
-                hint = "Текст вокруг текущего места становится тише.",
+                title = "Фокус",
+                hint = "Приглушает текст вокруг текущей строки.",
                 options = FOCUS_TITLES.map { it.second },
                 selected = FOCUS_TITLES.indexOfFirst { it.first == focusMode }.coerceAtLeast(0),
                 onSelect = { onFocusMode(FOCUS_TITLES[it].first) },
             )
             ChoiceRow(
                 title = "Ведущая строка",
-                hint = "Строка движется сама с выбранной скоростью.",
+                hint = "Помогает держать темп чтения.",
                 options = PACES.map { it.second },
                 selected = PACES.indexOfFirst { it.first == pacerWpm }.coerceAtLeast(0),
                 onSelect = { onPacer(PACES[it].first) },
             )
             ChoiceRow(
-                title = "Отрезок чтения",
-                hint = "Показывает удобную границу одного подхода.",
+                title = "Размер отрезка",
+                hint = "Отмечает удобную паузу в тексте.",
                 options = SEGMENTS.map { it.second },
                 selected = SEGMENTS.indexOfFirst { it.first == segmentWords }.coerceAtLeast(0),
                 onSelect = { onSegmentWords(SEGMENTS[it].first) },
@@ -170,7 +170,7 @@ fun SettingsScreen(
             Rule()
             SyncBlock(status = sync, signedIn = signedIn, onSyncNow = onSyncNow)
             Text(
-                if (signedIn) "Перевод из сети доступен." else "Войдите, чтобы пользоваться переводом из сети.",
+                if (signedIn) "Перевод из сети включён." else "Войдите, чтобы включить перевод из сети.",
                 style = WolfyTheme.typography.caption,
                 color = colors.inkMuted,
             )
@@ -189,7 +189,7 @@ fun SettingsScreen(
                 },
             )
             Text(
-                "Переводы, произношение и английские толкования работают без сети. Словарь занимает около 9 МБ.",
+                "Перевод и толкования без интернета. Занимает около 9 МБ.",
                 style = WolfyTheme.typography.caption,
                 color = colors.inkMuted,
             )
@@ -213,7 +213,7 @@ fun SettingsScreen(
 
         SettingsCard("Справочник") {
             Text(
-                "Времена, залог, модальные и условные формы с короткими примерами.",
+                "Правила английского с короткими примерами.",
                 style = WolfyTheme.typography.caption,
                 color = colors.inkMuted,
             )
@@ -245,9 +245,9 @@ private fun ReaderPreview(fontScale: Float, focus: FocusMode) {
         verticalArrangement = Arrangement.spacedBy(spacing.tight),
     ) {
         SectionLabel("Так будет выглядеть читалка")
-        Text("The small fox found a quiet place to read.", style = WolfyTheme.typography.body.copy(fontSize = WolfyTheme.typography.body.fontSize * fontScale), color = colors.ink)
+        Text("The fox found a quiet place to read.", style = WolfyTheme.typography.body.copy(fontSize = WolfyTheme.typography.body.fontSize * fontScale), color = colors.ink)
         if (focus != FocusMode.Off) {
-            Text("Следующая строка станет тише вокруг места чтения.", style = WolfyTheme.typography.caption, color = colors.inkMuted)
+            Text("Соседний текст станет тише.", style = WolfyTheme.typography.caption, color = colors.inkMuted)
         }
     }
 }
@@ -279,15 +279,15 @@ private fun SettingsCard(title: String, content: @Composable () -> Unit) {
  * минут» оказалось бы неверным ровно для того, кто читает медленнее.
  */
 private val FOCUS_TITLES = listOf(
-    FocusMode.Off to "без окна",
+    FocusMode.Off to "выкл.",
     FocusMode.Sentence to "предложение",
     FocusMode.Paragraph to "абзац",
 )
 
-private val PACES = listOf(0 to "выключена", 160 to "спокойно", 220 to "обычно", 300 to "быстро")
+private val PACES = listOf(0 to "выкл.", 160 to "спокойно", 220 to "обычно", 300 to "быстро")
 
 private val SEGMENTS =
-    listOf(0 to "без отрезков", 150 to "короткий", 400 to "средний", 900 to "длинный")
+    listOf(0 to "выкл.", 150 to "короткий", 400 to "средний", 900 to "длинный")
 
 /** Переключатель «включено/выключено» той же пластики, что и убавленное движение. */
 @Composable
@@ -359,7 +359,7 @@ private fun MotionToggle(reduced: Boolean, onChange: (Boolean) -> Unit) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(spacing.tight)) {
             Text("Убавить движение", style = WolfyTheme.typography.body, color = colors.ink)
             Text(
-                "Переходы и полёт слова станут мгновенными.",
+                "Без плавных переходов.",
                 style = WolfyTheme.typography.caption,
                 color = colors.inkMuted,
             )
@@ -405,7 +405,7 @@ private fun SyncBlock(status: SyncStatus, signedIn: Boolean, onSyncNow: () -> Un
             Text(text = it, style = WolfyTheme.typography.caption, color = colors.accent)
         }
         Text(
-            text = "Прогресс, полки, карточки и добавленные книги появятся на ваших устройствах.",
+            text = "Книги, прогресс и карточки будут на всех ваших устройствах.",
             style = WolfyTheme.typography.caption,
             color = colors.inkMuted,
         )

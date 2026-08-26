@@ -56,9 +56,7 @@ fun RadioPanel(
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(spacing.small)) {
         SectionLabel("Радио под чтение")
         Text(
-            text = "Ровный фон помогает не всем, поэтому по умолчанию тихо и " +
-                "выключено. Станции инструментальные. Голос в фоне становится вторым " +
-                "текст, и читать под него нельзя.",
+            text = "Негромкая инструментальная музыка для чтения.",
             style = WolfyTheme.typography.caption,
             color = colors.inkMuted,
         )
