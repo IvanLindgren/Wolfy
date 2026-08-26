@@ -146,6 +146,12 @@ func Load() (Config, error) {
 }
 
 func defaultBookFilesPath() string {
+	// Релизы в /opt/wolfy/releases намеренно заменяются целиком. Файлы книг
+	// должны пережить такую замену, поэтому на VDS живут рядом с общим env.
+	// Каталог создаёт сам bookfiles.Service при первой загрузке.
+	if info, err := os.Stat("/opt/wolfy/shared"); err == nil && info.IsDir() {
+		return "/opt/wolfy/shared/book-files"
+	}
 	return filepath.Join(defaultReleasesPath(), "book-files")
 }
 

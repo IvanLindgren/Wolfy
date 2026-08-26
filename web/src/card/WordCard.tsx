@@ -33,11 +33,11 @@ import {
 } from './grammarColors'
 import { PhraseText } from './PhraseText'
 import { ColorLegend } from './ColorLegend'
-import { SentenceGraph } from './SentenceGraph'
 import { contextualPos, otherSenses, primarySense } from './cardEssentials'
 import { canSpeak, onVoicesReady, speak } from './speech'
 import { useDefinition } from './useDefinition'
 import { useTranslation } from './useTranslation'
+import * as api from '../api/client'
 
 /** Что читатель выбрал в тексте. */
 export interface CardTarget {
@@ -102,6 +102,9 @@ function Sheet({ target, onClose }: { target: CardTarget; onClose: () => void })
   const [analysis, setAnalysis] = useState<WordAnalysis | null>(null)
   const [grammar, setGrammar] = useState<Grammar | null>(null)
   const [voices, setVoices] = useState(canSpeak())
+  const [phraseAI, setPhraseAI] = useState<
+    { state: 'idle' | 'loading' | 'ready' | 'failed'; result?: api.AiPhrase; message?: string }
+  >({ state: 'idle' })
   const sheet = useRef<HTMLDivElement>(null)
 
   // §16: один вызов inspectWord вместо четырёх. Карточка уже видна (shell),
@@ -111,6 +114,7 @@ function Sheet({ target, onClose }: { target: CardTarget; onClose: () => void })
     // Сброс при смене цели — иначе прошлый результат моргнёт
     setAnalysis(null)
     setGrammar(null)
+    setPhraseAI({ state: 'idle' })
     if (target.kind === 'word' && target.surface) {
       void bridge
         .inspectWord(target.surface, target.sentence)
@@ -144,6 +148,20 @@ function Sheet({ target, onClose }: { target: CardTarget; onClose: () => void })
       alive = false
     }
   }, [target.kind, target.surface, target.sentence])
+
+  const askPhraseAI = useCallback(async () => {
+    if (target.kind !== 'phrase' || !target.sentence.trim()) return
+    setPhraseAI({ state: 'loading' })
+    try {
+      const result = await api.explainPhrase(target.sentence, target.sentence)
+      setPhraseAI({ state: 'ready', result })
+    } catch (problem) {
+      setPhraseAI({
+        state: 'failed',
+        message: problem instanceof Error ? problem.message : 'Подсказка сейчас недоступна.',
+      })
+    }
+  }, [target.kind, target.sentence])
 
   useEffect(() => onVoicesReady(() => setVoices(true)), [])
 
@@ -316,8 +334,9 @@ function Sheet({ target, onClose }: { target: CardTarget; onClose: () => void })
             target={target}
             grammar={grammar}
             translation={translation}
-            stagger={timing.stagger}
             duration={timing.calm}
+            ai={phraseAI}
+            onAskAI={() => void askPhraseAI()}
           />
         )}
       </div>
@@ -450,11 +469,6 @@ function WordBody({
             </span>
           )}
           {analysis?.cefr && <span className={styles.tag}>уровень {analysis.cefr}</span>}
-          {analysis && analysis.zipf > 0 && (
-            <span className={styles.tag} title="Частотность по шкале Zipf: 6 — «the», 4 — обычное книжное слово">
-              Zipf {analysis.zipf.toFixed(1)}
-            </span>
-          )}
           {analysis && (
             <span className={styles.tag}>
               {analysis.surface.length} букв · {syllables(analysis.surface)} слог.
@@ -668,14 +682,16 @@ function PhraseBody({
   target,
   grammar,
   translation,
-  stagger,
   duration,
+  ai,
+  onAskAI,
 }: {
   target: CardTarget
   grammar: Grammar | null
   translation: ReturnType<typeof useTranslation>
-  stagger: number
   duration: number
+  ai: { state: 'idle' | 'loading' | 'ready' | 'failed'; result?: api.AiPhrase; message?: string }
+  onAskAI: () => void
 }) {
   return (
     <>
@@ -709,24 +725,7 @@ function PhraseBody({
         <ColorLegend parts={grammar?.parts ?? []} markers={grammar?.markers ?? []} />
       </section>
 
-      {/*
-        Разбор по членам спрятан нарочно. Он занимает больше места, чем всё
-        остальное в карточке вместе взятое, а нужен далеко не каждому и далеко
-        не каждый раз: чаще всего фразу выделяют, чтобы понять смысл, и ответ
-        на это стоит выше. Тот, кому интересно устройство, раскроет.
-      */}
-      <WolfyDisclosure
-        label="Разбор по членам предложения"
-        hint="Кто подлежащее, что сказуемое, а остальное к чему"
-        duration={duration}
-      >
-        <SentenceGraph
-          tokens={target.tokens}
-          chunks={grammar?.chunks ?? []}
-          stagger={stagger}
-          duration={duration}
-        />
-      </WolfyDisclosure>
+      <BetaPhraseExplanation state={ai} onAsk={onAskAI} />
 
       <WolfyDisclosure
         label="Подробнее о фразе"
@@ -775,6 +774,46 @@ function PhraseBody({
         )}
       </WolfyDisclosure>
     </>
+  )
+}
+
+function BetaPhraseExplanation({
+  state,
+  onAsk,
+}: {
+  state: { state: 'idle' | 'loading' | 'ready' | 'failed'; result?: api.AiPhrase; message?: string }
+  onAsk: () => void
+}) {
+  return (
+    <section className={styles.beta}>
+      <div className={styles.beta__head}>
+        <div>
+          <h3 className={styles.section__title}>Почему фраза построена так · Beta</h3>
+          <p className={styles.beta__notice}>ИИ может ошибаться. До 10 запросов в день.</p>
+        </div>
+        <Button variant="secondary" small onClick={onAsk} disabled={state.state === 'loading'}>
+          {state.state === 'loading' ? 'Разбираю…' : state.state === 'ready' ? 'Спросить ещё' : 'Спросить Gemini'}
+        </Button>
+      </div>
+
+      {state.state === 'failed' && <p className={styles.beta__error}>{state.message}</p>}
+      {state.state === 'ready' && state.result && (
+        <div className={styles.beta__result}>
+          <strong>{state.result.title}</strong>
+          <p>{state.result.explanation}</p>
+          <p className={styles.beta__pattern} lang="en">{state.result.pattern}</p>
+          <ol className={styles.beta__steps}>
+            {state.result.steps.map((step, index) => (
+              <li key={`${step.label}:${index}`}>
+                <strong>{step.label}</strong>
+                <span>{step.text}</span>
+              </li>
+            ))}
+          </ol>
+          <p className={styles.beta__remaining}>На сегодня осталось запросов: {state.result.remaining}</p>
+        </div>
+      )}
+    </section>
   )
 }
 

@@ -21,6 +21,7 @@ import { Link, useNavigate, useParams, useSearch } from '@tanstack/react-router'
 import { useShortcuts } from '../app/shortcuts'
 import { THEMES, applyTheme, motionFor } from '../app/theme'
 import { WordCard, type CardTarget } from '../card/WordCard'
+import * as api from '../api/client'
 import * as bridge from '../core/bridge'
 import { session, useSession } from '../core/session'
 import type { LibraryBook, ReadingSegment, ThemeName } from '../core/types'
@@ -96,6 +97,9 @@ export function ReaderScreen() {
   const [recent, setRecent] = useState<string[]>([])
   const [chapterTitles, setChapterTitles] = useState<(string | null)[]>([])
   const [page, setPage] = useState({ page: 0, pages: 1 })
+  const [recap, setRecap] = useState<
+    { state: 'idle' | 'loading' | 'ready' | 'failed'; result?: api.AiRecap; message?: string }
+  >({ state: 'idle' })
 
   // --- Инструменты отметок ---------------------------------------------------
   //
@@ -907,6 +911,33 @@ export function ReaderScreen() {
     window.getSelection()?.removeAllRanges()
   }, [])
 
+  const recapStory = useCallback(async () => {
+    if (!book || !opened || chapterIndex < 0) return
+    setRecap({ state: 'loading' })
+    try {
+      // В ядро уходит только небольшой недавний фрагмент: модель не получает
+      // всю книгу и не может пересказать то, чего читатель ещё не видел.
+      const pieces = [chapter.text]
+      for (let index = chapterIndex - 1; index >= 0 && pieces.join('\n\n').length < 18_000; index -= 1) {
+        const previous = await bridge.chapter(book.id, index)
+        const text = previous.blocks.map((block) => block.text ?? '').filter(Boolean).join('\n\n')
+        if (text) pieces.unshift(text)
+      }
+      const excerpt = pieces.join('\n\n').slice(-18_000)
+      if (excerpt.length < 200) {
+        setRecap({ state: 'failed', message: 'Пока прочитано слишком мало текста для пересказа.' })
+        return
+      }
+      const result = await api.recapRecentPages(book.title ?? 'Без названия', excerpt)
+      setRecap({ state: 'ready', result })
+    } catch (problem) {
+      setRecap({
+        state: 'failed',
+        message: problem instanceof Error ? problem.message : 'Подсказка сейчас недоступна.',
+      })
+    }
+  }, [book, opened, chapterIndex, chapter.text])
+
   // --- Стикеры этой главы ----------------------------------------------------
 
   // --- Клавиши --------------------------------------------------------------
@@ -1071,6 +1102,16 @@ export function ReaderScreen() {
 
         <button
           type="button"
+          className={styles.recapButton}
+          onClick={() => void recapStory()}
+          disabled={recap.state === 'loading'}
+          title="О чём были последние страницы"
+        >
+          {recap.state === 'loading' ? 'Вспоминаю…' : 'Сюжет · Beta'}
+        </button>
+
+        <button
+          type="button"
           className={styles.iconButton}
           data-active={tool === 'sticker'}
           onClick={() => setTool(tool === 'sticker' ? null : 'sticker')}
@@ -1166,6 +1207,14 @@ export function ReaderScreen() {
         </div>
       )}
 
+      {recap.state !== 'idle' && (
+        <StoryRecap
+          state={recap}
+          onClose={() => setRecap({ state: 'idle' })}
+          onRetry={() => void recapStory()}
+        />
+      )}
+
       <div
         className={styles.stage}
         data-tool={tool ?? 'none'}
@@ -1242,6 +1291,51 @@ export function ReaderScreen() {
 
       <WordCard target={card} onClose={closeCard} />
     </div>
+  )
+}
+
+function StoryRecap({
+  state,
+  onClose,
+  onRetry,
+}: {
+  state: { state: 'idle' | 'loading' | 'ready' | 'failed'; result?: api.AiRecap; message?: string }
+  onClose: () => void
+  onRetry: () => void
+}) {
+  return (
+    <aside className={styles.recap} aria-live="polite">
+      <div className={styles.recap__head}>
+        <div>
+          <strong>О чём были последние страницы · Beta</strong>
+          <p>ИИ может ошибаться. До 10 запросов в день.</p>
+        </div>
+        <button type="button" className={styles.iconButton} onClick={onClose} aria-label="Закрыть пересказ">
+          <CloseIcon />
+        </button>
+      </div>
+      {state.state === 'loading' && <p className={styles.recap__muted}>Собираю нить событий…</p>}
+      {state.state === 'failed' && (
+        <div>
+          <p className={styles.recap__error}>{state.message}</p>
+          <Button small variant="secondary" onClick={onRetry}>Повторить</Button>
+        </div>
+      )}
+      {state.state === 'ready' && state.result && (
+        <>
+          <p className={styles.recap__summary}>{state.result.summary}</p>
+          <ol className={styles.recap__events}>
+            {state.result.events.map((event, index) => (
+              <li key={`${event.title}:${index}`} data-kind={event.kind}>
+                <strong>{event.title}</strong>
+                <span>{event.text}</span>
+              </li>
+            ))}
+          </ol>
+          <p className={styles.recap__muted}>На сегодня осталось запросов: {state.result.remaining}</p>
+        </>
+      )}
+    </aside>
   )
 }
 

@@ -357,6 +357,48 @@ export async function translate(
   return response.text ?? ''
 }
 
+// --- Проверенные Beta-подсказки для чтения ---------------------------------
+
+/** Ответ уже проверен сервером: браузер не рисует разметку, придуманную ИИ. */
+export interface AiPhraseStep {
+  label: string
+  text: string
+}
+
+export interface AiPhrase {
+  title: string
+  explanation: string
+  pattern: string
+  steps: AiPhraseStep[]
+  remaining: number
+}
+
+export interface AiRecapEvent {
+  title: string
+  text: string
+  kind: 'start' | 'turn' | 'result'
+}
+
+export interface AiRecap {
+  summary: string
+  events: AiRecapEvent[]
+  remaining: number
+}
+
+export async function explainPhrase(phrase: string, context: string): Promise<AiPhrase> {
+  return request<AiPhrase>('/v1/ai/phrase', {
+    method: 'POST',
+    body: { phrase, context },
+  })
+}
+
+export async function recapRecentPages(title: string, excerpt: string): Promise<AiRecap> {
+  return request<AiRecap>('/v1/ai/recap', {
+    method: 'POST',
+    body: { title, excerpt },
+  })
+}
+
 /** Сетевое толкование — запасной путь для тех, кто не скачал словарь. */
 export async function define(word: string, signal?: AbortSignal) {
   return request<{

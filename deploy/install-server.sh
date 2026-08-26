@@ -15,7 +15,7 @@ if ! id wolfy >/dev/null 2>&1; then
 fi
 
 install -d -m 755 /opt/wolfy /opt/wolfy/releases
-install -d -o wolfy -g wolfy -m 750 /opt/wolfy/shared /opt/wolfy/shared/releases
+install -d -o wolfy -g wolfy -m 750 /opt/wolfy/shared /opt/wolfy/shared/releases /opt/wolfy/shared/book-files
 install -m 644 "$script_dir/wolfy.service" /etc/systemd/system/wolfy.service
 install -m 644 "$script_dir/nginx-wolfy.conf" /etc/nginx/conf.d/wolfy.conf
 

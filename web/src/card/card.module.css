@@ -178,6 +178,82 @@
   font-style: italic;
 }
 
+/* Beta не выводит разметку модели: только проверенные сервером поля в
+   обычной карточке. Схема остаётся читаемой и на узком экране. */
+.beta {
+  margin: 0.8rem 0;
+  padding: 0.85rem 0.95rem;
+  border: 1px solid var(--rule);
+  border-radius: calc(var(--radius) + 3px);
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface));
+}
+
+.beta__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.7rem;
+}
+
+.beta__notice,
+.beta__remaining,
+.beta__error {
+  margin: 0.2rem 0 0;
+  color: var(--ink-muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.beta__error { color: var(--danger, #a13b32); }
+
+.beta__result { margin-top: 0.75rem; }
+.beta__result p { margin: 0.35rem 0; line-height: 1.48; }
+
+.beta__pattern {
+  display: inline-block;
+  padding: 0.28rem 0.45rem;
+  border-radius: 0.35rem;
+  background: var(--surface-sunken);
+  font-size: 0.86rem;
+}
+
+.beta__steps {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0.7rem 0 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: beta-step;
+}
+
+.beta__steps li {
+  display: grid;
+  grid-template-columns: 1.65rem 1fr;
+  gap: 0.45rem;
+  align-items: baseline;
+  counter-increment: beta-step;
+}
+
+.beta__steps li::before {
+  content: counter(beta-step);
+  display: grid;
+  place-items: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--paper);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.beta__steps span {
+  grid-column: 2;
+  color: var(--ink-muted);
+  font-size: 0.9rem;
+  line-height: 1.42;
+}
+
 .wordForm {
   font-family: var(--serif), 'Playfair Fallback';
   font-size: 1.25rem;
