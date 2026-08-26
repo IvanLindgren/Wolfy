@@ -103,11 +103,20 @@ interface LibraryStore {
     /** Читает небольшой кусок книги для потоковой отправки. */
     fun readBookChunk(path: String, offset: Long, maxBytes: Int): ByteArray? = null
 
-    /** Создаёт пустой файл для поступающей частями книги. */
+    /** Создаёт пустой временный файл (.part) для поступающей частями книги. */
     fun createBookDownload(fileName: String): String = ""
 
     /** Дописывает очередную часть скачиваемой книги. */
     fun appendBookChunk(path: String, bytes: ByteArray): Boolean = false
+
+    /**
+     * Фиксирует докачанный файл: проверенный .part атомарно переименовывается
+     * в финальное имя. Пустая строка — файл не годится.
+     */
+    fun commitBookDownload(path: String): String = ""
+
+    /** Стирает недокачанный .part: осиротевших файлов оставаться не должно. */
+    fun discardBookDownload(path: String) {}
 
     /** Путь к установленному офлайн-словарю или пустая строка. */
     fun dictionaryPath(): String

@@ -68,6 +68,13 @@ pub struct Session {
     dictionary_path: Option<PathBuf>,
 }
 
+/// Сериализация с якорем не гарантирована?.. Нет: значение по умолчанию
+/// хранит совместимость со старыми клиентами, которые про якоря ещё
+/// ничего не знают.
+fn default_block_index() -> i32 {
+    -1
+}
+
 /// Что клиент просит сделать.
 ///
 /// `now` и `id` приходят снаружи везде, где нужны: своих часов и своей
@@ -122,6 +129,12 @@ pub enum Command {
         id: String,
         chapter: i32,
         within_chapter: f32,
+        /// Стабильный якорь прокрутки: индекс блока. Клиенты, ещё не
+        /// считающие якоря, шлют -1 — позиция восстановится по доле.
+        #[serde(default = "default_block_index")]
+        block_index: i32,
+        #[serde(default)]
+        block_offset: f32,
         now: i64,
     },
     SaveWord {
@@ -479,7 +492,8 @@ impl Session {
         // §6 migration: старые поля settings -> practice (идемпотентно).
         // Если practice пустая и в settings есть legacy — мигрируем.
         // Даже если practice непустая, merge legacy через max не удвоит.
-        let needs_migration = practice.needs_migration(&settings) || practice.is_empty() && settings.has_legacy_training();
+        let needs_migration = practice.needs_migration(&settings)
+            || practice.is_empty() && settings.has_legacy_training();
         if needs_migration {
             practice.migrate_from_legacy(&settings);
             // Помечаем practice как dirty, чтобы новый клиент записал practice.json.
@@ -611,6 +625,8 @@ impl Session {
                 id,
                 chapter,
                 within_chapter,
+                block_index,
+                block_offset,
                 now,
             } => {
                 self.change_library(ops::remember_progress(
@@ -618,6 +634,8 @@ impl Session {
                     &id,
                     chapter,
                     within_chapter,
+                    block_index,
+                    block_offset,
                     now,
                 ));
                 self.done(Outcome::default())
@@ -754,18 +772,11 @@ impl Session {
                 // Dual-write для переходного периода: старый клиент читает
                 // streak/answers из settings.json, и пока он не обновлён,
                 // данные должны оставаться там же.
-                self.settings.answers =
-                    self.practice.total_answers().min(i32::MAX as u64) as i32;
-                self.settings.right =
-                    self.practice.total_right().min(i32::MAX as u64) as i32;
+                self.settings.answers = self.practice.total_answers().min(i32::MAX as u64) as i32;
+                self.settings.right = self.practice.total_right().min(i32::MAX as u64) as i32;
                 self.settings.best_streak = self.practice.best_streak() as i32;
-                self.settings.trained_on = self
-                    .practice
-                    .days
-                    .iter()
-                    .next_back()
-                    .copied()
-                    .unwrap_or(0);
+                self.settings.trained_on =
+                    self.practice.days.iter().next_back().copied().unwrap_or(0);
                 self.settings.streak_days =
                     self.practice.current_streak(now, offset_minutes) as i32;
                 self.mark_settings_dirty();
@@ -1019,8 +1030,7 @@ impl Session {
                     // Dual-write для старого клиента
                     self.settings.answers =
                         self.practice.total_answers().min(i32::MAX as u64) as i32;
-                    self.settings.right =
-                        self.practice.total_right().min(i32::MAX as u64) as i32;
+                    self.settings.right = self.practice.total_right().min(i32::MAX as u64) as i32;
                     self.settings.best_streak = self.practice.best_streak() as i32;
                     self.settings.trained_on =
                         self.practice.days.iter().next_back().copied().unwrap_or(0);
@@ -1292,7 +1302,10 @@ mod tests {
     fn corrupted_json_не_перезаписывает_библиотеку_молча() {
         let corrupted = Some("{ corrupted json ");
         let result = Session::open_strict(corrupted, Some("{}"));
-        assert!(result.is_err(), "битый JSON должен быть ошибкой, а не Default");
+        assert!(
+            result.is_err(),
+            "битый JSON должен быть ошибкой, а не Default"
+        );
         let err_msg = result.unwrap_err();
         assert!(
             err_msg.contains("library corrupted"),
@@ -1304,8 +1317,7 @@ mod tests {
     #[test]
     fn пустой_файл_считается_отсутствием_а_не_ошибкой() {
         for empty in [None, Some(""), Some("   "), Some("\n\t ")] {
-            let session =
-                Session::try_open(empty, empty).expect("пустое должно быть Default");
+            let session = Session::try_open(empty, empty).expect("пустое должно быть Default");
             assert!(session.library.books.is_empty());
             assert_eq!(session.settings, AppSettings::default());
             assert!(session.practice.is_empty());
@@ -1438,7 +1450,11 @@ mod tests {
         assert!(!session.library_dirty, "библиотека помечена грязной зря");
         assert!(!session.settings_dirty, "настройки помечены грязными зря");
         assert!(!session.practice_dirty, "практика помечена грязной зря");
-        assert_eq!(session.practice.total_answers(), 0, "ответ засчитан без карточки");
+        assert_eq!(
+            session.practice.total_answers(),
+            0,
+            "ответ засчитан без карточки"
+        );
         assert_eq!(
             session.practice.current_streak(1700000000000, 180),
             0,
@@ -1627,19 +1643,83 @@ mod tests {
         );
     }
 
+    /// Якорь прокрутки хранится вместе с прогрессом и восстанавливается.
+    ///
+    /// Клиент без якорей (старая сборка) по-прежнему должен работать: поля
+    /// со значениями по умолчанию не обязаны приходить вовсе.
+    #[test]
+    fn якорь_прокрутки_запоминается_и_возвращается() {
+        let mut session = сессия();
+        session.run(Command::AddBook {
+            book: Box::new(crate::library::book::LibraryBook {
+                id: "b1".into(),
+                title: "Книга".into(),
+                chapters: 5,
+                path: String::new(),
+                author: None,
+                format: String::new(),
+                source_key: String::new(),
+                added_at: 0,
+                progress: crate::library::book::Progress::default(),
+                rev: 0,
+                dirty: false,
+                deleted: false,
+                shelf: None,
+            }),
+        });
+        session.run(Command::RememberProgress {
+            id: "b1".into(),
+            chapter: 2,
+            within_chapter: 0.4,
+            block_index: 17,
+            block_offset: 0.25,
+            now: 7,
+        });
+
+        let book = session
+            .library
+            .books
+            .iter()
+            .find(|b| b.id == "b1")
+            .expect("книга на месте");
+        assert_eq!(book.progress.chapter, 2);
+        assert_eq!(book.progress.block_index, 17);
+        assert!((book.progress.block_offset - 0.25).abs() < 1e-6);
+
+        // Порядок блоков и смещений ограничен разумными границами, чтобы
+        // перепутанный клиент не уронил восстановление позиции.
+        session.run(Command::RememberProgress {
+            id: "b1".into(),
+            chapter: -3,
+            within_chapter: 2.2,
+            block_index: -9,
+            block_offset: 4.0,
+            now: 8,
+        });
+        let book = &session.library.books[0];
+        assert_eq!(book.progress.within_chapter, 1.0);
+        assert_eq!(
+            book.progress.block_index, -1,
+            "порча якоря обнуляет его до «нет якоря»"
+        );
+        assert_eq!(book.progress.block_offset, 1.0);
+    }
+
     #[test]
     fn legacy_migration_restore_practice() {
         // Старый settings с тренировкой -> practice после open
         let legacy = r#"{"theme":"Paper","trainedOn":20000,"streakDays":7,"bestStreak":21,"answers":300,"right":270}"#;
-        let session = Session::try_open_with_practice(None, Some(legacy), None)
-            .expect("migration");
+        let session = Session::try_open_with_practice(None, Some(legacy), None).expect("migration");
         assert_eq!(session.practice.days.len(), 7);
         assert!(session.practice.days.contains(&20000));
         assert!(session.practice.days.contains(&19994));
         assert_eq!(session.practice.best_floor, 21);
         assert_eq!(session.practice.total_answers(), 300);
         assert_eq!(session.practice.total_right(), 270);
-        assert!(session.practice_dirty, "migrated practice must be marked dirty");
+        assert!(
+            session.practice_dirty,
+            "migrated practice must be marked dirty"
+        );
         // settings пока остаётся с legacy для переходного периода (dual-write)
         assert_eq!(session.settings.trained_on, 20000);
         // повторная миграция идемпотентна
@@ -1658,7 +1738,11 @@ mod tests {
         // второй раз открываем с теми же settings и уже мигрированным practice
         let pj = serde_json::to_string(&s1.practice).unwrap();
         let s2 = Session::try_open_with_practice(None, Some(legacy), Some(&pj)).unwrap();
-        assert_eq!(s2.practice.total_answers(), 100, "double count on re-migration");
+        assert_eq!(
+            s2.practice.total_answers(),
+            100,
+            "double count on re-migration"
+        );
         // третий раз с пустым practice но тем же legacy — всё равно 100, не 200
         let s3 = Session::try_open_with_practice(None, Some(legacy), None).unwrap();
         assert_eq!(s3.practice.total_answers(), 100);
@@ -1774,11 +1858,15 @@ mod tests {
         let mut s = сессия();
         assert_eq!(s.library_generation, 0);
         assert!(!s.library_dirty);
-        s.run(команда(r#"{"op":"addBook","book":{"id":"b1","title":"T","addedAt":1}}"#));
+        s.run(команда(
+            r#"{"op":"addBook","book":{"id":"b1","title":"T","addedAt":1}}"#,
+        ));
         assert_eq!(s.library_generation, 1);
         assert!(s.library_dirty);
         let g1 = s.library_generation;
-        s.run(команда(r#"{"op":"addBook","book":{"id":"b2","title":"T2","addedAt":2}}"#));
+        s.run(команда(
+            r#"{"op":"addBook","book":{"id":"b2","title":"T2","addedAt":2}}"#,
+        ));
         assert_eq!(s.library_generation, 2);
         assert!(s.library_dirty);
         assert!(g1 < s.library_generation);
@@ -1787,16 +1875,23 @@ mod tests {
     #[test]
     fn ack_saved_only_up_to_n() {
         let mut s = сессия();
-        s.run(команда(r#"{"op":"addBook","book":{"id":"b1","title":"T","addedAt":1}}"#));
+        s.run(команда(
+            r#"{"op":"addBook","book":{"id":"b1","title":"T","addedAt":1}}"#,
+        ));
         let gen5 = s.library_generation;
         assert_eq!(gen5, 1);
         // SimulatePersist job took snapshot gen 1 and started writing
         // While writing, another mutation arrives -> gen 2
-        s.run(команда(r#"{"op":"addBook","book":{"id":"b2","title":"T2","addedAt":2}}"#));
+        s.run(команда(
+            r#"{"op":"addBook","book":{"id":"b2","title":"T2","addedAt":2}}"#,
+        ));
         assert_eq!(s.library_generation, 2);
         // Ack old snapshot (gen 1) should NOT clear dirty, because current is 2
         s.ack_saved(Some(gen5), None, None);
-        assert!(s.library_dirty, "dirty must stay true after ack of old generation while newer exists");
+        assert!(
+            s.library_dirty,
+            "dirty must stay true after ack of old generation while newer exists"
+        );
         assert_eq!(s.library_saved_generation, 1);
         // Now ack current generation => dirty cleared
         s.ack_saved(Some(s.library_generation), None, None);
@@ -1832,20 +1927,31 @@ mod tests {
         s.library_saved_generation = 20;
         s.library_dirty = false;
         // Mutate to 21
-        s.run(команда(r#"{"op":"addBook","book":{"id":"b1","title":"T","addedAt":1}}"#));
+        s.run(команда(
+            r#"{"op":"addBook","book":{"id":"b1","title":"T","addedAt":1}}"#,
+        ));
         assert_eq!(s.library_generation, 21);
         // Simulate writer took snapshot 21 and started writing; queue receives 22,23,24
         // We do those mutations:
-        s.run(команда(r#"{"op":"addBook","book":{"id":"b2","title":"T2","addedAt":2}}"#));
+        s.run(команда(
+            r#"{"op":"addBook","book":{"id":"b2","title":"T2","addedAt":2}}"#,
+        ));
         assert_eq!(s.library_generation, 22);
-        s.run(команда(r#"{"op":"addBook","book":{"id":"b3","title":"T3","addedAt":3}}"#));
+        s.run(команда(
+            r#"{"op":"addBook","book":{"id":"b3","title":"T3","addedAt":3}}"#,
+        ));
         assert_eq!(s.library_generation, 23);
-        s.run(команда(r#"{"op":"addBook","book":{"id":"b4","title":"T4","addedAt":4}}"#));
+        s.run(команда(
+            r#"{"op":"addBook","book":{"id":"b4","title":"T4","addedAt":4}}"#,
+        ));
         assert_eq!(s.library_generation, 24);
         assert!(s.library_dirty);
         // Writer finishes 21, ack 21 -> dirty must stay true (because 24 pending)
         s.ack_saved(Some(21), None, None);
-        assert!(s.library_dirty, "after ack 21, dirty must stay because 24 pending");
+        assert!(
+            s.library_dirty,
+            "after ack 21, dirty must stay because 24 pending"
+        );
         assert_eq!(s.library_saved_generation, 21);
         // Coalesce: we don't need to write 22,23 separately, just 24.
         // Simulate writing 24 directly (skipping 22,23)
@@ -1871,7 +1977,9 @@ mod tests {
     #[test]
     fn practice_generation_ack() {
         let mut s = сессия();
-        s.run(команда(r#"{"op":"saveWord","bookId":"b1","surface":"w","lemma":"w","id":"c1","now":1}"#));
+        s.run(команда(
+            r#"{"op":"saveWord","bookId":"b1","surface":"w","lemma":"w","id":"c1","now":1}"#,
+        ));
         // need a card to review
         let before = s.practice_generation;
         s.run(команда(r#"{"op":"review","cardId":"c1","right":true,"now":1000,"offsetMinutes":0,"deviceId":"d1"}"#));
@@ -1879,7 +1987,9 @@ mod tests {
         assert!(s.practice_dirty);
         let g = s.practice_generation;
         // mutate again
-        s.run(команда(r#"{"op":"saveWord","bookId":"b1","surface":"w2","lemma":"w2","id":"c2","now":2}"#));
+        s.run(команда(
+            r#"{"op":"saveWord","bookId":"b1","surface":"w2","lemma":"w2","id":"c2","now":2}"#,
+        ));
         // Ack old practice gen should not clear current
         s.ack_saved(None, None, Some(g));
         // Since we acked up to g, but current generation may have advanced? Need to check.

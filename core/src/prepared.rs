@@ -47,7 +47,10 @@ mod tests {
         // У компактного токена нет поля text — проверяем через сериализацию.
         let json = serde_json::to_value(&prepared).expect("serial");
         for tok in json["tokens"].as_array().expect("tokens") {
-            assert!(tok.get("text").is_none(), "токен не должен дублировать текст: {tok}");
+            assert!(
+                tok.get("text").is_none(),
+                "токен не должен дублировать текст: {tok}"
+            );
             assert!(tok["kind"].is_string());
             assert!(tok["start"].is_number());
             assert!(tok["end"].is_number());
@@ -89,7 +92,11 @@ mod tests {
         let utf16: Vec<u16> = text.encode_utf16().collect();
         for tok in &prepared.tokens {
             assert!(tok.start <= tok.end);
-            assert!(tok.end <= utf16.len(), "выход за границы для {tok:?}: len {}", utf16.len());
+            assert!(
+                tok.end <= utf16.len(),
+                "выход за границы для {tok:?}: len {}",
+                utf16.len()
+            );
             let slice = String::from_utf16(&utf16[tok.start..tok.end]).expect("valid utf16 slice");
             assert!(!slice.is_empty() || tok.kind == "space");
         }
@@ -133,7 +140,11 @@ mod tests {
                 String::from_utf16(slice).is_ok_and(|s| s.contains('😀'))
             })
             .expect("эмодзи токен");
-        assert_eq!(smile.end - smile.start, 2, "эмодзи должен занимать 2 единицы UTF-16");
+        assert_eq!(
+            smile.end - smile.start,
+            2,
+            "эмодзи должен занимать 2 единицы UTF-16"
+        );
     }
 
     #[test]

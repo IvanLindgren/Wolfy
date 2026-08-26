@@ -20,12 +20,15 @@ import com.wolfy.platform.PickedCover
 import com.wolfy.platform.PickedPhoto
 import com.wolfy.platform.decodeImage
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -109,30 +112,65 @@ class LibraryViewModel(
     private val _addedFromCatalog = MutableSharedFlow<LibraryBook>(extraBufferCapacity = 1)
     val addedFromCatalog: SharedFlow<LibraryBook> = _addedFromCatalog
 
-    val state: StateFlow<LibraryUiState> = combine(
-        library.state,
-        message,
-        recognizing,
-        coversVersion,
-    ) { library, message, recognizing, covers ->
-        LibraryUiState(
+    /**
+     * Тяжёлое выводится из LibraryState в узкие потоки с дедупликацией:
+     * каждое изменение состояния ядра (включая прогресс чтения и файлы
+     * книг) больше не пересчитывает фильтр и группировку сотен тысяч
+     * карточек заново. Потоки до комбинации пропускают только реально
+     * изменившиеся куски.
+     */
+    private val sortedBooks: Flow<List<LibraryBook>> = library.state
+        .map { state ->
             // Недавно открытые впереди, а никогда не открытые — по дате
             // добавления. Алфавит здесь был бы честнее, но библиотеку читают
             // не с начала: сверху должно лежать то, к чему возвращаются.
-            books = library.visible.sortedWith(
+            state.visible.sortedWith(
                 compareByDescending<LibraryBook> { it.progress.openedAt }
                     .thenByDescending { it.addedAt },
-            ),
-            cards = library.cards.filterNot { it.deleted },
-            deckCounts = library.cards
-                .asSequence()
+            )
+        }
+        .distinctUntilChanged()
+
+    /** Карточки колод без стёртых. Гоняется только по самим карточкам. */
+    private val activeCards: Flow<List<Card>> = library.state
+        .map { state -> state.cards.filterNot { it.deleted } }
+        .distinctUntilChanged()
+
+    /** Число карточек по книгам: после него O(1) на плитке библиотеки. */
+    private val deckCounts: Flow<Map<String, Int>> = library.state
+        .map { state ->
+            state.cards.asSequence()
                 .filterNot { it.deleted }
                 .groupingBy { it.bookId }
-                .eachCount(),
-            shelves = library.shelves,
-            continueReading = library.visible
-                .filter { it.started && !it.finished && it.readable }
-                .maxByOrNull { it.progress.openedAt },
+                .eachCount()
+        }
+        .distinctUntilChanged()
+
+    private val shelvesFlow: Flow<List<Shelf>> = library.state
+        .map { it.shelves }
+        .distinctUntilChanged()
+
+    /** Небольшой UI-хвост: сообщение, флаг распознавания, версия обложек. */
+    private val uiTail: Flow<Triple<String?, Boolean, Int>> = combine(
+        message,
+        recognizing,
+        coversVersion,
+    ) { message, recognizing, covers -> Triple(message, recognizing, covers) }
+
+    val state: StateFlow<LibraryUiState> = combine(
+        sortedBooks,
+        activeCards,
+        deckCounts,
+        shelvesFlow,
+        uiTail,
+    ) { books, cards, counts, shelves, tail ->
+        val (message, recognizing, covers) = tail
+        LibraryUiState(
+            books = books,
+            cards = cards,
+            deckCounts = counts,
+            shelves = shelves,
+            continueReading = books.firstOrNull { it.started && !it.finished && it.readable },
             message = message,
             recognizing = recognizing,
             coversVersion = covers,
@@ -154,13 +192,18 @@ class LibraryViewModel(
     fun import(picked: PickedBook) {
         viewModelScope.launch {
             message.value = null
+            // Отпечаток и копирование — это SHA-256 по всему файлу и байт в
+            // байт перенос на сотни мегабайт. Такой путь не имеет права жить
+            // на Main: пальцем проводишь — экран замирает.
             val book = try {
-                library.add(
-                    sourcePath = picked.path,
-                    fileName = picked.name,
-                    title = picked.name.substringBeforeLast('.'),
-                    author = null,
-                )
+                withContext(Dispatchers.IO) {
+                    library.add(
+                        sourcePath = picked.path,
+                        fileName = picked.name,
+                        title = picked.name.substringBeforeLast('.'),
+                        author = null,
+                    )
+                }
             } catch (e: Exception) {
                 message.value = "Не получилось добавить книгу: ${e.message}"
                 return@launch
@@ -238,7 +281,9 @@ class LibraryViewModel(
         viewModelScope.launch {
             message.value = null
             try {
-                library.attachFile(bookId, picked.path, picked.name)
+                // Копия файла и отпечаток — тот же тяжёлый дисковый путь, что
+                // и при импорте: из Main его не зовём.
+                withContext(Dispatchers.IO) { library.attachFile(bookId, picked.path, picked.name) }
                 val book = library.book(bookId) ?: return@launch
                 val described = withContext(Dispatchers.Default) { describe(book.path) }
                 library.describe(bookId, described.title ?: book.title, described.author, described.chapters)

@@ -476,14 +476,12 @@ pub unsafe extern "C" fn wolfy_inspect_word(
 /// удаление требует только глобального реестра, а не блокировки самой книги.
 #[no_mangle]
 pub extern "C" fn wolfy_book_close(handle: i64) {
-    let _ = catch_unwind(AssertUnwindSafe(|| {
-        match BOOKS.lock() {
-            Ok(mut guard) => {
-                guard.remove(&handle);
-            }
-            Err(poisoned) => {
-                poisoned.into_inner().remove(&handle);
-            }
+    let _ = catch_unwind(AssertUnwindSafe(|| match BOOKS.lock() {
+        Ok(mut guard) => {
+            guard.remove(&handle);
+        }
+        Err(poisoned) => {
+            poisoned.into_inner().remove(&handle);
         }
     }));
 }
@@ -908,9 +906,21 @@ pub extern "C" fn wolfy_session_ack_saved(
 ) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
         with_session(handle, |session| {
-            let lib = if library_gen >= 0 { Some(library_gen) } else { None };
-            let set = if settings_gen >= 0 { Some(settings_gen) } else { None };
-            let prac = if practice_gen >= 0 { Some(practice_gen) } else { None };
+            let lib = if library_gen >= 0 {
+                Some(library_gen)
+            } else {
+                None
+            };
+            let set = if settings_gen >= 0 {
+                Some(settings_gen)
+            } else {
+                None
+            };
+            let prac = if practice_gen >= 0 {
+                Some(practice_gen)
+            } else {
+                None
+            };
             session.ack_saved(lib, set, prac);
         });
     }));
@@ -1042,14 +1052,12 @@ pub unsafe extern "C" fn wolfy_session_open_strict_with_practice(
 /// глобальный реестр, а не блокировка самой сессии.
 #[no_mangle]
 pub extern "C" fn wolfy_session_close(handle: i64) {
-    let _ = catch_unwind(AssertUnwindSafe(|| {
-        match SESSIONS.lock() {
-            Ok(mut guard) => {
-                guard.remove(&handle);
-            }
-            Err(poisoned) => {
-                poisoned.into_inner().remove(&handle);
-            }
+    let _ = catch_unwind(AssertUnwindSafe(|| match SESSIONS.lock() {
+        Ok(mut guard) => {
+            guard.remove(&handle);
+        }
+        Err(poisoned) => {
+            poisoned.into_inner().remove(&handle);
         }
     }));
 }
@@ -1242,7 +1250,11 @@ mod tests {
 
         let raw = unsafe { wolfy_book_resource(handle, path.as_ptr(), &mut len) };
 
-        assert!(!raw.is_null(), "ресурс должен прийти, ошибка: {:?}", ошибка());
+        assert!(
+            !raw.is_null(),
+            "ресурс должен прийти, ошибка: {:?}",
+            ошибка()
+        );
         assert_eq!(len, 3);
         let bytes = unsafe { std::slice::from_raw_parts(raw, len) };
         assert_eq!(bytes, &[7, 8, 9]);
@@ -1294,7 +1306,9 @@ mod tests {
                 language: None,
                 cover: None,
             },
-            contents: vec![ChapterInfo { title: Some("Ch1".to_string()) }],
+            contents: vec![ChapterInfo {
+                title: Some("Ch1".to_string()),
+            }],
             delay_ms,
             panic: should_panic,
             title: "MockChapter".to_string(),
@@ -1347,7 +1361,10 @@ mod tests {
         let start = std::time::Instant::now();
         let meta = wolfy_book_metadata(h2);
         let elapsed = start.elapsed();
-        assert!(!meta.is_null(), "вторая книга должна отвечать пока первая спит");
+        assert!(
+            !meta.is_null(),
+            "вторая книга должна отвечать пока первая спит"
+        );
         unsafe { wolfy_string_free(meta) };
         assert!(
             elapsed.as_millis() < 120,
@@ -1431,7 +1448,10 @@ mod tests {
 
         // Другая книга должна продолжать работать.
         let meta = wolfy_book_metadata(healthy);
-        assert!(!meta.is_null(), "здоровая книга должна работать после паники другой");
+        assert!(
+            !meta.is_null(),
+            "здоровая книга должна работать после паники другой"
+        );
         unsafe { wolfy_string_free(meta) };
 
         // Сессии тоже должны работать.
@@ -1485,7 +1505,10 @@ mod tests {
 
         // s2 должна работать
         let lib = wolfy_session_library(s2);
-        assert!(!lib.is_null(), "вторая сессия должна работать после poison первой");
+        assert!(
+            !lib.is_null(),
+            "вторая сессия должна работать после poison первой"
+        );
         unsafe { wolfy_string_free(lib) };
 
         // Книги тоже должны работать

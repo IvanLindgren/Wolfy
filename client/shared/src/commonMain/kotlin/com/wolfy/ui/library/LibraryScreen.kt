@@ -224,15 +224,19 @@ private fun LibraryHeader(
 
     Column(verticalArrangement = Arrangement.spacedBy(spacing.small)) {
         Rule(thick = true)
+        // На узком экране или крупном системном шрифте заголовок и две кнопки
+        // в одной строке сталкиваются: названию отдаётся всё свободное место
+        // с переносом, кнопки остаются справа.
         Row(
             Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.spacedBy(spacing.medium),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
                 text = "Моя библиотека",
                 style = WolfyTheme.typography.screenTitle,
                 color = colors.ink,
+                modifier = Modifier.weight(1f, fill = false),
             )
             Row(horizontalArrangement = Arrangement.spacedBy(spacing.medium)) {
                 Text(

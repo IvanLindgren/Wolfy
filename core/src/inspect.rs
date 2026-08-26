@@ -95,10 +95,7 @@ fn build_graph(
         .map(|(_, tok)| {
             if tok.kind == TokenKind::Word {
                 let wa = analyze(lexicon, &tok.text);
-                let primary = wa
-                    .matched
-                    .or(wa.dominant)
-                    .or_else(|| wa.pos.iter().next());
+                let primary = wa.matched.or(wa.dominant).or_else(|| wa.pos.iter().next());
                 Some(AnalysisInfo {
                     tag: primary.map(pos_name),
                     is_noun: primary == Some(crate::lexicon::Pos::Noun),
@@ -171,8 +168,8 @@ fn build_graph(
         if !a.as_ref().is_some_and(|v| v.is_adj) {
             continue;
         }
-        let noun = (idx + 1..analyses.len())
-            .find(|&j| analyses[j].as_ref().is_some_and(|v| v.is_noun));
+        let noun =
+            (idx + 1..analyses.len()).find(|&j| analyses[j].as_ref().is_some_and(|v| v.is_noun));
         if let Some(n) = noun {
             if n - idx <= 2 {
                 links.push(span_link(idx, n, "признак — слово"));
@@ -187,11 +184,7 @@ fn build_graph(
         };
         if info.is_det {
             let target = (idx + 1..analyses.len())
-                .find(|&j| {
-                    analyses[j]
-                        .as_ref()
-                        .is_some_and(|v| v.is_noun || v.is_adj)
-                })
+                .find(|&j| analyses[j].as_ref().is_some_and(|v| v.is_noun || v.is_adj))
                 .filter(|&j| j - idx <= 2);
             if let Some(t) = target {
                 links.push(span_link(idx, t, "определитель — имя"));
@@ -295,7 +288,10 @@ mod tests {
         // токены компактные — без текста
         let json = serde_json::to_value(&r).expect("serial");
         for tok in json["tokens"].as_array().unwrap() {
-            assert!(tok.get("text").is_none(), "компактный токен не должен нести text");
+            assert!(
+                tok.get("text").is_none(),
+                "компактный токен не должен нести text"
+            );
         }
     }
 
@@ -305,7 +301,7 @@ mod tests {
         assert_eq!(r.word.surface, "hello");
         assert!(!r.tokens.is_empty());
         assert_eq!(r.tokens.len(), 1); // одно слово?
-        // токенизация "hello" даст один токен word
+                                       // токенизация "hello" даст один токен word
         assert!(r.tokens.iter().any(|t| t.kind == "word"));
     }
 
@@ -321,7 +317,8 @@ mod tests {
             .tokens
             .iter()
             .find(|t| {
-                let slice: Vec<u16> = sentence.encode_utf16().collect::<Vec<u16>>()[t.start..t.end].to_vec();
+                let slice: Vec<u16> =
+                    sentence.encode_utf16().collect::<Vec<u16>>()[t.start..t.end].to_vec();
                 String::from_utf16(&slice).is_ok_and(|s| s.contains('😀'))
             })
             .expect("эмодзи токен");
@@ -335,7 +332,10 @@ mod tests {
         // graph должен содержать слова и хотя бы одну эвристическую связь
         assert!(r.graph_words.len() >= 4);
         // Проверяем что есть связь "определитель — имя" или "признак — слово"
-        let has_det = r.graph_links.iter().any(|l| l.label == "определитель — имя");
+        let has_det = r
+            .graph_links
+            .iter()
+            .any(|l| l.label == "определитель — имя");
         let has_adj = r.graph_links.iter().any(|l| l.label == "признак — слово");
         assert!(
             has_det || has_adj,

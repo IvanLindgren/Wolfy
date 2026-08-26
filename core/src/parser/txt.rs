@@ -174,8 +174,12 @@ fn russian_deviation(text: &str) -> Option<i64> {
             continue;
         }
         total += 1;
+        // Регистр приходится сводить по-настоящему: to_ascii_lowercase на
+        // кириллице ничего не делает, и ВЫПИСАННЫЕ КАПСОМ заголовки остались
+        // бы без гласных, искажая всю метрику.
+        let lower = ch.to_lowercase().next().unwrap_or(ch);
         if matches!(
-            ch.to_ascii_lowercase(),
+            lower,
             'а' | 'е' | 'и' | 'о' | 'у' | 'ы' | 'э' | 'ю' | 'я' | 'ё'
         ) {
             vowels += 1;
@@ -386,18 +390,67 @@ fn number_like(word: &str) -> bool {
     if lower.chars().all(|c| c.is_ascii_digit()) {
         return true;
     }
-    if lower.chars().all(|c| matches!(c, 'i' | 'v' | 'x' | 'l' | 'c' | 'd' | 'm')) {
+    if lower
+        .chars()
+        .all(|c| matches!(c, 'i' | 'v' | 'x' | 'l' | 'c' | 'd' | 'm'))
+    {
         return true;
     }
     matches!(
         lower.as_str(),
-        "один" | "одна" | "два" | "две" | "три" | "четыре" | "пять" | "шесть" | "семь"
-            | "восемь" | "девять" | "десять" | "первая" | "вторая" | "третья" | "четвертая"
-            | "пятая" | "шестая" | "седьмая" | "восьмая" | "девятая" | "десятая" | "первый"
-            | "второй" | "третий" | "четвертый" | "пятый" | "1-я" | "2-я" | "1-й" | "2-й"
-            | "one" | "two" | "three" | "four" | "five" | "six" | "seven" | "eight" | "nine"
-            | "ten" | "eleven" | "twelve" | "first" | "second" | "third" | "fourth" | "fifth"
-            | "sixth" | "seventh" | "eighth" | "ninth" | "tenth"
+        "один"
+            | "одна"
+            | "два"
+            | "две"
+            | "три"
+            | "четыре"
+            | "пять"
+            | "шесть"
+            | "семь"
+            | "восемь"
+            | "девять"
+            | "десять"
+            | "первая"
+            | "вторая"
+            | "третья"
+            | "четвертая"
+            | "пятая"
+            | "шестая"
+            | "седьмая"
+            | "восьмая"
+            | "девятая"
+            | "десятая"
+            | "первый"
+            | "второй"
+            | "третий"
+            | "четвертый"
+            | "пятый"
+            | "1-я"
+            | "2-я"
+            | "1-й"
+            | "2-й"
+            | "one"
+            | "two"
+            | "three"
+            | "four"
+            | "five"
+            | "six"
+            | "seven"
+            | "eight"
+            | "nine"
+            | "ten"
+            | "eleven"
+            | "twelve"
+            | "first"
+            | "second"
+            | "third"
+            | "fourth"
+            | "fifth"
+            | "sixth"
+            | "seventh"
+            | "eighth"
+            | "ninth"
+            | "tenth"
     )
 }
 
@@ -544,7 +597,11 @@ mod tests {
             .expect("расширить файл");
         drop(file);
         let err = TxtBook::open(&path).expect_err("файл слишком велик");
-        assert!(err.describe().contains("слишком велика"), "{}", err.describe());
+        assert!(
+            err.describe().contains("слишком велика"),
+            "{}",
+            err.describe()
+        );
         let _ = fs::remove_file(&path);
     }
 
@@ -564,7 +621,11 @@ mod tests {
         // Чтобы не аллоцировать 20 MiB одним куском, склеим 2 куска.
         let big = "a".repeat(crate::parser::limits::MAX_TOTAL_TEXT_BYTES + 1);
         let err = TxtBook::from_bytes(big.as_bytes(), None).expect_err("общий текст слишком велик");
-        assert!(err.describe().contains("слишком велика"), "{}", err.describe());
+        assert!(
+            err.describe().contains("слишком велика"),
+            "{}",
+            err.describe()
+        );
     }
 
     // --- концы строк -------------------------------------------------------
@@ -630,8 +691,12 @@ mod tests {
         let blocks = book.chapter(0).expect("глава").blocks;
         assert_eq!(blocks.len(), 100, "каждый абзац — отдельный блок");
         // Текст каждого абзаца сохранён полностью.
-        assert!(blocks.iter().any(|b| b.text() == Some("Абзац номер 100 про старую библиотеку.")));
-        assert!(blocks.iter().any(|b| b.text() == Some("Абзац номер 57 про старую библиотеку.")));
+        assert!(blocks
+            .iter()
+            .any(|b| b.text() == Some("Абзац номер 100 про старую библиотеку.")));
+        assert!(blocks
+            .iter()
+            .any(|b| b.text() == Some("Абзац номер 57 про старую библиотеку.")));
     }
 
     #[test]
@@ -722,6 +787,36 @@ mod tests {
         assert!(
             text.contains("потолком"),
             "cp866 должен декодироваться в осмысленный текст: {text}"
+        );
+    }
+
+    #[test]
+    fn капс_не_сводит_метрику_гласных_к_нулю() {
+        // to_ascii_lowercase на кириллице ничего не делает: раньше
+        // ВЫПИСАННЫЕ КАПСОМ заголовки считались полностью безгласными,
+        // и расхождение с нормой становилось шумом.
+        let lower = "эхо утра над тихою рекой плыло медленно и широко";
+        let upper = "ЭХО УТРА НАД ТИХОЮ РЕКОЙ ПЛЫЛО МЕДЛЕННО И ШИРОКО";
+        assert_eq!(
+            russian_deviation(lower),
+            russian_deviation(upper),
+            "регистр не должен менять метрику"
+        );
+    }
+
+    #[test]
+    fn текст_капсом_не_выбирает_неверную_легаси_кодировку() {
+        // Настоящий windows-1251 файл, набранный заглавными. При сломанной
+        // метрике таким текстам чаще отдавали koi8-r/кp866.
+        let (bytes, _, _) =
+            encoding_rs::WINDOWS_1251.encode("ПРИВЕТ, ЭХО ЮГА! ЖУРАВЛИ ЛЕТЕЛИ В ТЁПЛЫЕ КРАЯ.");
+        let path = книга("wolfy_txt_caps1251.txt", bytes.as_ref());
+        let mut book = TxtBook::open(&path).expect("книга открывается");
+
+        let text = book.chapter(0).expect("глава").plain_text();
+        assert!(
+            text.contains("ЖУРАВЛИ"),
+            "windows-1251 должен остаться сам собой: {text}"
         );
     }
 

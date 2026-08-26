@@ -113,7 +113,11 @@ impl Book for EpubBook {
         let (all_blocks, anchors) = parse_xhtml(&xhtml, &parent_dir(&href))?;
         let blocks = slice_by_anchors(all_blocks, &anchors, &plan);
         // Итоговый plain text тоже не должен раздуть память.
-        let total_text: usize = blocks.iter().filter_map(|b| b.text()).map(|s| s.len()).sum();
+        let total_text: usize = blocks
+            .iter()
+            .filter_map(|b| b.text())
+            .map(|s| s.len())
+            .sum();
         limits::check_chapter_text_len(total_text)?;
         limits::check_total_text_len(total_text)?;
 
@@ -490,16 +494,66 @@ fn parse_package(opf: &str, base: &str) -> Result<Package> {
     })
 }
 
-/// EPUB3 navigation document: все `<a href>` в порядке документа.
+/// Является ли открытый nav настоящим оглавлением: epub:type="toc" или
+/// role="doc-toc". Значения бывают списками («toc landmarks»), поэтому
+/// сравниваем по токенам.
+fn is_toc_nav(element: &quick_xml::events::BytesStart<'_>) -> bool {
+    let has_token = |value: Option<String>, wanted: &str| -> bool {
+        value.is_some_and(|value| {
+            value
+                .split_ascii_whitespace()
+                .any(|token| token.eq_ignore_ascii_case(wanted))
+        })
+    };
+    let role = attribute(element, b"role");
+    // local_name снимает префикс epub:, поэтому ищем просто "type".
+    has_token(attribute(element, b"type"), "toc") || has_token(role, "doc-toc")
+}
+
+/// EPUB3 navigation document: ссылки настоящего оглавления.
+///
+/// Navigation document может содержать несколько `<nav>`: toc, landmarks,
+/// page-list. Главами обязаны становиться только ссылки первого из них —
+/// иначе список «страница 12» и навигация по обложкам превращаются в главы.
+/// Если книга вообще не проставляет epub:type (сломанные, но частые EPUB3),
+/// ссылки собираются как раньше. Ошибка разбора отдаётся наверх: лучше
+/// честный fallback на NCX/spine, чем частичное оглавление.
 ///
 /// Вложенные списки оглавления сознательно спрямляются: читалке нужен
 /// плоский список глав в порядке чтения, а глубина разделов — дело рендера.
-fn parse_nav(xhtml: &str) -> Vec<TocEntry> {
+fn parse_nav(xhtml: &str) -> Result<Vec<TocEntry>> {
+    // Сначала узнаём, размечает ли документ nav'ы по типам вовсе: это
+    // решает, ограничивать ли зону сбора ссылок одним toc.
+    let typed = {
+        let mut reader = Reader::from_str(xhtml);
+        loop {
+            match reader.read_event() {
+                Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                    if local_name(e.name().as_ref()) == b"nav"
+                        && attribute(&e, b"type").is_some_and(|value| !value.trim().is_empty())
+                    {
+                        break true;
+                    }
+                }
+                Ok(Event::Eof) | Err(_) => break false,
+                Ok(_) => {}
+            }
+        }
+    };
+
     let mut reader = Reader::from_str(xhtml);
     let mut entries = Vec::new();
     // Ссылка, которую сейчас читаем: (href, накопленный текст).
     let mut current: Option<(String, String)> = None;
     let mut skipping = 0usize;
+    // Открытые nav-блоки: true — это оглавление, false — landmarks,
+    // page-list и прочие службы навигации.
+    let mut nav_stack: Vec<bool> = Vec::new();
+
+    // Ссылка собирается только внутри nav с типом toc (или без всякой
+    // разметки типов в старых книгах).
+    let inside_toc =
+        |nav_stack: &[bool]| -> bool { !typed || nav_stack.last().copied().unwrap_or(false) };
 
     loop {
         match reader.read_event() {
@@ -512,7 +566,11 @@ fn parse_nav(xhtml: &str) -> Vec<TocEntry> {
                 if skipping > 0 {
                     continue;
                 }
-                if name.as_slice() == b"a" {
+                if name.as_slice() == b"nav" {
+                    nav_stack.push(is_toc_nav(&e));
+                    continue;
+                }
+                if inside_toc(&nav_stack) && name.as_slice() == b"a" {
                     if let Some(href) = attribute(&e, b"href") {
                         current = Some((href, String::new()));
                     }
@@ -522,9 +580,13 @@ fn parse_nav(xhtml: &str) -> Vec<TocEntry> {
                 if skipping > 0 {
                     continue;
                 }
+                let name = local_name(e.name().as_ref()).to_vec();
+                if name.as_slice() == b"nav" {
+                    continue;
+                }
                 // Самозакрытая ссылка без текста — заголовок потерян,
                 // но точка навигации остаться должна.
-                if local_name(e.name().as_ref()) == b"a" {
+                if inside_toc(&nav_stack) && name.as_slice() == b"a" {
                     if let Some(href) = attribute(&e, b"href") {
                         entries.push(TocEntry { href, title: None });
                     }
@@ -546,6 +608,8 @@ fn parse_nav(xhtml: &str) -> Vec<TocEntry> {
                 let name = local_name(e.name().as_ref()).to_vec();
                 if matches!(name.as_slice(), b"script" | b"style") {
                     skipping = skipping.saturating_sub(1);
+                } else if name.as_slice() == b"nav" {
+                    nav_stack.pop();
                 } else if name.as_slice() == b"a" {
                     if let Some((href, title)) = current.take() {
                         let title = collapse_spaces(&title);
@@ -558,17 +622,17 @@ fn parse_nav(xhtml: &str) -> Vec<TocEntry> {
             }
             Ok(Event::Eof) => break,
             Ok(_) => {}
-            Err(_) => return entries,
+            Err(_) => return Err(CoreError::Malformed("navigation document повреждён".into())),
         }
     }
-    entries
+    Ok(entries)
 }
 
 /// EPUB2 toc (.ncx): navPoint'ы с navLabel/content.
 ///
 /// Текст собирается только внутри navLabel — docTitle книги заголовком
 /// главы стать не должен.
-fn parse_ncx(xhtml: &str) -> Vec<TocEntry> {
+fn parse_ncx(xhtml: &str) -> Result<Vec<TocEntry>> {
     let mut reader = Reader::from_str(xhtml);
     let mut entries = Vec::new();
     // Накопленный текст navLabel; content прикладывает к нему ссылку.
@@ -622,10 +686,10 @@ fn parse_ncx(xhtml: &str) -> Vec<TocEntry> {
             }
             Ok(Event::Eof) => break,
             Ok(_) => {}
-            Err(_) => return entries,
+            Err(_) => return Err(CoreError::Malformed("NCX повреждён".into())),
         }
     }
-    entries
+    Ok(entries)
 }
 
 /// Превращает XHTML главы в блоки читалки.
@@ -682,11 +746,14 @@ fn parse_xhtml(xhtml: &str, base: &str) -> Result<(Vec<Block>, HashMap<String, u
                 }
 
                 if name.as_slice() == b"math" && math.is_none() {
-                    math = Some(MathState {
-                        open_depth: depth,
-                        fallback: attribute(&e, b"alttext"),
-                        text: String::new(),
-                    });
+                    math = Some(MathState::new(depth, attribute(&e, b"alttext")));
+                    continue;
+                }
+
+                if let Some(state) = math.as_mut() {
+                    // Внутри формулы только захватываем разметку: MathML
+                    // живёт своей структурой, читательский поток не трогаем.
+                    state.open_element(&name);
                     continue;
                 }
 
@@ -709,9 +776,7 @@ fn parse_xhtml(xhtml: &str, base: &str) -> Result<(Vec<Block>, HashMap<String, u
 
                 if name.as_slice() == b"img" {
                     // Форма «<img …></img>»: то же самое, что самозакрытый тег.
-                    handle_image(
-                        &e, base, depth, &mut blocks, &mut current, &mut buffer,
-                    );
+                    handle_image(&e, base, depth, &mut blocks, &mut current, &mut buffer);
                     raw_text = false;
                     continue;
                 }
@@ -741,10 +806,12 @@ fn parse_xhtml(xhtml: &str, base: &str) -> Result<(Vec<Block>, HashMap<String, u
                     }
                     continue;
                 }
+                if let Some(state) = math.as_mut() {
+                    state.empty_element(&name);
+                    continue;
+                }
                 match name.as_slice() {
-                    b"img" => handle_image(
-                        &e, base, depth, &mut blocks, &mut current, &mut buffer,
-                    ),
+                    b"img" => handle_image(&e, base, depth, &mut blocks, &mut current, &mut buffer),
                     b"hr" => {
                         flush(&mut blocks, &mut current, &mut buffer);
                         raw_text = false;
@@ -770,6 +837,7 @@ fn parse_xhtml(xhtml: &str, base: &str) -> Result<(Vec<Block>, HashMap<String, u
                 if let Some(state) = math.as_mut() {
                     if let Ok(text) = e.decode() {
                         push_collapsed(&mut state.text, &text);
+                        state.capture_text(&text);
                     }
                     continue;
                 }
@@ -805,6 +873,10 @@ fn parse_xhtml(xhtml: &str, base: &str) -> Result<(Vec<Block>, HashMap<String, u
                 }
                 if let Some(state) = math.as_mut() {
                     push_reference(&e, &mut state.text);
+                    // Символьные ссылки формулы тоже доживают до разметки.
+                    let mut resolved = String::new();
+                    push_reference(&e, &mut resolved);
+                    state.capture_text(&resolved);
                     continue;
                 }
                 if current.is_none() {
@@ -838,6 +910,7 @@ fn parse_xhtml(xhtml: &str, base: &str) -> Result<(Vec<Block>, HashMap<String, u
                 }
                 if let Some(state) = math.as_mut() {
                     push_collapsed(&mut state.text, &text);
+                    state.capture_text(&text);
                     continue;
                 }
                 if current.is_none() {
@@ -858,14 +931,16 @@ fn parse_xhtml(xhtml: &str, base: &str) -> Result<(Vec<Block>, HashMap<String, u
                 if matches!(name.as_slice(), b"script" | b"style" | b"head") {
                     skipping = skipping.saturating_sub(1);
                 } else if name.as_slice() == b"math"
-                    && math
-                        .as_ref()
-                        .is_some_and(|state| depth == state.open_depth)
+                    && math.as_ref().is_some_and(|state| depth == state.open_depth)
                 {
                     let state = math.take().expect("только что проверили");
                     emit_math(state, &mut blocks);
                 } else if math.is_some() {
-                    // Внутренние теги формулы (mrow, mi, mo…) поток не трогают.
+                    // Внутренние теги формулы (mrow, mi, mo…) балансируют
+                    // захваченную разметку и больше ничего не делают.
+                    if let Some(state) = math.as_mut() {
+                        state.close_element(&name);
+                    }
                 } else if table.is_some() && name.as_slice() == b"table" {
                     let state = table.as_mut().expect("только что проверили");
                     if state.nested > 0 {
@@ -998,6 +1073,11 @@ fn build_plans(spine: &[SpineItem], locators: Vec<ChapterLocator>) -> Vec<Chapte
 }
 
 /// Читает навигацию книги: сначала EPUB3 nav, затем EPUB2 NCX.
+///
+/// Каждый источник имеет право оказаться пустым или повреждённым — тогда
+/// откатываемся к следующему, а если ничего не вышло, главы нарезаются по
+/// spine. Частичное оглавление хуже честного fallback: обрыв посреди
+/// навигационного документа не должен съесть половину книги.
 fn resolve_toc(
     archive: &mut ZipArchive<Source>,
     nav_href: &Option<String>,
@@ -1006,16 +1086,20 @@ fn resolve_toc(
 ) -> Result<Vec<ChapterLocator>> {
     if let Some(nav_href) = nav_href {
         let xhtml = read_entry(archive, nav_href)?;
-        let entries = parse_nav(&xhtml);
-        if !entries.is_empty() {
-            return Ok(to_locators(entries, &parent_dir(nav_href), spine));
+        // Повреждённый или потерянный nav — это не ошибка всей книги,
+        // а повод для следующего источника.
+        if let Ok(entries) = parse_nav(&xhtml) {
+            if !entries.is_empty() {
+                return Ok(to_locators(entries, &parent_dir(nav_href), spine));
+            }
         }
     }
     if let Some(ncx_href) = ncx_href {
         let xhtml = read_entry(archive, ncx_href)?;
-        let entries = parse_ncx(&xhtml);
-        if !entries.is_empty() {
-            return Ok(to_locators(entries, &parent_dir(ncx_href), spine));
+        if let Ok(entries) = parse_ncx(&xhtml) {
+            if !entries.is_empty() {
+                return Ok(to_locators(entries, &parent_dir(ncx_href), spine));
+            }
         }
     }
     Ok(Vec::new())
@@ -1108,21 +1192,173 @@ struct MathState {
     fallback: Option<String>,
     /// Текстовое содержимое формулы.
     text: String,
+    /// Нормализованное подмножество MathML: очистанная разметка поддерева,
+    /// из которой со временем соберётся настоящий богатый рендер.
+    ///
+    /// Внутрь попадают только известные элементы MathML без атрибутов;
+    /// текст экранируется. Так чужой разметке негде навредить рендеру.
+    markup: String,
+    /// Открытые (и ещё не закрытые) захваченные элементы: по ним баланс
+    /// закрывается при обрыве посреди формулы.
+    stack: Vec<String>,
+    /// Порог размера достигнут — дальше разметку не пишем, чтобы злая
+    /// формула не выросла в неограниченную строку.
+    overflowed: bool,
+}
+
+/// Элементы MathML, которые сохраняются в [`MathState::markup`].
+const MATH_ELEMENTS: &[&[u8]] = &[
+    b"math",
+    b"mathparams",
+    b"mrow",
+    b"mi",
+    b"mo",
+    b"mn",
+    b"ms",
+    b"mtext",
+    b"mfrac",
+    b"msqrt",
+    b"mroot",
+    b"msub",
+    b"msup",
+    b"msubsup",
+    b"mmultiscripts",
+    b"munder",
+    b"mover",
+    b"munderover",
+    b"munderoveraccent",
+    b"mpadded",
+    b"mphantom",
+    b"mstyle",
+    b"menclose",
+    b"merror",
+    b"mspace",
+    b"semantics",
+    b"annotation",
+    b"annotation-xml",
+    b"mtable",
+    b"mtr",
+    b"mlabeledtr",
+    b"mtd",
+];
+
+/// Максимальный размер нормализованной разметки одной формулы.
+const MAX_MATH_MARKUP_BYTES: usize = 32 * 1024;
+
+impl MathState {
+    fn new(open_depth: usize, fallback: Option<String>) -> Self {
+        Self {
+            open_depth,
+            fallback,
+            text: String::new(),
+            markup: String::from("<math>"),
+            stack: vec![String::from("math")],
+            overflowed: false,
+        }
+    }
+
+    fn write_tag(&mut self, piece: &str) -> bool {
+        if self.overflowed || self.stack.is_empty() {
+            return false;
+        }
+        if self.markup.len() + piece.len() > MAX_MATH_MARKUP_BYTES {
+            self.overflowed = true;
+            return false;
+        }
+        self.markup.push_str(piece);
+        true
+    }
+
+    fn open_element(&mut self, name: &[u8]) {
+        if !MATH_ELEMENTS.contains(&name) {
+            return;
+        }
+        let name = String::from_utf8_lossy(name).into_owned();
+        let written = self.write_tag(&format!("<{name}>"));
+        if written {
+            self.stack.push(name);
+        }
+    }
+
+    fn empty_element(&mut self, name: &[u8]) {
+        // В MathML пустые элементы вроде <mspace/> разрешены напрямую, а
+        // незнакомые теги разметку и так не трогают.
+        if !MATH_ELEMENTS.contains(&name) || self.stack.len() <= 1 {
+            return;
+        }
+        let name = String::from_utf8_lossy(name);
+        let _ = self.write_tag(&format!("<{name}/>"));
+    }
+
+    fn close_element(&mut self, name: &[u8]) {
+        let name = String::from_utf8_lossy(name).into_owned();
+        // Незакрытые внутренние элементы добиваем до своего места: очередь
+        // важнее идеала — порядок закрывающих тегов обязан остаться честным.
+        if let Some(position) = self.stack.iter().rposition(|open| *open == name) {
+            while self.stack.len() > position {
+                let closed = self.stack.pop();
+                let _ = match closed {
+                    Some(closed) => self.write_tag(&format!("</{closed}>")),
+                    None => false,
+                };
+            }
+        }
+    }
+
+    /// Экранированный текст допускается только внутри открытого элемента:
+    /// свободные литералы между тегами разметке формулы не нужны.
+    fn capture_text(&mut self, chunk: &str) -> bool {
+        if self.stack.len() <= 1 || self.stack.last().is_none() {
+            return true;
+        }
+        let mut escaped = String::with_capacity(chunk.len());
+        for ch in chunk.chars() {
+            match ch {
+                '&' => escaped.push_str("&amp;"),
+                '<' => escaped.push_str("&lt;"),
+                '>' => escaped.push_str("&gt;"),
+                other => escaped.push(other),
+            }
+        }
+        self.write_tag(&escaped)
+    }
+
+    /// Балансирует остаток стека; перелившийся размер сводит разметку к
+    /// пустой строке — потом включится старое поведение textual-источника,
+    /// зато рендер никогда не получит обрезанный XML.
+    fn finish(mut self) -> String {
+        if self.overflowed {
+            return String::new();
+        }
+        while let Some(name) = self.stack.pop() {
+            let _ = self.write_tag(&format!("</{name}>"));
+        }
+        self.markup
+    }
 }
 
 /// Кладёт собранную формулу в главу.
 ///
 /// Приоритет читабельности: alttext автора (обычно это TeX или словесное
-/// описание), затем собранный текст содержимого. Исходник сохраняется для
-/// будущего богатого рендера.
+/// описание), затем собранный текст содержимого. Если удалось захватить
+/// настоящую разметку, она становится источником: textual fallback никуда
+/// не годится для будущего богатого рендера.
 fn emit_math(state: MathState, blocks: &mut Vec<Block>) {
     let collected = collapse_spaces(&state.text);
-    let alt = state.fallback.filter(|value| !value.trim().is_empty());
+    let alt = state
+        .fallback
+        .clone()
+        .filter(|value| !value.trim().is_empty());
     let fallback = alt
         .clone()
         .or_else(|| (!collected.is_empty()).then_some(collected.clone()));
     if let Some(fallback) = fallback {
-        let source = alt.unwrap_or_else(|| collected.clone());
+        let markup = state.finish();
+        // Разметка всегда начинается с <math>; тривиальная пустая формула
+        // (<math></math>) ценности не несёт — оставляем старое поведение.
+        let source = (!markup.is_empty() && markup != "<math>" && markup != "<math></math>")
+            .then_some(markup)
+            .unwrap_or_else(|| alt.unwrap_or_else(|| collected.clone()));
         blocks.push(Block::Math { source, fallback });
     }
 }
@@ -1408,7 +1644,9 @@ mod tests {
               </body>
             </html>"#;
 
-        let blocks = parse_xhtml(xhtml, "OEBPS/text").expect("глава разбирается").0;
+        let blocks = parse_xhtml(xhtml, "OEBPS/text")
+            .expect("глава разбирается")
+            .0;
 
         assert_eq!(
             blocks,
@@ -1611,8 +1849,7 @@ mod tests {
 
     #[test]
     fn ссылки_в_атрибутах_раскрываются() {
-        let xhtml =
-            r#"<html><body><img src="a&amp;b.jpg" alt="&quot;Лампа&quot;"/></body></html>"#;
+        let xhtml = r#"<html><body><img src="a&amp;b.jpg" alt="&quot;Лампа&quot;"/></body></html>"#;
         let blocks = parse_xhtml(xhtml, "").expect("глава разбирается").0;
         assert_eq!(
             blocks,
@@ -1676,7 +1913,16 @@ mod tests {
         match blocks.first() {
             Some(Block::Math { source, fallback }) => {
                 assert_eq!(fallback, "E equals m c squared");
-                assert_eq!(source, "E equals m c squared");
+                // Источником стала нормализованная разметка формулы: alttext
+                // и текстовый запас теперь живут в fallback.
+                assert!(
+                    source.starts_with("<math>"),
+                    "разметка сама себе дерево: {source}"
+                );
+                assert!(
+                    source.contains("<mi>E</mi>") && source.contains("<msup>"),
+                    "поддерево сохранилось: {source}"
+                );
             }
             other => panic!("ожидалась формула, получили {other:?}"),
         }
@@ -1697,7 +1943,8 @@ mod tests {
     #[test]
     fn windows_1252_по_объявлению_декодируется() {
         // «é» в windows-1252 — байт 0xE9; UTF-8 это не байты.
-        let mut bytes = b"<?xml version=\"1.0\" encoding=\"iso-8859-1\"?><html><body><p>Caf".to_vec();
+        let mut bytes =
+            b"<?xml version=\"1.0\" encoding=\"iso-8859-1\"?><html><body><p>Caf".to_vec();
         bytes.push(0xE9);
         bytes.extend_from_slice(b"</p></body></html>");
         let decoded = xml_decode("chapter.xhtml", &bytes).expect("кодировка объявлена");
@@ -1708,11 +1955,7 @@ mod tests {
     fn неизвестная_кодировка_даёт_явную_ошибку() {
         let bytes = b"<?xml version=\"1.0\" encoding=\"x-mac-cyrillic\"?><html><body><p>\xFF\xFE</p></body></html>".to_vec();
         let err = xml_decode("chapter.xhtml", &bytes).expect_err("неподдерживаемая кодировка");
-        assert!(
-            err.describe().contains("кодировке"),
-            "{}",
-            err.describe()
-        );
+        assert!(err.describe().contains("кодировке"), "{}", err.describe());
     }
 
     #[test]
@@ -1742,8 +1985,8 @@ mod tests {
         let mut buffer = Cursor::new(Vec::new());
         {
             let mut zip = zip::ZipWriter::new(&mut buffer);
-            let options: zip::write::FileOptions<'_, ()> =
-                zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+            let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
             let container = r#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#;
             zip.start_file("mimetype", options).unwrap();
             zip.write_all(b"application/epub+zip").unwrap();
@@ -1784,9 +2027,12 @@ mod tests {
              <div id=\"two\"><p>Text two.</p></div>\
              <div id=\"three\"><p>Text three.</p></div>\
            </body></html>";
-        let mut book =
-            EpubBook::from_bytes(epub_zip(&[("OEBPS/content.opf", opf.into()), ("OEBPS/nav.xhtml", nav.into()), ("OEBPS/text/ch1.xhtml", ch1.into())]))
-                .expect("EPUB открывается");
+        let mut book = EpubBook::from_bytes(epub_zip(&[
+            ("OEBPS/content.opf", opf.into()),
+            ("OEBPS/nav.xhtml", nav.into()),
+            ("OEBPS/text/ch1.xhtml", ch1.into()),
+        ]))
+        .expect("EPUB открывается");
 
         assert_eq!(book.contents().len(), 3, "якоря нарезали файл на три главы");
         assert_eq!(book.contents()[0].title.as_deref(), Some("Первая глава"));
@@ -1822,8 +2068,14 @@ mod tests {
         let book = EpubBook::from_bytes(epub_zip(&[
             ("OEBPS/content.opf", opf.into()),
             ("OEBPS/nav.xhtml", nav.into()),
-            ("OEBPS/text/ch1.xhtml", "<html><body><p>One.</p></body></html>".into()),
-            ("OEBPS/text/ch2.xhtml", "<html><body><p>Two.</p></body></html>".into()),
+            (
+                "OEBPS/text/ch1.xhtml",
+                "<html><body><p>One.</p></body></html>".into(),
+            ),
+            (
+                "OEBPS/text/ch2.xhtml",
+                "<html><body><p>Two.</p></body></html>".into(),
+            ),
         ]))
         .expect("EPUB открывается");
 
@@ -1878,6 +2130,189 @@ mod tests {
     }
 
     #[test]
+    fn nav_с_разметкой_типов_берёт_только_toc() {
+        // Три навигационных блока: только toc обязано стать главами,
+        // landmarks и номера страниц главами не являются.
+        let opf = r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" xmlns:epub="http://www.idpf.org/2007/ops">
+              <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Typed nav</dc:title></metadata>
+              <manifest>
+                <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+                <item id="ch1" href="text/ch1.xhtml" media-type="application/xhtml+xml"/>
+                <item id="ch2" href="text/ch2.xhtml" media-type="application/xhtml+xml"/>
+              </manifest>
+              <spine><itemref idref="ch1"/><itemref idref="ch2"/></spine>
+            </package>"#;
+        let nav = r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body>
+              <nav epub:type="toc">
+                <ol>
+                  <li><a href="text/ch1.xhtml">Глава раз</a></li>
+                  <li><a href="text/ch2.xhtml">Глава два</a></li>
+                </ol>
+              </nav>
+              <nav epub:type="landmarks">
+                <ol><li><a href="text/ch1.xhtml#begin">Начало книги</a></li></ol>
+              </nav>
+              <nav epub:type="page-list">
+                <ol>
+                  <li><a href="text/ch1.xhtml#p1">1</a></li>
+                  <li><a href="text/ch2.xhtml#p2">2</a></li>
+                </ol>
+              </nav>
+            </body></html>"#;
+        let book = EpubBook::from_bytes(epub_zip(&[
+            ("OEBPS/content.opf", opf.into()),
+            ("OEBPS/nav.xhtml", nav.into()),
+            (
+                "OEBPS/text/ch1.xhtml",
+                "<html><body><p>One.</p></body></html>".into(),
+            ),
+            (
+                "OEBPS/text/ch2.xhtml",
+                "<html><body><p>Two.</p></body></html>".into(),
+            ),
+        ]))
+        .expect("EPUB открывается");
+
+        // Ровно две главы из toc с их заголовками: landmark-и («Начало
+        // книги») и номера страниц сюда попасть не должны.
+        let titles: Vec<_> = book
+            .contents()
+            .iter()
+            .filter_map(|c| c.title.clone())
+            .collect();
+        assert_eq!(
+            titles.len(),
+            2,
+            "landmarks и page-list не должны стать главами"
+        );
+        assert_eq!(titles[0].as_str(), "Глава раз");
+        assert_eq!(titles[1].as_str(), "Глава два");
+    }
+
+    #[test]
+    fn nav_без_разметки_типов_собирает_ссылки_как_прежде() {
+        let opf = r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+              <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Untyped nav</dc:title></metadata>
+              <manifest>
+                <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+                <item id="ch1" href="text/ch1.xhtml" media-type="application/xhtml+xml"/>
+                <item id="ch2" href="text/ch2.xhtml" media-type="application/xhtml+xml"/>
+              </manifest>
+              <spine><itemref idref="ch1"/><itemref idref="ch2"/></spine>
+            </package>"#;
+        let nav = r#"<html xmlns="http://www.w3.org/1999/xhtml"><body>
+              <nav>
+                <ol>
+                  <li><a href="text/ch1.xhtml">Глава раз</a></li>
+                  <li><a href="text/ch2.xhtml">Глава два</a></li>
+                </ol>
+              </nav>
+            </body></html>"#;
+        let book = EpubBook::from_bytes(epub_zip(&[
+            ("OEBPS/content.opf", opf.into()),
+            ("OEBPS/nav.xhtml", nav.into()),
+            (
+                "OEBPS/text/ch1.xhtml",
+                "<html><body><p>One.</p></body></html>".into(),
+            ),
+            (
+                "OEBPS/text/ch2.xhtml",
+                "<html><body><p>Two.</p></body></html>".into(),
+            ),
+        ]))
+        .expect("EPUB открывается");
+
+        assert_eq!(book.contents().len(), 2);
+        assert_eq!(book.contents()[0].title.as_deref(), Some("Глава раз"));
+        assert_eq!(book.contents()[1].title.as_deref(), Some("Глава два"));
+    }
+
+    #[test]
+    fn повреждённый_nav_откатывается_на_ncx() {
+        let opf = r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+              <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Fallback</dc:title></metadata>
+              <manifest>
+                <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+                <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+                <item id="ch1" href="text/ch1.xhtml" media-type="application/xhtml+xml"/>
+              </manifest>
+              <spine toc="ncx"><itemref idref="ch1"/></spine>
+            </package>"#;
+        // Обрыв прямо внутри тега: потоковый читатель обязан вернуть
+        // ошибку, а не отдать накопленное частичное оглавление.
+        let broken_nav = r#"<html xmlns="http://www.w3.org/1999/xhtml"><body><nav epub:type="toc">
+              <ol>
+                <li><a href="text/ch1.xhtml">Первые восемь глав</a></li>
+                <li><a href="text/ch2.xhtml" class="кинешь внезапно"#;
+        let ncx = r#"<?xml version="1.0"?><ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+              <head/><docTitle><text>Fallback</text></docTitle>
+              <navMap>
+                <navPoint id="n1"><navLabel><text>Полное оглавление</text></navLabel><content src="text/ch1.xhtml"/></navPoint>
+              </navMap>
+            </ncx>"#;
+        let book = EpubBook::from_bytes(epub_zip(&[
+            ("OEBPS/content.opf", opf.into()),
+            ("OEBPS/nav.xhtml", broken_nav.into()),
+            ("OEBPS/toc.ncx", ncx.into()),
+            (
+                "OEBPS/text/ch1.xhtml",
+                "<html><body><p>Body.</p></body></html>".into(),
+            ),
+        ]))
+        .expect("EPUB открывается");
+
+        let titles: Vec<_> = book
+            .contents()
+            .iter()
+            .filter_map(|c| c.title.clone())
+            .collect();
+        assert_eq!(
+            titles.as_slice(),
+            ["Полное оглавление"],
+            "после повреждённого nav должен использоваться NCX"
+        );
+    }
+
+    #[test]
+    fn сломанные_nav_и_ncx_откатываются_на_spine() {
+        let opf = r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+              <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Spine</dc:title></metadata>
+              <manifest>
+                <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+                <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+                <item id="ch1" href="text/ch1.xhtml" media-type="application/xhtml+xml"/>
+                <item id="ch2" href="text/ch2.xhtml" media-type="application/xhtml+xml"/>
+              </manifest>
+              <spine toc="ncx"><itemref idref="ch1"/><itemref idref="ch2"/></spine>
+            </package>"#;
+        let broken_nav = r#"<html xmlns="http://www.w3.org/1999/xhtml"><body><nav>
+              <ol><li><a href="text/ch1.xhtml">Глава раз</a></li>
+              <li><a href="text/ch2.xhtml" alt="обрыв тега"#;
+        let broken_ncx = r#"<?xml version="1.0"?><ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+              <navMap><navPoint id="n1"><navLabel><text alt="и здесь тоже"#;
+        let book = EpubBook::from_bytes(epub_zip(&[
+            ("OEBPS/content.opf", opf.into()),
+            ("OEBPS/nav.xhtml", broken_nav.into()),
+            ("OEBPS/toc.ncx", broken_ncx.into()),
+            (
+                "OEBPS/text/ch1.xhtml",
+                "<html><body><p>One.</p></body></html>".into(),
+            ),
+            (
+                "OEBPS/text/ch2.xhtml",
+                "<html><body><p>Two.</p></body></html>".into(),
+            ),
+        ]))
+        .expect("EPUB открывается");
+
+        // Ни одного пункта оглавления не выжило — главы честно нарезаются
+        // по файлам spine вместо полусломанного списка.
+        assert_eq!(book.contents().len(), 2);
+        assert_eq!(book.contents()[0].title, None);
+        assert_eq!(book.contents()[1].title, None);
+    }
+
+    #[test]
     fn линейный_материал_без_оглавления_не_дробится_по_linear() {
         // linear="no" — сноска/приложение: без прямого указания в оглавлении
         // она не становится обычной главой.
@@ -1891,14 +2326,24 @@ mod tests {
             </package>"#;
         let book = EpubBook::from_bytes(epub_zip(&[
             ("OEBPS/content.opf", opf.into()),
-            ("OEBPS/text/ch1.xhtml", "<html><body><p>Main.</p></body></html>".into()),
-            ("OEBPS/text/note.xhtml", "<html><body><p>Note.</p></body></html>".into()),
+            (
+                "OEBPS/text/ch1.xhtml",
+                "<html><body><p>Main.</p></body></html>".into(),
+            ),
+            (
+                "OEBPS/text/note.xhtml",
+                "<html><body><p>Note.</p></body></html>".into(),
+            ),
         ]))
         .expect("EPUB открывается");
 
         assert_eq!(book.contents().len(), 1, "нелинейный файл скрыт");
         let mut book = book;
-        assert!(book.chapter(0).expect("глава").plain_text().contains("Main."));
+        assert!(book
+            .chapter(0)
+            .expect("глава")
+            .plain_text()
+            .contains("Main."));
         assert!(book.chapter(1).is_err());
     }
 
@@ -1920,8 +2365,14 @@ mod tests {
         let book = EpubBook::from_bytes(epub_zip(&[
             ("OEBPS/content.opf", opf.into()),
             ("OEBPS/nav.xhtml", nav.into()),
-            ("OEBPS/text/ch1.xhtml", "<html><body><p>Main.</p></body></html>".into()),
-            ("OEBPS/text/note.xhtml", "<html><body><p>Note.</p></body></html>".into()),
+            (
+                "OEBPS/text/ch1.xhtml",
+                "<html><body><p>Main.</p></body></html>".into(),
+            ),
+            (
+                "OEBPS/text/note.xhtml",
+                "<html><body><p>Note.</p></body></html>".into(),
+            ),
         ]))
         .expect("EPUB открывается");
 
@@ -1949,9 +2400,21 @@ mod tests {
         .expect("EPUB открывается");
 
         // Порядок чтения — по spine (C, A, B), а не по алфавиту манифеста.
-        assert!(book.chapter(0).expect("первая").plain_text().contains("Gamma."));
-        assert!(book.chapter(1).expect("вторая").plain_text().contains("Alpha."));
-        assert!(book.chapter(2).expect("третья").plain_text().contains("Beta."));
+        assert!(book
+            .chapter(0)
+            .expect("первая")
+            .plain_text()
+            .contains("Gamma."));
+        assert!(book
+            .chapter(1)
+            .expect("вторая")
+            .plain_text()
+            .contains("Alpha."));
+        assert!(book
+            .chapter(2)
+            .expect("третья")
+            .plain_text()
+            .contains("Beta."));
     }
 
     #[test]
@@ -1959,8 +2422,11 @@ mod tests {
         let huge = "a".repeat(crate::parser::limits::MAX_EPUB_ENTRY_BYTES_USIZE + 1);
         let xhtml = format!("<html><body><p>{huge}</p></body></html>");
         let bytes = epub_bytes_with_chapter(&xhtml);
-        let mut book = EpubBook::from_bytes(bytes).expect("EPUB открывается; ошибка ожидается при чтении главы");
-        let err = book.chapter(0).expect_err("огромная запись должна быть отвергнута");
+        let mut book = EpubBook::from_bytes(bytes)
+            .expect("EPUB открывается; ошибка ожидается при чтении главы");
+        let err = book
+            .chapter(0)
+            .expect_err("огромная запись должна быть отвергнута");
         assert!(
             err.describe().contains("слишком велика"),
             "ожидалось сообщение о лимите, получили: {}",
@@ -1981,7 +2447,9 @@ mod tests {
         );
         let bytes = epub_bytes_with_chapter(&xhtml);
         let mut book = EpubBook::from_bytes(bytes).expect("EPUB открывается");
-        let err = book.chapter(0).expect_err("гигантская глава должна быть отвергнута");
+        let err = book
+            .chapter(0)
+            .expect_err("гигантская глава должна быть отвергнута");
         assert!(
             err.describe().contains("слишком велика"),
             "{}",
@@ -2015,7 +2483,8 @@ mod tests {
             declared,
         };
         // Эмулируем логику read_entry: сначала проверка declared (пройдёт), затем take.
-        crate::parser::limits::check_epub_entry_size(lying.size()).expect("declared маленький — проверка проходит");
+        crate::parser::limits::check_epub_entry_size(lying.size())
+            .expect("declared маленький — проверка проходит");
         let mut limited = (&mut lying).take(crate::parser::limits::MAX_EPUB_ENTRY_BYTES + 1);
         let mut buf = Vec::new();
         limited.read_to_end(&mut buf).unwrap();
@@ -2036,10 +2505,12 @@ mod tests {
         let mut buffer = Cursor::new(Vec::new());
         {
             let mut zip = zip::ZipWriter::new(&mut buffer);
-            let options: zip::write::FileOptions<'_, ()> =
-                zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+            let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
             let container = r#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#;
-            let mut opf_manifest = String::from(r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Test</dc:title></metadata><manifest>"#);
+            let mut opf_manifest = String::from(
+                r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Test</dc:title></metadata><manifest>"#,
+            );
             let mut spine = String::from("<spine>");
             let count = crate::parser::limits::MAX_EPUB_ENTRIES + 1;
             for i in 0..count {
@@ -2056,8 +2527,10 @@ mod tests {
             zip.start_file("OEBPS/content.opf", options).unwrap();
             zip.write_all(opf_manifest.as_bytes()).unwrap();
             for i in 0..count {
-                zip.start_file(format!("OEBPS/text/ch{i}.xhtml"), options).unwrap();
-                zip.write_all(b"<html><body><p>hi</p></body></html>").unwrap();
+                zip.start_file(format!("OEBPS/text/ch{i}.xhtml"), options)
+                    .unwrap();
+                zip.write_all(b"<html><body><p>hi</p></body></html>")
+                    .unwrap();
             }
             zip.finish().unwrap();
         }
@@ -2065,7 +2538,11 @@ mod tests {
         let Err(err) = EpubBook::from_bytes(bytes) else {
             panic!("слишком много записей — должен быть отклонён");
         };
-        assert!(err.describe().contains("слишком велика"), "{}", err.describe());
+        assert!(
+            err.describe().contains("слишком велика"),
+            "{}",
+            err.describe()
+        );
     }
 
     #[test]
@@ -2074,7 +2551,11 @@ mod tests {
         let Err(err) = EpubBook::from_bytes(large) else {
             panic!("источник слишком велик — ожидалась ошибка");
         };
-        assert!(err.describe().contains("слишком велика"), "{}", err.describe());
+        assert!(
+            err.describe().contains("слишком велика"),
+            "{}",
+            err.describe()
+        );
     }
 
     #[test]
@@ -2084,8 +2565,8 @@ mod tests {
         let mut buffer = Cursor::new(Vec::new());
         {
             let mut zip = zip::ZipWriter::new(&mut buffer);
-            let options: zip::write::FileOptions<'_, ()> =
-                zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+            let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
             let container = r#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#;
             let opf = r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Test</dc:title></metadata><manifest><item id="ch1" href="text/ch1.xhtml" media-type="application/xhtml+xml"/><item id="img" href="images/big.jpg" media-type="image/jpeg"/></manifest><spine><itemref idref="ch1"/></spine></package>"#;
             let chapter = r#"<html><body><p>hi</p><img src="../images/big.jpg"/></body></html>"#;
@@ -2105,7 +2586,13 @@ mod tests {
         let mut book = EpubBook::from_bytes(bytes).expect("EPUB открывается");
         // Чтение главы ок
         let _ = book.chapter(0).expect("глава");
-        let err = book.resource("OEBPS/images/big.jpg").expect_err("ресурс слишком велик");
-        assert!(err.describe().contains("слишком велика"), "{}", err.describe());
+        let err = book
+            .resource("OEBPS/images/big.jpg")
+            .expect_err("ресурс слишком велик");
+        assert!(
+            err.describe().contains("слишком велика"),
+            "{}",
+            err.describe()
+        );
     }
 }

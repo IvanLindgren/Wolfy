@@ -81,9 +81,9 @@ fn morphological_anchor(lexicon: &Lexicon, word: &str, length: usize) -> Option<
     // Разбор знает лемму, но не знает, сколько букв от неё осталось в самом
     // слове: «cities» → «city», и четыре буквы леммы никак не указывают на
     // границу в шести буквах формы. Поэтому граница ищется по окончанию.
-    let ending = ENDINGS
-        .iter()
-        .find(|ending| lower.ends_with(**ending) && lower.chars().count() > ending.chars().count())?;
+    let ending = ENDINGS.iter().find(|ending| {
+        lower.ends_with(**ending) && lower.chars().count() > ending.chars().count()
+    })?;
 
     let anchor = length - ending.chars().count();
     // Односимвольная основа — это не основа: «is» не «i» + «-s».

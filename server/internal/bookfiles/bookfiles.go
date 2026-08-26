@@ -101,13 +101,23 @@ func (s *Service) PutChunk(ctx context.Context, userID, bookID, name, expectedHa
 	if offset+written != total {
 		return nil
 	}
+	// Метаданные должны описывать весь файл, а не последний чанк. На
+	// промежуточных чанках written — это размер только этой части, поэтому
+	// размер для записи берём из объявленного total: он уже сверен с offset.
+	if info, err := os.Stat(temporary); err != nil || info.Size() != total {
+		_ = os.Remove(temporary)
+		return ErrInvalid
+	}
 	input, err := os.Open(temporary)
 	if err != nil {
 		return ErrInvalid
 	}
-	defer input.Close()
 	hash := sha256.New()
-	if _, err := io.Copy(hash, input); err != nil {
+	_, copyHashErr := io.Copy(hash, input)
+	// Файл надо закрыть до переименования: на Windows rename поверх
+	// открытого описателя падает, и файл так и остался бы .part.
+	closeErr = input.Close()
+	if copyHashErr != nil || closeErr != nil {
 		return ErrInvalid
 	}
 	digest := hex.EncodeToString(hash.Sum(nil))
@@ -123,7 +133,7 @@ func (s *Service) PutChunk(ctx context.Context, userID, bookID, name, expectedHa
         VALUES ($1::uuid, $2::uuid, $3, $4, $5)
         ON CONFLICT (user_id, book_id) DO UPDATE SET
           file_name=EXCLUDED.file_name, size_bytes=EXCLUDED.size_bytes,
-          sha256=EXCLUDED.sha256, updated_at=now()`, userID, bookID, safeName(name), written, digest)
+          sha256=EXCLUDED.sha256, updated_at=now()`, userID, bookID, safeName(name), total, digest)
 	return err
 }
 

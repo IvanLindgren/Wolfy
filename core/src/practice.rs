@@ -455,7 +455,11 @@ mod tests {
         s.days.insert(today - 1);
         s.days.insert(today - 2);
         s.days.insert(today - 3);
-        assert_eq!(s.current_streak(NOON, 0), 3, "streak should stay alive if yesterday present");
+        assert_eq!(
+            s.current_streak(NOON, 0),
+            3,
+            "streak should stay alive if yesterday present"
+        );
         // if also today present, streak extends
         s.days.insert(today);
         assert_eq!(s.current_streak(NOON, 0), 4);

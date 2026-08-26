@@ -4,6 +4,7 @@ import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.put
@@ -170,9 +171,23 @@ class Library(
 
     fun appendDownloadedChunk(path: String, bytes: ByteArray): Boolean = store.appendBookChunk(path, bytes)
 
-    fun attachDownloadedFile(id: String, path: String, expectedFingerprint: String): Boolean {
-        val fingerprint = store.fingerprint(path)
-        if (path.isBlank() || fingerprint.isBlank() || fingerprint != expectedFingerprint) return false
+    /** Атомарно переименовывает докачанный .part во финальный путь книги. */
+    fun commitDownloadedFile(path: String): String = store.commitBookDownload(path)
+
+    /** Стирает недокачанный .part — осиротевших файлов не остаётся. */
+    fun discardDownloadedFile(path: String) = store.discardBookDownload(path)
+
+    /**
+     * Докачанный файл с верным отпечатком прикрепляется к книге.
+     *
+     * Отпечаток сверяется до фиксации файла: недокачанная или подменённая
+     * копия не должна носить имя книги. `false` — файл не подошёл.
+     */
+    fun finalizeDownloadedFile(id: String, partPath: String, expectedFingerprint: String): Boolean {
+        val fingerprint = runCatching { store.fingerprint(partPath) }.getOrNull()
+        if (partPath.isBlank() || fingerprint.isNullOrBlank() || fingerprint != expectedFingerprint) return false
+        val path = commitDownloadedFile(partPath)
+        if (path.isBlank()) return false
         send(command("attachFile") { put("id", id); put("path", path); put("fingerprint", fingerprint) })
         return true
     }
@@ -253,13 +268,28 @@ class Library(
         )
     }
 
-    /** Запоминает, где читатель остановился. */
-    fun rememberProgress(id: String, chapter: Int, withinChapter: Float) {
+    /**
+     * Запоминает, где читатель остановился.
+     *
+     * Вдоль доли внутри главы идёт стабильный якорь «блок + смещение»:
+     * доля зависит от высоты блоков и шрифта, а блок — структура, которой
+     * читалка раскладывает текст, поэтому на другом устройстве он возвращает
+     * точнее.
+     */
+    fun rememberProgress(
+        id: String,
+        chapter: Int,
+        withinChapter: Float,
+        blockIndex: Int = -1,
+        blockOffset: Float = 0f,
+    ) {
         send(
             command("rememberProgress") {
                 put("id", id)
                 put("chapter", chapter)
                 put("withinChapter", withinChapter)
+                put("blockIndex", blockIndex)
+                put("blockOffset", blockOffset)
                 put("now", now())
             },
         )
@@ -429,21 +459,57 @@ class Library(
         send(command("addBook") { put("book", json.encodeToJsonElement(book)) }).book ?: book
 
     /**
+     * Ревизия колод повторений.
+     *
+     * Меняется только тогда, когда меняются карточки: сохранение слова,
+     * ответ в тренировке, приём слияния с сервера. Прогресс чтения и файлы
+     * книг эту ревизию не трогают — иначе экран повторений пересчитывал бы
+     * все три колоды после каждого поворота страницы.
+     */
+    private val srsRevisions = kotlinx.coroutines.flow.MutableStateFlow(0L)
+    val srsRevision: StateFlow<Long> = srsRevisions
+
+    /**
      * Команда ядру.
      *
      * Обновление экранов и запись на диск делает сама сессия: она одна знает,
      * что именно изменилось.
      */
     private fun send(command: kotlinx.serialization.json.JsonObject): Outcome =
-        session.run(command)
+        session.run(command).also { outcome ->
+            if (outcome.libraryChanged && opOf(command) in SRS_OPS) {
+                srsRevisions.value += 1
+            }
+        }
 
     /** Вопрос, который ничего не меняет. Отдельным именем — ради читателя кода. */
     private fun ask(command: kotlinx.serialization.json.JsonObject): Outcome = session.run(command)
+
+    /** Имя операции из команды ядра: `"saveWord"`, `“rememberProgress”`… */
+    private fun opOf(command: JsonObject): String =
+        (command["op"] as? JsonPrimitive)?.content.orEmpty()
 
     private companion object {
         /** Книга, в которую складываются распознанные страницы. */
         const val SNAPSHOTS = "Снимки со страниц"
         const val SNAPSHOTS_FILE = "snapshots.txt"
+
+        /**
+         * Операции, меняющие колоды: только они двигают [srsRevision].
+         * ApplyServer может привезти карточки с другого устройства,
+         * RemoveBook уносит его карточки вместе с книгой.
+         */
+        val SRS_OPS = setOf(
+            "saveWord",
+            "savePhrase",
+            "ruleCard",
+            "removeWord",
+            "review",
+            "removeBook",
+            "mergePractice",
+            "applyServer",
+            "migrate",
+        )
     }
 }
 

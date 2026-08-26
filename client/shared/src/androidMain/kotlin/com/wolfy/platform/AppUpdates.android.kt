@@ -157,7 +157,11 @@ private class PlayUpdateController(
             // приложение может лишь предложить обновление, решение за
             // читателем и отдельной кнопкой «установить».
             mutableState.value = AppUpdateState.Available("Google Play")
+            return
         }
+        // Обновления нет — прошлые «доступно» умирают: отозванная в Play
+        // версия не должна висеть предложением до следующего запуска.
+        mutableState.value = AppUpdateState.Idle
     }
 }
 

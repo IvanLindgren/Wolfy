@@ -27,8 +27,8 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use crate::parser::Source;
 use crate::parser::limits;
+use crate::parser::Source;
 use crate::Result;
 
 /// Статья словаря.
@@ -322,9 +322,11 @@ zebra\tˈzibɹə\tn|a striped horse
     /// В браузере файла нет, а словарь всё равно обязан искаться.
     #[test]
     fn словарь_из_памяти_ищет_так_же_как_с_диска() {
-        let текст = format!("# wolfy english dictionary v1
+        let текст = format!(
+            "# wolfy english dictionary v1
 # generated	2026-08-23
-{ТЕЛО}");
+{ТЕЛО}"
+        );
         let mut dictionary =
             Dictionary::from_bytes(текст.into_bytes()).expect("словарь из памяти не открылся");
 
@@ -336,7 +338,10 @@ zebra\tˈzibɹə\tn|a striped horse
         assert_eq!(entry.translations, vec!["библиотека", "книгохранилище"]);
 
         // И отсутствие статьи — обычный ответ, а не ошибка.
-        assert!(dictionary.lookup("zzzqx").expect("поиск сломался").is_none());
+        assert!(dictionary
+            .lookup("zzzqx")
+            .expect("поиск сломался")
+            .is_none());
     }
 
     #[test]
@@ -446,7 +451,9 @@ zebra\tˈzibɹə\tn|a striped horse
         file.flush().expect("не сбросилось");
         let open_result = Dictionary::open(file.path());
         if let Ok(mut dictionary) = open_result {
-            let err = dictionary.lookup("word").expect_err("строка слишком длинна");
+            let err = dictionary
+                .lookup("word")
+                .expect_err("строка слишком длинна");
             assert!(
                 err.describe().contains("слишком велика"),
                 "{}",
@@ -466,6 +473,10 @@ zebra\tˈzibɹə\tn|a striped horse
     fn dictionary_source_too_large_rejected() {
         let large = vec![b'a'; crate::parser::limits::MAX_SOURCE_BYTES_USIZE + 1];
         let err = Dictionary::from_bytes(large).expect_err("источник слишком велик");
-        assert!(err.describe().contains("слишком велика"), "{}", err.describe());
+        assert!(
+            err.describe().contains("слишком велика"),
+            "{}",
+            err.describe()
+        );
     }
 }

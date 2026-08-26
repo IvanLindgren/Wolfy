@@ -53,6 +53,9 @@ class WolfyApi(
         client.close()
     }
 
+    /** Стабильный writer для LWW-состояния исследования на этом устройстве. */
+    fun researchWriter(): String = deviceProvider().id.ifBlank { deviceProvider().platform }
+
     suspend fun signIn(email: String, password: String): AuthOutcome = try {
         val response = client.post("$baseUrl/v1/auth/login") {
             contentType(ContentType.Application.Json)
@@ -502,6 +505,90 @@ class WolfyApi(
         } catch (_: Exception) { AiRecapResult.Failed("Нет связи с Beta-подсказкой.") }
     }
 
+    /** Запускает одноразовый анализ книги. Исходный текст далее льётся частями. */
+    suspend fun startResearch(bookId: String, sourceSha256: String, requestId: String): ResearchStartResult {
+        val token = tokenProvider() ?: return ResearchStartResult.Failed("Войдите, чтобы исследовать книгу.")
+        return try {
+            val response = client.post("$baseUrl/v1/books/$bookId/research") {
+                header("Authorization", "Bearer $token")
+                contentType(ContentType.Application.Json)
+                setBody(ResearchStartRequest(sourceSha256 = sourceSha256, requestId = requestId))
+                timeout { requestTimeoutMillis = 45_000 }
+            }
+            if (response.status == HttpStatusCode.OK) ResearchStartResult.Ready(response.body())
+            else ResearchStartResult.Failed(response.authMessage().ifBlank { "Исследование пока недоступно." })
+        } catch (_: Exception) { ResearchStartResult.Failed("Нет связи с исследованием книги.") }
+    }
+
+    suspend fun uploadResearchChunk(bookId: String, analysisId: String, index: Int, sha256: String, bytes: ByteArray): Boolean {
+        val token = tokenProvider() ?: return false
+        return try {
+            val response = client.put("$baseUrl/v1/books/$bookId/research/$analysisId/source/$index") {
+                header("Authorization", "Bearer $token")
+                header("X-Wolfy-Research-Source-Protocol", RESEARCH_SOURCE_PROTOCOL)
+                header("X-Wolfy-Chunk-SHA256", sha256)
+                contentType(ContentType.Application.OctetStream)
+                setBody(bytes)
+                timeout { requestTimeoutMillis = 180_000 }
+            }
+            response.status == HttpStatusCode.NoContent
+        } catch (_: Exception) { false }
+    }
+
+    suspend fun completeResearch(bookId: String, analysisId: String, source: ResearchSourceComplete): ResearchStartResult {
+        val token = tokenProvider() ?: return ResearchStartResult.Failed("Войдите, чтобы исследовать книгу.")
+        return try {
+            val response = client.post("$baseUrl/v1/books/$bookId/research/$analysisId/source/complete") {
+                header("Authorization", "Bearer $token")
+                contentType(ContentType.Application.Json)
+                setBody(source)
+                timeout { requestTimeoutMillis = 45_000 }
+            }
+            if (response.status == HttpStatusCode.OK) ResearchStartResult.Ready(response.body())
+            else ResearchStartResult.Failed(response.authMessage().ifBlank { "Источник книги не принят." })
+        } catch (_: Exception) { ResearchStartResult.Failed("Не удалось отправить источник книги.") }
+    }
+
+    suspend fun researchStatus(bookId: String, analysisId: String): ResearchStartResult {
+        val token = tokenProvider() ?: return ResearchStartResult.Failed("Войдите, чтобы увидеть исследование.")
+        return try {
+            val response = client.get("$baseUrl/v1/books/$bookId/research/$analysisId") { header("Authorization", "Bearer $token") }
+            if (response.status == HttpStatusCode.OK) ResearchStartResult.Ready(response.body())
+            else ResearchStartResult.Failed(response.authMessage().ifBlank { "Исследование пока недоступно." })
+        } catch (_: Exception) { ResearchStartResult.Failed("Нет связи с исследованием книги.") }
+    }
+
+    suspend fun researchArtifact(bookId: String, analysisId: String): ResearchArtifactResult {
+        val token = tokenProvider() ?: return ResearchArtifactResult.Failed("Войдите, чтобы открыть исследование.")
+        return try {
+            val response = client.get("$baseUrl/v1/books/$bookId/research/$analysisId/artifact") { header("Authorization", "Bearer $token") }
+            if (response.status == HttpStatusCode.OK) ResearchArtifactResult.Ready(response.body(), response.headers[HttpHeaders.ETag].orEmpty())
+            else ResearchArtifactResult.Failed(response.authMessage().ifBlank { "Исследование ещё готовится." })
+        } catch (_: Exception) { ResearchArtifactResult.Failed("Нет связи с исследованием книги.") }
+    }
+
+    suspend fun researchState(bookId: String, analysisId: String): ResearchStateResult {
+        val token = tokenProvider() ?: return ResearchStateResult.Failed("Войдите, чтобы открыть исследование.")
+        return try {
+            val response = client.get("$baseUrl/v1/books/$bookId/research/$analysisId/state") { header("Authorization", "Bearer $token") }
+            if (response.status == HttpStatusCode.OK) ResearchStateResult.Ready(response.body())
+            else ResearchStateResult.Failed(response.authMessage().ifBlank { "Состояние исследования недоступно." })
+        } catch (_: Exception) { ResearchStateResult.Failed("Нет связи с исследованием книги.") }
+    }
+
+    suspend fun saveResearchState(bookId: String, analysisId: String, state: ResearchUserState): ResearchStateResult {
+        val token = tokenProvider() ?: return ResearchStateResult.Failed("Войдите, чтобы сохранить исследование.")
+        return try {
+            val response = client.put("$baseUrl/v1/books/$bookId/research/$analysisId/state") {
+                header("Authorization", "Bearer $token")
+                contentType(ContentType.Application.Json)
+                setBody(state)
+            }
+            if (response.status == HttpStatusCode.OK) ResearchStateResult.Ready(response.body())
+            else ResearchStateResult.Failed(response.authMessage().ifBlank { "Состояние исследования не сохранено." })
+        } catch (_: Exception) { ResearchStateResult.Failed("Нет связи с исследованием книги.") }
+    }
+
     /** Передаёт книгу отдельным бинарным запросом, а не внутри JSON sync. */
     suspend fun uploadBookChunk(
         bookId: String,
@@ -756,6 +843,7 @@ data class Capabilities(
     val resend: Boolean = false,
     val google: Boolean = false,
     val yandex: Boolean = false,
+    val research: Boolean = false,
 )
 
 @Serializable
@@ -945,6 +1033,80 @@ private data class AiPhraseRequest(val phrase: String, val context: String)
 
 @Serializable
 private data class AiRecapRequest(val title: String, val excerpt: String)
+
+private const val RESEARCH_ANALYSIS_VERSION = "research-v1"
+private const val RESEARCH_SOURCE_PROTOCOL = "wolfy-research-source-v1"
+
+@Serializable
+private data class ResearchStartRequest(
+    val sourceSha256: String,
+    val analysisVersion: String = RESEARCH_ANALYSIS_VERSION,
+    val sourceProtocol: String = RESEARCH_SOURCE_PROTOCOL,
+    val requestId: String,
+)
+
+@Serializable
+data class ResearchStatus(
+    val analysisId: String,
+    val bookId: String,
+    val sourceSha256: String,
+    val analysisVersion: String,
+    val stage: String,
+    val progress: Int,
+    val error: String = "",
+    val remaining: Int = 0,
+    val uploadedChunks: Int = 0,
+    val sourceWords: Long = 0,
+)
+
+@Serializable
+data class ResearchSourceComplete(
+    val chunks: Int,
+    val sha256: String,
+    val chars: Long,
+    val words: Long,
+    val chapters: Int,
+)
+
+@Serializable
+data class ResearchArtifact(
+    val version: String,
+    val title: String,
+    val subtitle: String,
+    val summary: String,
+    val threads: List<ResearchThread>,
+    val checkpoints: List<ResearchCheckpoint>,
+    val notice: String,
+)
+
+@Serializable
+data class ResearchThread(val id: String, val title: String, val summary: String, val steps: List<ResearchStep>)
+@Serializable
+data class ResearchStep(val id: String, val title: String, val text: String, val anchorWords: Int, val spoilerLevel: Int)
+@Serializable
+data class ResearchCheckpoint(val id: String, val title: String, val text: String, val anchorWords: Int, val spoilerLevel: Int)
+
+@Serializable
+data class ResearchUserState(
+    val rev: Long = 0,
+    val writer: String = "",
+    val activeCardId: String = "",
+    val dispositions: Map<String, String> = emptyMap(),
+    val revealedThrough: Int = 0,
+)
+
+sealed interface ResearchStartResult {
+    data class Ready(val value: ResearchStatus) : ResearchStartResult
+    data class Failed(val message: String) : ResearchStartResult
+}
+sealed interface ResearchArtifactResult {
+    data class Ready(val value: ResearchArtifact, val etag: String) : ResearchArtifactResult
+    data class Failed(val message: String) : ResearchArtifactResult
+}
+sealed interface ResearchStateResult {
+    data class Ready(val value: ResearchUserState) : ResearchStateResult
+    data class Failed(val message: String) : ResearchStateResult
+}
 
 @Serializable
 data class AiPhrase(val title: String, val explanation: String, val pattern: String, val steps: List<AiPhraseStep>, val remaining: Int)

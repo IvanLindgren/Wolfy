@@ -26,6 +26,7 @@ import (
 	"github.com/wolfy/server/internal/library"
 	"github.com/wolfy/server/internal/ocr"
 	"github.com/wolfy/server/internal/readingai"
+	"github.com/wolfy/server/internal/researchai"
 	"github.com/wolfy/server/internal/social"
 	"github.com/wolfy/server/internal/store"
 	"github.com/wolfy/server/internal/translate"
@@ -100,6 +101,16 @@ func run() error {
 		discovery.NewGutenbergSource(cfg.GutendexURL, cfg.RequestTimeout),
 		cfg.RequestTimeout,
 	)
+	researchService := researchai.New(
+		db, cfg.ResearchFilesPath, cfg.ResearchKey, cfg.ResearchURL,
+		cfg.ResearchModel, 90*time.Second, cfg.ResearchEnabled,
+	)
+	if researchService.Enabled() {
+		log.Info("режим исследования включён")
+		go researchService.Run(ctx)
+	} else {
+		log.Info("режим исследования выключен")
+	}
 	dictionaryService, err := dictionary.Open(cfg.DictionaryPath)
 	if err != nil {
 		log.Warn("словарь не развёрнут — офлайн-загрузка и fallback отключены", "error", err)
@@ -123,6 +134,7 @@ func run() error {
 			updates.New(cfg.ReleasesPath),
 			bookfiles.New(db, cfg.BookFilesPath),
 			readingai.New(db, cfg.AIKey, cfg.AIURL, cfg.AIModel, cfg.RequestTimeout),
+			researchService,
 			log,
 		).WithWebOrigin(cfg.WebOrigin).
 			WithGoogleWebClientID(cfg.GoogleWebClientID).

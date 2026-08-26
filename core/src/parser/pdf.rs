@@ -404,7 +404,11 @@ mod tests {
         let pages = vec![big.clone(), big];
         let err = PdfBook::from_pages(Some("Test".to_string()), pages)
             .expect_err("общий текст слишком велик");
-        assert!(err.describe().contains("слишком велика"), "{}", err.describe());
+        assert!(
+            err.describe().contains("слишком велика"),
+            "{}",
+            err.describe()
+        );
     }
 
     #[test]
@@ -412,7 +416,11 @@ mod tests {
         let huge = "a".repeat(crate::parser::limits::MAX_CHAPTER_TEXT_BYTES + 1);
         let err = PdfBook::from_pages(Some("Test".to_string()), vec![huge])
             .expect_err("страница слишком велика");
-        assert!(err.describe().contains("слишком велика"), "{}", err.describe());
+        assert!(
+            err.describe().contains("слишком велика"),
+            "{}",
+            err.describe()
+        );
     }
 
     #[test]
@@ -420,8 +428,13 @@ mod tests {
         // from_pages уже проверяет total text; для native пути проверяем source size
         // через limits::check_source_size напрямую (эмулирует open).
         let size = crate::parser::limits::MAX_SOURCE_BYTES + 1;
-        let err = crate::parser::limits::check_source_size(size).expect_err("источник слишком велик");
-        assert!(err.describe().contains("слишком велика"), "{}", err.describe());
+        let err =
+            crate::parser::limits::check_source_size(size).expect_err("источник слишком велик");
+        assert!(
+            err.describe().contains("слишком велика"),
+            "{}",
+            err.describe()
+        );
     }
 
     #[test]
@@ -430,6 +443,8 @@ mod tests {
         let err = PdfBook::from_pages(None, pages).unwrap_err();
         // Сообщение должно быть одинаковым на native и web: «слишком велика».
         assert_eq!(err.describe().contains("слишком велика"), true);
-        assert!(err.describe().contains(crate::parser::limits::TOO_LARGE_MSG));
+        assert!(err
+            .describe()
+            .contains(crate::parser::limits::TOO_LARGE_MSG));
     }
 }

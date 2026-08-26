@@ -46,6 +46,16 @@ type Config struct {
 	AIModel string
 	AIURL   string
 
+	// Research* — отдельный провайдер и private storage для большого
+	// исследовательского конспекта. По умолчанию использует уже настроенный
+	// AI endpoint, но имеет собственный переключатель и никогда не делит
+	// дневной лимит читательских Beta-подсказок.
+	ResearchEnabled   bool
+	ResearchKey       string
+	ResearchModel     string
+	ResearchURL       string
+	ResearchFilesPath string
+
 	// Читавук выдаёт общую сессию и заводит аккаунты. Каждый адрес
 	// настраивается отдельно: сервис, поднятый только ради чтения, вправе
 	// уметь вход и не уметь регистрацию. Пустой адрес прячет кнопку в
@@ -106,12 +116,20 @@ func Load() (Config, error) {
 		DeepLKey: env("DEEPL_API_KEY"),
 		DeepLURL: envOr("WOLFY_DEEPL_URL", "https://api-free.deepl.com/v2/translate"),
 
-		OCRKey:   env("WOLFY_OCR_KEY"),
-		OCRModel: envOr("WOLFY_OCR_MODEL", "google/gemini-3.7-flash"),
-		OCRURL:   envOr("WOLFY_OCR_URL", "https://api.polza.ai/api/v1/chat/completions"),
-		AIKey:    envOr("WOLFY_AI_KEY", env("WOLFY_OCR_KEY")),
-		AIModel:  envOr("WOLFY_AI_MODEL", envOr("WOLFY_OCR_MODEL", "google/gemini-3.7-flash")),
-		AIURL:    envOr("WOLFY_AI_URL", envOr("WOLFY_OCR_URL", "https://api.polza.ai/api/v1/chat/completions")),
+		OCRKey:            env("WOLFY_OCR_KEY"),
+		OCRModel:          envOr("WOLFY_OCR_MODEL", "google/gemini-3.7-flash"),
+		OCRURL:            envOr("WOLFY_OCR_URL", "https://api.polza.ai/api/v1/chat/completions"),
+		AIKey:             envOr("WOLFY_AI_KEY", env("WOLFY_OCR_KEY")),
+		AIModel:           envOr("WOLFY_AI_MODEL", envOr("WOLFY_OCR_MODEL", "google/gemini-3.7-flash")),
+		AIURL:             envOr("WOLFY_AI_URL", envOr("WOLFY_OCR_URL", "https://api.polza.ai/api/v1/chat/completions")),
+		// Если AI уже настроен (в production это OCR/Gemini-провайдер), режим
+		// доступен сразу; WOLFY_RESEARCH_ENABLED=false оставляет аварийный
+		// выключатель без изменения ключей или клиента.
+		ResearchEnabled:   envBool("WOLFY_RESEARCH_ENABLED", true),
+		ResearchKey:       envOr("WOLFY_RESEARCH_KEY", envOr("WOLFY_AI_KEY", env("WOLFY_OCR_KEY"))),
+		ResearchModel:     envOr("WOLFY_RESEARCH_MODEL", envOr("WOLFY_AI_MODEL", envOr("WOLFY_OCR_MODEL", "google/gemini-3.7-flash"))),
+		ResearchURL:       envOr("WOLFY_RESEARCH_URL", envOr("WOLFY_AI_URL", envOr("WOLFY_OCR_URL", "https://api.polza.ai/api/v1/chat/completions"))),
+		ResearchFilesPath: envOr("WOLFY_RESEARCH_FILES_PATH", defaultResearchFilesPath()),
 
 		CitavukLoginURL:          envOr("WOLFY_CITAVUK_LOGIN_URL", "https://api.citavuk.ru/v1/auth/login"),
 		CitavukRegisterURL:       envOr("WOLFY_CITAVUK_REGISTER_URL", "https://api.citavuk.ru/v1/auth/register"),
@@ -153,6 +171,13 @@ func defaultBookFilesPath() string {
 		return "/opt/wolfy/shared/book-files"
 	}
 	return filepath.Join(defaultReleasesPath(), "book-files")
+}
+
+func defaultResearchFilesPath() string {
+	if info, err := os.Stat("/opt/wolfy/shared"); err == nil && info.IsDir() {
+		return "/opt/wolfy/shared/research-sources"
+	}
+	return filepath.Join(defaultReleasesPath(), "research-sources")
 }
 
 func defaultReleasesPath() string {

@@ -12,11 +12,14 @@ import com.wolfy.data.library.currentTimeMillis
 import com.wolfy.data.utcOffsetMinutes
 import com.wolfy.platform.cancelReviewReminder
 import com.wolfy.platform.scheduleReviewReminder
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.serialization.json.put
 
@@ -96,10 +99,33 @@ class TrainingViewModel(
     private val now: () -> Long = { currentTimeMillis() },
 ) : ViewModel() {
 
+    /**
+     * Тик минуты, пока экран жив. Дозреющие карточки не создают событий в
+     * библиотеке: без тика счётчик «пора» на колоде стоял бы до первого
+     * ответа.
+     */
+    private val minuteTick: Flow<Unit> = flow {
+        while (true) {
+            emit(Unit)
+            delay(60_000L)
+        }
+    }
+
+    /**
+     * Хаб повторений слушает ревизию колод, а не всю библиотеку.
+     *
+     * Прогресс чтения и файлы книг тоже меняют LibraryState — и раньше каждое
+     * такое изменение заставляло хаб пересчитывать три колоды через FFI,
+     * хотя карточки не менялись вовсе. Теперь пересчёт происходит когда
+     * карточка действительно сменилась ([Library.srsRevision]), изменились
+     * настройки (напряжённость, серия) или пришла новая минута: созревшие
+     * сроки видны без посторонних сигналов.
+     */
     val hub: StateFlow<SrsUiState> = combine(
-        library.state,
+        library.srsRevision,
         settings.state,
-    ) { _, saved ->
+        minuteTick,
+    ) { _, saved, _ ->
         val moment = now()
         SrsUiState(
             streakDays = saved.streakDays,

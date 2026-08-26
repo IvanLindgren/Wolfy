@@ -6,9 +6,13 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,6 +20,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.lazy.LazyColumn
@@ -41,7 +48,12 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.min
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.zIndex
@@ -89,12 +101,19 @@ fun ReaderScreen(
     onPreviousChapter: () -> Unit,
     onNextChapter: () -> Unit,
     onClose: () -> Unit,
-    onScrolled: (Float) -> Unit,
+    /**
+     * Сигнал прокрутки: доля главы плюс стабильный якорь «блок + смещение
+     * внутри блока». Якорь переживает смену кегля и устройства — восстанавливает
+     * позицию точнее, чем доля от числа блоков.
+     */
+    onScrolled: (Float, Int, Float) -> Unit,
     onChapter: (Int) -> Unit,
     onOpenRule: (String) -> Unit,
     onExplainPhrase: () -> Unit,
     onRecap: () -> Unit,
     onDismissRecap: () -> Unit,
+    onResearch: () -> Unit,
+    onResearchDisposition: (String, String) -> Unit,
     onImageVisible: (String) -> Unit,
     theme: ReadingTheme,
     fontScale: Float,
@@ -125,6 +144,7 @@ fun ReaderScreen(
     val colors = WolfyTheme.colors
     var contentsOpen by remember { mutableStateOf(false) }
     var readingSettingsOpen by remember { mutableStateOf(false) }
+    var researchOpen by remember { mutableStateOf(false) }
 
     // Прокрутка живёт здесь, а не в теле главы: её же двигают клавиши, а они
     // ловятся на самом верху экрана.
@@ -248,7 +268,14 @@ fun ReaderScreen(
                 }
             },
     ) {
-        Column(Modifier.fillMaxSize()) {
+        // Реальная высота верхней зоны (панель, прогресс, ссылка на recap,
+        // AttentionBar) зависит от кегля: overlay настроек привязывается к
+        // ней, а не к выдуманной константе.
+        var headerHeightPx by remember { mutableStateOf(0f) }
+        val overlayTop = with(LocalDensity.current) { headerHeightPx.toDp() }
+        Column(
+            Modifier.fillMaxSize().onSizeChanged { headerHeightPx = it.height.toFloat() },
+        ) {
             ReaderTopBar(
                 state = state,
                 withinChapterProgress = withinChapterProgress,
@@ -256,6 +283,9 @@ fun ReaderScreen(
                 onOpenContents = { contentsOpen = true },
                 onOpenSettings = { readingSettingsOpen = !readingSettingsOpen },
                 onRecap = onRecap,
+                onResearch = {
+                    if (state.research is ReaderResearchState.Ready) researchOpen = true else onResearch()
+                },
             )
             AttentionBar(
                 state = state,
@@ -296,7 +326,7 @@ fun ReaderScreen(
             exit = fadeOut(),
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .padding(top = 48.dp)
+                .padding(top = overlayTop)
                 .zIndex(2f),
         ) {
             ReaderQuickSettings(
@@ -338,7 +368,19 @@ fun ReaderScreen(
             onExplainPhrase = onExplainPhrase,
         )
         if (state.recap !is StoryRecapState.Idle) {
-            StoryRecapSheet(state.recap, onDismissRecap)
+            // Лист снизу: то же место, где карточка слова, — а не случайный
+            // угол, из которого он перекрывает текст.
+            Box(Modifier.fillMaxWidth().align(Alignment.BottomCenter)) {
+                StoryRecapSheet(state.recap, onDismissRecap)
+            }
+        }
+        if (researchOpen) {
+            Box(Modifier.fillMaxWidth().align(Alignment.BottomCenter)) {
+                val totalWords = (state.research as? ReaderResearchState.Ready)?.status?.sourceWords ?: 0L
+                val place = (state.chapterIndex + withinChapterProgress.coerceIn(0f, 1f)) /
+                    state.chapterCount.coerceAtLeast(1).toFloat()
+                ResearchSheet(state.research, state.researchDispositions, (totalWords * place).toLong(), onResearchDisposition, onDismiss = { researchOpen = false })
+            }
         }
     }
 }
@@ -352,6 +394,7 @@ private fun ReaderTopBar(
     onOpenContents: () -> Unit,
     onOpenSettings: () -> Unit,
     onRecap: () -> Unit,
+    onResearch: () -> Unit,
 ) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
@@ -367,7 +410,8 @@ private fun ReaderTopBar(
             Modifier
                 .fillMaxWidth()
                 .padding(horizontal = spacing.pageMargin, vertical = spacing.small),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.spacedBy(spacing.medium),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             // Возврат в библиотеку — слева и текстом, а не значком: значок
             // «назад» в шапке читалки читатели путают с переходом на
@@ -378,9 +422,19 @@ private fun ReaderTopBar(
             )
             // Название главы — вход в оглавление. Отдельный значок для этого
             // не нужен: читатель и так смотрит сюда, чтобы понять, где он.
-            SectionLabel(
-                text = state.chapterTitle.ifBlank { state.bookTitle },
-                modifier = Modifier.pressable(onClick = onOpenContents),
+            //
+            // Средней зоне отдаётся всё свободное место и обрезка: на узком
+            // экране или крупном кегле длинная глава вытесняла кнопки справа.
+            Text(
+                text = (state.chapterTitle.ifBlank { state.bookTitle }).uppercase(),
+                style = WolfyTheme.typography.sectionLabel,
+                color = WolfyTheme.colors.inkMuted,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                modifier = Modifier
+                    .weight(1f)
+                    .pressable(onClick = onOpenContents),
             )
             Row(horizontalArrangement = Arrangement.spacedBy(spacing.small)) {
                 SectionLabel("Текст", Modifier.pressable(onClick = onOpenSettings))
@@ -400,12 +454,10 @@ private fun ReaderTopBar(
                 .background(colors.accent),
             )
         }
-        Text(
-            "Вспомнить сюжет · Beta",
-            style = WolfyTheme.typography.caption,
-            color = colors.accent,
-            modifier = Modifier.align(Alignment.End).pressable(onClick = onRecap).padding(horizontal = spacing.pageMargin, vertical = spacing.small),
-        )
+        Row(Modifier.align(Alignment.End).padding(horizontal = spacing.pageMargin, vertical = spacing.small), horizontalArrangement = Arrangement.spacedBy(spacing.medium)) {
+            Text("Исследование", style = WolfyTheme.typography.caption, color = colors.accent, modifier = Modifier.pressable(onClick = onResearch))
+            Text("Вспомнить сюжет · Beta", style = WolfyTheme.typography.caption, color = colors.accent, modifier = Modifier.pressable(onClick = onRecap))
+        }
     }
 }
 
@@ -429,14 +481,21 @@ private fun ReaderQuickSettings(
 ) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .background(colors.surface)
-            .padding(horizontal = spacing.pageMargin, vertical = spacing.medium),
-        verticalArrangement = Arrangement.spacedBy(spacing.small),
-    ) {
-        SectionLabel("Тема страницы")
+    // Настройки стали богаче, и на маленьком landscape-экране крупным кеглем
+    // они больше не помещаются: панель ограничена четырьмя пятыми экрана и
+    // прокручивается. Нижние переключатели остаются досягаемыми.
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val panelCap = maxHeight * 0.8f
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(max = panelCap)
+                .verticalScroll(rememberScrollState())
+                .background(colors.surface)
+                .padding(horizontal = spacing.pageMargin, vertical = spacing.medium),
+            verticalArrangement = Arrangement.spacedBy(spacing.small),
+        ) {
+            SectionLabel("Тема страницы")
         Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(spacing.small),
@@ -497,6 +556,7 @@ private fun ReaderQuickSettings(
             selected = segmentWords,
             onChange = onSegmentWordsChange,
         )
+        }
     }
 }
 
@@ -518,6 +578,7 @@ private fun QuickSwitch(title: String, on: Boolean, onChange: (Boolean) -> Unit)
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun <T> QuickChoice(
     title: String,
@@ -529,7 +590,12 @@ private fun <T> QuickChoice(
     val spacing = WolfyTheme.spacing
     Column(verticalArrangement = Arrangement.spacedBy(spacing.tight)) {
         Text(title, style = WolfyTheme.typography.body, color = colors.ink)
-        Row(horizontalArrangement = Arrangement.spacedBy(spacing.medium)) {
+        // Четыре подписи в обычной Row на узком экране с крупным кеглем не
+        // умещаются: переносятся на вторую строку.
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(spacing.medium),
+            verticalArrangement = Arrangement.spacedBy(spacing.tight),
+        ) {
             choices.forEach { (value, label) ->
                 Text(
                     text = label,
@@ -546,10 +612,21 @@ private fun <T> QuickChoice(
 private fun StoryRecapSheet(state: StoryRecapState, onDismiss: () -> Unit) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
-    Column(
-        Modifier.fillMaxWidth().background(colors.surface, androidx.compose.foundation.shape.RoundedCornerShape(spacing.large)).border(spacing.rule, colors.rule, androidx.compose.foundation.shape.RoundedCornerShape(spacing.large)).padding(spacing.large),
-        verticalArrangement = Arrangement.spacedBy(spacing.small),
-    ) {
+    // Итог с событиями может быть длинным, а экран — коротким. Задавленная
+    // кнопка «закрыть» хуже любого листания, поэтому sheet ограничен тремя
+    // четвертями экрана и прокручивается целиком.
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val cap = maxHeight * 0.75f
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(max = cap)
+                .verticalScroll(rememberScrollState())
+                .background(colors.surface, androidx.compose.foundation.shape.RoundedCornerShape(spacing.large))
+                .border(spacing.rule, colors.rule, androidx.compose.foundation.shape.RoundedCornerShape(spacing.large))
+                .padding(spacing.large),
+            verticalArrangement = Arrangement.spacedBy(spacing.small),
+        ) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Сюжет · Beta", style = WolfyTheme.typography.bookTitle, color = colors.ink)
             Text("закрыть", style = WolfyTheme.typography.caption, color = colors.accent, modifier = Modifier.pressable(onClick = onDismiss))
@@ -569,6 +646,57 @@ private fun StoryRecapSheet(state: StoryRecapState, onDismiss: () -> Unit) {
                 Text("Осталось сегодня: ${state.value.remaining}", style = WolfyTheme.typography.caption, color = colors.inkMuted)
             }
             StoryRecapState.Idle -> Unit
+        }
+        }
+    }
+}
+
+@Composable
+private fun ResearchSheet(state: ReaderResearchState, dispositions: Map<String, String>, readWords: Long, onDisposition: (String, String) -> Unit, onDismiss: () -> Unit) {
+    val colors = WolfyTheme.colors
+    val spacing = WolfyTheme.spacing
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        Column(
+            Modifier.fillMaxWidth().heightIn(max = maxHeight * 0.78f)
+                .verticalScroll(rememberScrollState())
+                .background(colors.surface, androidx.compose.foundation.shape.RoundedCornerShape(spacing.large))
+                .border(spacing.rule, colors.rule, androidx.compose.foundation.shape.RoundedCornerShape(spacing.large))
+                .padding(spacing.large),
+            verticalArrangement = Arrangement.spacedBy(spacing.small),
+        ) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Исследование", style = WolfyTheme.typography.bookTitle, color = colors.ink)
+                Text("закрыть", style = WolfyTheme.typography.caption, color = colors.accent, modifier = Modifier.pressable(onClick = onDismiss))
+            }
+            when (state) {
+                ReaderResearchState.Idle -> Text("Начните исследование из шапки читалки.", style = WolfyTheme.typography.body, color = colors.inkMuted)
+                ReaderResearchState.Building -> Text("Готовим текст книги…", style = WolfyTheme.typography.body, color = colors.inkMuted)
+                is ReaderResearchState.Processing -> Text("Редакция собирает нити сюжета: ${state.status.progress}%.", style = WolfyTheme.typography.body, color = colors.inkMuted)
+                is ReaderResearchState.Failed -> Text(state.message, style = WolfyTheme.typography.body, color = colors.accent)
+                is ReaderResearchState.Ready -> {
+                    Text(state.artifact.subtitle, style = WolfyTheme.typography.caption, color = colors.accent)
+                    Text(state.artifact.summary, style = WolfyTheme.typography.body, color = colors.ink)
+                    state.artifact.threads.forEach { thread ->
+                        Rule()
+                        Text(thread.title, style = WolfyTheme.typography.sectionLabel, color = colors.ink)
+                        Text(thread.summary, style = WolfyTheme.typography.caption, color = colors.inkMuted)
+                        dispositions[thread.id]?.let { choice -> Text("Пометка: $choice", style = WolfyTheme.typography.caption, color = colors.inkMuted) }
+                        Row(horizontalArrangement = Arrangement.spacedBy(spacing.medium)) {
+                            Text("Копать", style = WolfyTheme.typography.caption, color = colors.accent, modifier = Modifier.pressable { onDisposition(thread.id, "follow") })
+                            Text("Пока мимо", style = WolfyTheme.typography.caption, color = colors.inkMuted, modifier = Modifier.pressable { onDisposition(thread.id, "later") })
+                            Text("Следить фоном", style = WolfyTheme.typography.caption, color = colors.inkMuted, modifier = Modifier.pressable { onDisposition(thread.id, "background") })
+                        }
+                        thread.steps.filter { it.anchorWords <= readWords }.forEach { step ->
+                            Text(step.title, style = WolfyTheme.typography.body, color = colors.ink)
+                            Text(step.text, style = WolfyTheme.typography.caption, color = colors.inkMuted)
+                        }
+                        thread.steps.firstOrNull { it.anchorWords > readWords }?.let { step ->
+                            Text("Следующая заметка откроется примерно через ${step.anchorWords - readWords} слов.", style = WolfyTheme.typography.caption, color = colors.inkMuted)
+                        }
+                    }
+                    Text(state.artifact.notice + " До 2 исследований в неделю.", style = WolfyTheme.typography.caption, color = colors.inkMuted)
+                }
+            }
         }
     }
 }
@@ -598,6 +726,16 @@ private fun SettingStepper(
     }
 }
 
+/** Замеченный кадр прокрутки: доля главы и якорь «блок + смещение внутри». */
+private data class ScrollReport(
+    val place: Float,
+    val blockIndex: Int,
+    val blockOffset: Float,
+)
+
+/** Абсолютный потолок высоты иллюстрации: доля экрана его только ограничивает. */
+private val ImageMaxHeight = 640.dp
+
 @Composable
 private fun ChapterBody(
     state: ReaderState,
@@ -608,7 +746,7 @@ private fun ChapterBody(
     onWordTap: (Int, com.wolfy.ffi.Token, com.wolfy.ffi.ParsedText) -> Unit,
     onPreviousChapter: () -> Unit,
     onNextChapter: () -> Unit,
-    onScrolled: (Float) -> Unit,
+    onScrolled: (Float, Int, Float) -> Unit,
     images: Map<String, ImageBitmap?>,
     onImageVisible: (String) -> Unit,
     modifier: Modifier = Modifier,
@@ -618,13 +756,36 @@ private fun ChapterBody(
     // Возвращение на место: один раз на открытие книги. Ждём, пока список
     // сообщит, сколько в нём блоков, — до первой раскладки их ноль, и
     // прокручивать некуда.
-    LaunchedEffect(scroll, state.chapterIndex, state.startAt) {
-        if (state.startAt <= 0f) return@LaunchedEffect
-        snapshotFlow { scroll.layoutInfo.totalItemsCount }
+    //
+    // Есть якорь «блок + смещение» — идём по нему: сначала блок целиком,
+    // затем доля его прокручиваемой высоты, как только раскладка измерила
+    // высоту этого блока. Так позиция восстанавливается внутри огромного
+    // абзаца, чего старая доля от числа блоков позволить себе не могла.
+    LaunchedEffect(scroll, state.chapterIndex, state.startAt, state.anchorIndex) {
+        if (state.startAt <= 0f && state.anchorIndex < 0) return@LaunchedEffect
+        val total = snapshotFlow { scroll.layoutInfo.totalItemsCount }
             .first { it > 1 }
-            .let { total ->
-                scroll.scrollToItem((state.startAt * (total - 1)).toInt().coerceIn(0, total - 1))
+        val anchor = state.anchorIndex
+        if (anchor >= 0) {
+            val target = anchor.coerceIn(0, total - 1)
+            scroll.scrollToItem(target)
+            // Высота блока известна только после того, как он стал видимым:
+            // вторым проходом докручиваем к точной доле внутри блока.
+            var attempts = 0
+            while (state.anchorOffset > 0f && attempts < 8) {
+                kotlinx.coroutines.delay(32)
+                val item = scroll.layoutInfo.visibleItemsInfo.firstOrNull { it.index == target }
+                    ?: scroll.layoutInfo.visibleItemsInfo.firstOrNull() ?: break
+                if (item.index == target && item.size > 0) {
+                    val within = (state.anchorOffset * item.size).toInt()
+                    if (within > 1) scroll.scrollToItem(target, within)
+                    return@LaunchedEffect
+                }
+                attempts += 1
             }
+            return@LaunchedEffect
+        }
+        scroll.scrollToItem((state.startAt * (total - 1)).toInt().coerceIn(0, total - 1))
     }
 
     LaunchedEffect(scroll, state.chapterIndex) {
@@ -632,7 +793,7 @@ private fun ChapterBody(
             val layout = scroll.layoutInfo
             val total = layout.totalItemsCount
             if (total <= 1) {
-                0f
+                ScrollReport(0f, -1, 0f)
             } else {
                 val first = scroll.firstVisibleItemIndex.coerceIn(0, total - 1)
                 val item = layout.visibleItemsInfo.firstOrNull { it.index == first }
@@ -643,9 +804,10 @@ private fun ChapterBody(
                 val inItem = item?.let {
                     (-it.offset).toFloat().coerceAtLeast(0f) / it.size.coerceAtLeast(1)
                 }?.coerceIn(0f, 1f) ?: 0f
-                ((first + inItem) / (total - 1).toFloat()).coerceIn(0f, 1f)
+                val fraction = ((first + inItem) / (total - 1).toFloat()).coerceIn(0f, 1f)
+                ScrollReport(fraction, first, inItem)
             }
-        }.collect { onScrolled(it) }
+        }.collect { report -> onScrolled(report.place, report.blockIndex, report.blockOffset) }
     }
 
     // Ленивый список, а не прокручиваемая колонка: глава романа — это сотни
@@ -784,12 +946,18 @@ private fun BlockView(
                 LaunchedEffect(path, image) { onImageVisible(path) }
             }
             if (image != null) {
-                Image(
-                    bitmap = image,
-                    contentDescription = block.alt,
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxWidth().heightIn(max = 480.dp),
-                )
+                // Верхняя граница — доля доступного экрана, а не константа:
+                // на телефонном landscape 480.dp съедали экран целиком, а на
+                // десктопе крупную иллюстрацию ужимали без причины.
+                BoxWithConstraints {
+                    val cap = min(maxHeight * 0.55f, ImageMaxHeight)
+                    Image(
+                        bitmap = image,
+                        contentDescription = block.alt,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxWidth().heightIn(max = cap),
+                    )
+                }
             }
             // Подпись остаётся рядом с удачной картинкой и становится
             // fallback, если ресурс испорчен или старая библиотека ядра ещё
@@ -804,11 +972,14 @@ private fun BlockView(
             Text(block.text, style = WolfyTheme.typography.reader, color = WolfyTheme.colors.ink)
         }
 
-        // В pre переносы/отступы — содержимое, не обычная вёрстка абзаца.
+        // В pre переносы и отступы — содержимое, а не вёрстка абзаца: моно-
+        // шрифт и осторожный перенос, чтобы длинная строка кода или адреса
+        // не растянула страницу шире экрана.
         "pre" -> Text(
             block.text,
-            style = WolfyTheme.typography.reader,
+            style = WolfyTheme.typography.reader.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
             color = WolfyTheme.colors.ink,
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
         )
 
         "table" -> TableBlock(block.rows, block.text)
@@ -828,15 +999,41 @@ private fun TableBlock(rows: List<List<String>>?, fallback: String) {
         Text(fallback, style = WolfyTheme.typography.reader, color = WolfyTheme.colors.ink)
         return
     }
-    Column(verticalArrangement = Arrangement.spacedBy(spacing.tight)) {
+    // Сетка общая для всей таблицы: строка из двух ячеек обязана делить
+    // ширину на столько же колонок, что и строка из четырёх, иначе колонки
+    // «плавают» от строки к строке.
+    val columnCount = table.maxOf { it.size }
+    val minWidthPerColumn = 96.dp
+    // Широкие таблицы листаются вбок с фиксированной шириной колонки, а не
+    // сплющиваются в нечитаемую полоску. Узкие делят ширину поровну.
+    val wide = columnCount > 4
+    Column(
+        if (wide) {
+            Modifier.horizontalScroll(rememberScrollState())
+        } else {
+            Modifier.fillMaxWidth()
+        },
+        verticalArrangement = Arrangement.spacedBy(spacing.tight),
+    ) {
         table.forEach { row ->
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(spacing.small)) {
-                row.forEach { cell ->
+            // Недостающие ячейки достраиваются пустыми: без этого строка с
+            // меньшим числом клеток вылетала бы из общей сетки.
+            val padded = List(columnCount) { index -> row.getOrElse(index) { "" } }
+            Row(
+                Modifier.takeIf { !wide }?.fillMaxWidth() ?: Modifier,
+                horizontalArrangement = Arrangement.spacedBy(spacing.small),
+            ) {
+                padded.forEach { cell ->
                     Text(
                         cell,
                         style = WolfyTheme.typography.caption,
                         color = WolfyTheme.colors.ink,
-                        modifier = Modifier.weight(1f),
+                        modifier =
+                            if (wide) {
+                                Modifier.width(minWidthPerColumn)
+                            } else {
+                                Modifier.weight(1f)
+                            },
                     )
                 }
             }

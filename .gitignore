@@ -61,6 +61,8 @@ tmp/
 server/wolfy-server
 dist/
 
+/bugs
+
 # Выгрузка graphify: четырнадцать мегабайт отчётов, которые
 # пересобираются одной командой.
 graphify-out/

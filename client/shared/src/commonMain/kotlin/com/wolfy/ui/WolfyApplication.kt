@@ -1,3 +1,5 @@
+@file:OptIn(kotlinx.coroutines.FlowPreview::class)
+
 package com.wolfy.ui
 
 import androidx.compose.animation.AnimatedContent
@@ -115,6 +117,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.debounce
 
 /**
  * Версия по умолчанию — та, что зашита в общий модуль.
@@ -437,6 +441,9 @@ private class Parts(
     }
 }
 
+/** Пауза перед записью радио-настроек: ползунок громкости не пишет на диск. */
+private const val RADIO_SAVE_DEBOUNCE_MS = 500L
+
 @Composable
 private fun Shell(
     parts: Parts,
@@ -514,13 +521,18 @@ private fun Shell(
     val radio = remember { createRadioPlayer() }
     val radioState by radio.state.collectAsState()
     var radioPreferences by remember { mutableStateOf(parts.store.loadRadio()) }
-    var radioSaveJob by remember { mutableStateOf<Job?>(null) }
+    // Настоящий debounce, а не отмена уже начавшейся записи: ползунок громкости
+    // успокаивается, и лишь тогда одна последняя копия уходит на диск. У
+    // отмены-подмены беда в том, что стартовавший на IO save отменой не
+    // прервётся — а здесь просто нечего прерывать.
+    val radioSaveQueue = remember { MutableStateFlow<com.wolfy.data.RadioPreferences?>(null) }
+    LaunchedEffect(parts.store) {
+        radioSaveQueue.debounce(RADIO_SAVE_DEBOUNCE_MS).collect { preferences ->
+            preferences?.let { withContext(Dispatchers.IO) { parts.store.saveRadio(it) } }
+        }
+    }
     fun saveRadio(preferences: com.wolfy.data.RadioPreferences) {
-        // При нескольких быстрых кликах старая ожидающая запись уже не нужна.
-        // Сам I/O живёт вне главного потока; FileLibraryStore всё равно пишет
-        // атомарно, поэтому последняя завершившаяся запись остаётся целой.
-        radioSaveJob?.cancel()
-        radioSaveJob = scope.launch(Dispatchers.IO) { parts.store.saveRadio(preferences) }
+        radioSaveQueue.value = preferences
     }
     LaunchedEffect(radio) { radio.setVolume(radioPreferences.volume) }
     DisposableEffect(radio) { onDispose { radio.release() } }
@@ -533,7 +545,9 @@ private fun Shell(
         parts.reader.setSegmentWords(readingSettings.segmentWords)
     }
 
-    val catalogue by parts.catalogue.state.collectAsState()
+    // Состояние библиотеки собирается только пока живёт её маршрут; подписка
+    // ставится ниже, после объявления route.
+    var catalogue by remember { mutableStateOf(com.wolfy.ui.library.LibraryUiState()) }
     val readerState by parts.reader.state.collectAsState()
     val readerProgress by parts.reader.withinChapterProgress.collectAsState()
     val readerImages by parts.reader.images.collectAsState()
@@ -640,6 +654,18 @@ private fun Shell(
         Section.More -> reference?.let(Route::Reference) ?: Route.Settings
     }
 
+    // Состояние библиотеки собирается только пока живёт её маршрут.
+    //
+    // Раньше Shell подписывался навсегда: производные списки пересчитывались
+    // в фоне даже тогда, когда читатель сидел в читалке или тренировке.
+    // Последнее собранное значение остаётся в памяти — уходящая анимация
+    // маршрута рисует то, что было видно последним.
+    LaunchedEffect(parts.catalogue, route is Route.Library) {
+        if (route is Route.Library) {
+            parts.catalogue.state.collect { catalogue = it }
+        }
+    }
+
     Box(Modifier.fillMaxSize()) {
     Column(
         Modifier
@@ -733,7 +759,9 @@ private fun Shell(
                     },
                     onPreviousChapter = parts.reader::previousChapter,
                     onNextChapter = parts.reader::nextChapter,
-                    onScrolled = parts.reader::rememberPlace,
+                    onScrolled = { place, block, offset ->
+                        parts.reader.rememberPlace(place, block, offset)
+                    },
                     onChapter = parts.reader::loadChapter,
                     onClose = {
                         parts.reader.closeCurrent()
@@ -747,6 +775,8 @@ private fun Shell(
                     onExplainPhrase = parts.reader::explainCardPhrase,
                     onRecap = parts.reader::recapRecentPages,
                     onDismissRecap = parts.reader::dismissRecap,
+                    onResearch = parts.reader::startResearch,
+                    onResearchDisposition = parts.reader::setResearchDisposition,
                     onImageVisible = parts.reader::loadImage,
                     theme = theme,
                     fontScale = fontScale,

@@ -73,7 +73,11 @@ pub fn plan_add(state: &LibraryState, fingerprint: &str) -> AddPlan {
     if fingerprint.is_empty() {
         return AddPlan::Fresh;
     }
-    match state.books.iter().find(|book| book.source_key == fingerprint) {
+    match state
+        .books
+        .iter()
+        .find(|book| book.source_key == fingerprint)
+    {
         Some(book) if book.deleted => AddPlan::Revive(book.id.clone()),
         Some(book) if book.readable() => AddPlan::Known(book.id.clone()),
         Some(book) => AddPlan::Attach(book.id.clone()),
@@ -88,7 +92,11 @@ pub fn plan_add(state: &LibraryState, fingerprint: &str) -> AddPlan {
 /// этот путь: устаревшая копия, не видевшая удаления, так подделать
 /// воскрешение не может — сервер отвергает её по ревизии.
 pub fn revive_book(state: &LibraryState, id: &str, path: &str, fingerprint: &str) -> LibraryState {
-    let Some(at) = state.books.iter().position(|book| book.id == id && book.deleted) else {
+    let Some(at) = state
+        .books
+        .iter()
+        .position(|book| book.id == id && book.deleted)
+    else {
         return state.clone();
     };
     let mut books = state.books.clone();
@@ -176,17 +184,26 @@ pub fn describe(
 }
 
 /// Запоминает, где читатель остановился.
+///
+/// Кроме доли внутри главы сохраняется стабильный якорь «блок + смещение
+/// внутри блока»: доля зависит от высоты блоков и кегля, а блок — та же
+/// структура, по которой читалка раскладывает страницу. Так позиция
+/// возвращается точнее на другом устройстве и после смены шрифта.
 pub fn remember_progress(
     state: &LibraryState,
     id: &str,
     chapter: i32,
     within_chapter: f32,
+    block_index: i32,
+    block_offset: f32,
     now: i64,
 ) -> LibraryState {
     edit_book(state, id, |book| LibraryBook {
         progress: Progress {
             chapter,
             within_chapter: within_chapter.clamp(0.0, 1.0),
+            block_index: block_index.max(-1),
+            block_offset: block_offset.clamp(0.0, 1.0),
             opened_at: now,
         },
         ..book.clone()
@@ -565,12 +582,16 @@ mod tests {
     fn продолжить_предлагают_последнюю_начатую_и_недочитанную() {
         let mut давняя = книга("1", "Давняя");
         давняя.progress = Progress {
+            block_index: 0,
+            block_offset: 0.0,
             chapter: 1,
             within_chapter: 0.0,
             opened_at: NOW - 10_000,
         };
         let mut свежая = книга("2", "Свежая");
         свежая.progress = Progress {
+            block_index: 0,
+            block_offset: 0.0,
             chapter: 1,
             within_chapter: 0.0,
             opened_at: NOW,
@@ -587,6 +608,8 @@ mod tests {
     fn дочитанную_и_неначатую_продолжать_не_предлагают() {
         let mut дочитана = книга("1", "Дочитана");
         дочитана.progress = Progress {
+            block_index: 0,
+            block_offset: 0.0,
             chapter: 10,
             within_chapter: 1.0,
             opened_at: NOW,
@@ -606,6 +629,8 @@ mod tests {
         let mut без_файла = книга("1", "Приехала синхронизацией");
         без_файла.path = String::new();
         без_файла.progress = Progress {
+            block_index: 0,
+            block_offset: 0.0,
             chapter: 1,
             within_chapter: 0.0,
             opened_at: NOW,
@@ -724,7 +749,10 @@ mod tests {
         // Ревизия — память о tombstone: сервер по равенству принимает
         // воскрешение, а устаревшая живая версия с меньшим номером — нет.
         assert_eq!(book.rev, 20, "воскрешение не сохранило память о tombstone");
-        assert!(after.cards[0].book_id.as_str() == "1", "колода потеряла книгу");
+        assert!(
+            after.cards[0].book_id.as_str() == "1",
+            "колода потеряла книгу"
+        );
     }
 
     #[test]
@@ -757,7 +785,7 @@ mod tests {
             books: vec![книга("1", "Гэтсби")],
             ..пустая()
         };
-        let after = remember_progress(&state, "1", 3, 4.2, NOW);
+        let after = remember_progress(&state, "1", 3, 4.2, -1, 0.0, NOW);
         assert_eq!(after.books[0].progress.within_chapter, 1.0);
         assert_eq!(after.books[0].progress.opened_at, NOW);
         assert!(after.books[0].dirty);

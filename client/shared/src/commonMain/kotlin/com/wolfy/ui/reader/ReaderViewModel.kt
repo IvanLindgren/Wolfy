@@ -9,6 +9,13 @@ import com.wolfy.data.WolfyApi
 import com.wolfy.data.AiRecap
 import com.wolfy.data.AiRecapResult
 import com.wolfy.data.AiPhraseResult
+import com.wolfy.data.ResearchArtifact
+import com.wolfy.data.ResearchArtifactResult
+import com.wolfy.data.ResearchSourceBuilder
+import com.wolfy.data.ResearchStartResult
+import com.wolfy.data.ResearchStatus
+import com.wolfy.data.ResearchStateResult
+import com.wolfy.data.ResearchUserState
 import com.wolfy.data.library.Library
 import com.wolfy.data.library.LibraryBook
 import com.wolfy.data.library.currentTimeMillis
@@ -32,6 +39,7 @@ import com.wolfy.widgets.GraphLink
 import com.wolfy.widgets.GraphWord
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -94,8 +102,19 @@ data class ReaderState(
      * где он остановился. Дальше прокруткой распоряжается он сам.
      */
     val startAt: Float = 0f,
+    /**
+     * Стабильный якорь восстановления: индекс блока и доля внутри него.
+     *
+     * Доля [startAt] зависит от высоты блоков и кегля; блок же одинаков на
+     * любом устройстве и при любом шрифте. Минус единица — «якоря нет»,
+     * тогда работает старая доля от числа блоков.
+     */
+    val anchorIndex: Int = -1,
+    val anchorOffset: Float = 0f,
     val error: String? = null,
     val recap: StoryRecapState = StoryRecapState.Idle,
+    val research: ReaderResearchState = ReaderResearchState.Idle,
+    val researchDispositions: Map<String, String> = emptyMap(),
 ) {
     val chapterCount: Int get() = chapters.size
     val hasPrevious: Boolean get() = chapterIndex > 0
@@ -184,6 +203,7 @@ class ReaderViewModel(
     private var segmentJob: Job? = null
     /** Отложенная запись места: тяжёлая сессия библиотеки не трогает Main. */
     private var progressJob: Job? = null
+    private var researchJob: Job? = null
     private val progressMutex = Mutex()
 
     /** Запрос перевода для текущей карточки — новый тап отменяет предыдущий. */
@@ -194,6 +214,10 @@ class ReaderViewModel(
 
     /** Последняя записанная доля главы — по ней отсекается лишняя запись. */
     private var lastReportedPlace: Float? = null
+
+    /** Якорь последнего замеченного места прокрутки. Пишется вместе с долей. */
+    private var lastAnchorBlock: Int = -1
+    private var lastAnchorOffset: Float = 0f
 
     /** Момент последней записи и доля, которую ещё не записали. */
     private var lastWriteAt: Long = 0
@@ -358,6 +382,8 @@ class ReaderViewModel(
                     index = book.progress.chapter.coerceIn(0, (opened.info.chapters.size - 1).coerceAtLeast(0)),
                     session = session,
                     initialPlace = book.progress.withinChapter,
+                    initialAnchorIndex = book.progress.blockIndex,
+                    initialAnchorOffset = book.progress.blockOffset,
                 )
             } catch (e: CoreException) {
                 if (owns(session, book.id)) {
@@ -458,7 +484,13 @@ class ReaderViewModel(
     /** Читает главу и разбирает её текст. */
     fun loadChapter(index: Int) = loadChapter(index, generation, initialPlace = null)
 
-    private fun loadChapter(index: Int, session: Long, initialPlace: Float?) {
+    private fun loadChapter(
+        index: Int,
+        session: Long,
+        initialPlace: Float?,
+        initialAnchorIndex: Int = -1,
+        initialAnchorOffset: Float = 0f,
+    ) {
         val handle = handle ?: return
         val id = bookId ?: return
         if (!owns(session, id, handle)) return
@@ -467,6 +499,7 @@ class ReaderViewModel(
         chapterJob?.cancel()
         anchorJob?.cancel()
         segmentJob?.cancel()
+        researchJob?.cancel()
         chapterJob = viewModelScope.launch {
             _state.update { it.copy(loading = true, card = null) }
             try {
@@ -483,6 +516,11 @@ class ReaderViewModel(
                 }
                 if (!owns(session, id, handle)) return@launch
                 val restore = initialPlace?.coerceIn(0f, 1f) ?: 0f
+                // Якорь при переключении главы не наследуется: новая глава
+                // начинается сверху.
+                val anchorIndex = if (initialPlace != null) initialAnchorIndex.coerceAtLeast(-1) else -1
+                val anchorOffset =
+                    if (initialPlace != null && anchorIndex >= 0) initialAnchorOffset.coerceIn(0f, 1f) else 0f
                 _state.update {
                     it.copy(
                         loading = false,
@@ -492,6 +530,8 @@ class ReaderViewModel(
                         // Новая глава — новый отрезок: старый мерил чужой текст.
                         segment = null,
                         startAt = restore,
+                        anchorIndex = anchorIndex,
+                        anchorOffset = anchorOffset,
                         error = null,
                     )
                 }
@@ -503,7 +543,9 @@ class ReaderViewModel(
                 // главы имеет смысл только для той главы, где его записали.
                 lastReportedPlace = restore
                 _withinChapterProgress.value = restore
-                library.rememberProgress(id, index, restore)
+                lastAnchorBlock = anchorIndex
+                lastAnchorOffset = anchorOffset
+                library.rememberProgress(id, index, restore, anchorIndex, anchorOffset)
             } catch (e: CoreException) {
                 if (owns(session, id, handle)) {
                     _state.update {
@@ -724,6 +766,83 @@ class ReaderViewModel(
 
     fun dismissRecap() { _state.update { it.copy(recap = StoryRecapState.Idle) } }
 
+    /** Собирает источник из глав ядра и запускает отдельный AI-конспект. */
+    fun startResearch() {
+        val id = bookId ?: return
+        val opened = handle ?: return
+        val session = generation
+        val chapters = _state.value.chapterCount
+        if (chapters <= 0 || _state.value.research is ReaderResearchState.Building) return
+        _state.update { it.copy(research = ReaderResearchState.Building) }
+        researchJob?.cancel()
+        researchJob = viewModelScope.launch {
+            val started = withContext(Dispatchers.Default) {
+                runCatching { ResearchSourceBuilder(core).upload(id, opened, chapters, api) }
+                    .getOrElse { ResearchStartResult.Failed("Не удалось подготовить текст книги.") }
+            }
+            if (!owns(session, id, opened)) return@launch
+            val status = (started as? ResearchStartResult.Ready)?.value
+            if (status == null) {
+                _state.update { it.copy(research = ReaderResearchState.Failed((started as ResearchStartResult.Failed).message)) }
+                return@launch
+            }
+            observeResearch(session, id, opened, status)
+        }
+    }
+
+    private suspend fun observeResearch(session: Long, id: String, opened: Long, initial: ResearchStatus) {
+        var status = initial
+        repeat(RESEARCH_STATUS_ATTEMPTS) {
+            if (!owns(session, id, opened)) return
+            _state.update { it.copy(research = ReaderResearchState.Processing(status)) }
+            if (status.stage == "ready") {
+                when (val artifact = api.researchArtifact(id, status.analysisId)) {
+                    is ResearchArtifactResult.Ready -> {
+                        val userState = (api.researchState(id, status.analysisId) as? ResearchStateResult.Ready)?.value
+                        _state.update { current ->
+                            if (owns(session, id, opened)) current.copy(
+                                research = ReaderResearchState.Ready(status, artifact.value),
+                                researchDispositions = userState?.dispositions.orEmpty(),
+                            ) else current
+                        }
+                    }
+                    is ResearchArtifactResult.Failed -> _state.update { it.copy(research = ReaderResearchState.Failed(artifact.message)) }
+                }
+                return
+            }
+            if (status.stage == "failed" || status.stage == "cancelled") {
+                _state.update { it.copy(research = ReaderResearchState.Failed("Исследование не удалось завершить.")) }
+                return
+            }
+            delay(RESEARCH_STATUS_DELAY)
+            when (val fresh = api.researchStatus(id, status.analysisId)) {
+                is ResearchStartResult.Ready -> status = fresh.value
+                is ResearchStartResult.Failed -> {
+                    _state.update { it.copy(research = ReaderResearchState.Failed(fresh.message)) }
+                    return
+                }
+            }
+        }
+        _state.update { it.copy(research = ReaderResearchState.Processing(status)) }
+    }
+
+    fun setResearchDisposition(cardId: String, disposition: String) {
+        val id = bookId ?: return
+        val ready = _state.value.research as? ReaderResearchState.Ready ?: return
+        val next = _state.value.researchDispositions + (cardId to disposition)
+        _state.update { it.copy(researchDispositions = next) }
+        viewModelScope.launch {
+            val remote = (api.researchState(id, ready.status.analysisId) as? ResearchStateResult.Ready)?.value ?: ResearchUserState()
+            val result = api.saveResearchState(
+                id, ready.status.analysisId,
+                remote.copy(rev = remote.rev + 1, writer = api.researchWriter(), dispositions = remote.dispositions + (cardId to disposition)),
+            )
+            if (result is ResearchStateResult.Ready) _state.update { current ->
+                if (current.research is ReaderResearchState.Ready) current.copy(researchDispositions = result.value.dispositions) else current
+            }
+        }
+    }
+
     fun dismissCard() {
         invalidateCard()
         _state.update { it.copy(card = null, selectedBlock = -1) }
@@ -802,11 +921,17 @@ class ReaderViewModel(
      * доля не изменилась заметно. Без этого порога библиотека переписывалась
      * бы на каждый кадр прокрутки — сотню раз в секунду ради значения,
      * которое всё равно меняется медленно.
+     *
+     * Вместе с долей приходит стабильный якорь «блок + смещение внутри
+     * блока»: доля зависит от кегля, блок — нет.
      */
-    fun rememberPlace(withinChapter: Float) {
+    fun rememberPlace(withinChapter: Float, blockIndex: Int = -1, blockOffset: Float = 0f) {
         val id = bookId ?: return
         val place = withinChapter.coerceIn(0f, 1f)
         _withinChapterProgress.value = place
+        lastAnchorBlock = blockIndex.coerceAtLeast(-1)
+        lastAnchorOffset =
+            if (lastAnchorBlock >= 0) blockOffset.coerceIn(0f, 1f) else 0f
         val previous = lastReportedPlace
         if (previous != null && kotlin.math.abs(previous - place) < 0.02f) return
         lastReportedPlace = place
@@ -823,7 +948,7 @@ class ReaderViewModel(
         }
         lastWriteAt = now
         pendingPlace = null
-        writeProgress(id, _state.value.chapterIndex, place)
+        writeProgress(id, _state.value.chapterIndex, place, lastAnchorBlock, lastAnchorOffset)
     }
 
     /** Дописывает отложенную долю главы: при смене главы и при закрытии книги. */
@@ -832,17 +957,17 @@ class ReaderViewModel(
         val place = pendingPlace ?: return
         pendingPlace = null
         lastWriteAt = clock()
-        writeProgress(id, _state.value.chapterIndex, place)
+        writeProgress(id, _state.value.chapterIndex, place, lastAnchorBlock, lastAnchorOffset)
     }
 
-    private fun writeProgress(id: String, chapter: Int, place: Float) {
+    private fun writeProgress(id: String, chapter: Int, place: Float, blockIndex: Int, blockOffset: Float) {
         // CoreSession.run может сериализовать всю библиотеку. Даже раз в три
         // секунды это недопустимо на scroll callback. На закрытии последняя
         // отложенная доля добавляется в эту же последовательную очередь.
         progressJob = viewModelScope.launch(Dispatchers.Default) {
             // Порядок важнее отмены: старый progress не должен завершиться
             // после более нового и вернуть книгу назад на пару процентов.
-            progressMutex.withLock { library.rememberProgress(id, chapter, place) }
+            progressMutex.withLock { library.rememberProgress(id, chapter, place, blockIndex, blockOffset) }
         }
     }
 
@@ -874,6 +999,7 @@ class ReaderViewModel(
         chapterJob = null
         anchorJob = null
         segmentJob = null
+        researchJob = null
         flushPlace()
         deckJob?.cancel()
         deckJob = null
@@ -908,6 +1034,8 @@ class ReaderViewModel(
 
     private companion object {
 		const val RECAP_CHARS = 18_000
+        const val RESEARCH_STATUS_DELAY = 3_000L
+        const val RESEARCH_STATUS_ATTEMPTS = 20
         /** Как редко место в книге доходит до диска. */
         const val WRITE_EVERY = 3_000L
         /** Не больше 32 MiB готовых растров на открытую книгу. */
@@ -1085,4 +1213,12 @@ sealed interface StoryRecapState {
     data object Loading : StoryRecapState
     data class Ready(val value: AiRecap) : StoryRecapState
     data class Failed(val message: String) : StoryRecapState
+}
+
+sealed interface ReaderResearchState {
+    data object Idle : ReaderResearchState
+    data object Building : ReaderResearchState
+    data class Processing(val status: ResearchStatus) : ReaderResearchState
+    data class Ready(val status: ResearchStatus, val artifact: ResearchArtifact) : ReaderResearchState
+    data class Failed(val message: String) : ReaderResearchState
 }

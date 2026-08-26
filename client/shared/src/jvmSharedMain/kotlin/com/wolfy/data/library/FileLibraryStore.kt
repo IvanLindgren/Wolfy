@@ -212,9 +212,12 @@ internal class FileLibraryStore(
 
     override fun createBookDownload(fileName: String): String {
         books.mkdirs()
+        // Резервное имя берём заранее, чтобы после rename снова не искать
+        // свободное: «книга (2).epub.part» станет «книга (2).epub».
         val target = uniqueFile(fileName)
-        FileOutputStream(target, false).use { it.fd.sync() }
-        return target.absolutePath
+        val part = File(target.parentFile, target.name + DOWNLOAD_PART_SUFFIX)
+        FileOutputStream(part, false).use { }
+        return part.absolutePath
     }
 
     override fun appendBookChunk(path: String, bytes: ByteArray): Boolean = runCatching {
@@ -223,6 +226,35 @@ internal class FileLibraryStore(
         FileOutputStream(target, true).use { output -> output.write(bytes); output.fd.sync() }
         true
     }.getOrDefault(false)
+
+    override fun commitBookDownload(path: String): String = runCatching {
+        require(path.endsWith(DOWNLOAD_PART_SUFFIX)) { "не докачанный файл" }
+        val part = File(path)
+        require(part.absolutePath.startsWith(books.absolutePath))
+        if (!part.isFile || part.length() == 0L) return ""
+        val finalName = path.removeSuffix(DOWNLOAD_PART_SUFFIX)
+        val target = File(finalName)
+        try {
+            java.nio.file.Files.move(
+                part.toPath(),
+                target.toPath(),
+                java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+            )
+        } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+            // Старые файловые системы без atomic move: обычный rename
+            // всё равно лучше, чем оставить .part жить рядом.
+            if (!part.renameTo(target)) throw IllegalStateException("переименование не удалось")
+        }
+        target.absolutePath
+    }.getOrDefault("")
+
+    override fun discardBookDownload(path: String) {
+        runCatching {
+            val part = File(path)
+            require(part.absolutePath.startsWith(books.absolutePath))
+            part.delete()
+        }
+    }
 
     override fun dictionaryPath(): String =
         File(directory, DICTIONARY_FILE).takeIf { dictionary ->
@@ -330,6 +362,7 @@ internal class FileLibraryStore(
     private companion object {
         const val DICTIONARY_FILE = "wolfy_dictionary.tsv"
         const val DICTIONARY_HEADER = "# wolfy english dictionary v2"
+        const val DOWNLOAD_PART_SUFFIX = ".part"
     }
 }
 

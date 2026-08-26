@@ -4,11 +4,13 @@ import com.wolfy.data.library.Card
 import com.wolfy.data.library.Library
 import com.wolfy.data.library.LibraryBook
 import com.wolfy.data.library.currentTimeMillis
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 
@@ -136,44 +138,79 @@ class SyncService(
         json.encodeToJsonElement(AppSettings.serializer(), settings.current)
 
     private suspend fun syncFiles(payload: SyncPayload) {
-        val remote = payload.files.associateBy { it.bookId }
-        val local = library.state.value.books.filter { !it.deleted }
+        // Чтение, запись и fsync идут по одному мегабайту: на Main они
+        // регулярно замирали бы кадрами. Диску всё равно, из какого
+        // диспетчера его зовут, а сетевым вызовам (Ktor) — тем более.
+        withContext(Dispatchers.IO) {
+            val remote = payload.files.associateBy { it.bookId }
+            val local = library.state.value.books.filter { !it.deleted }
 
-        // Сначала отправляем отсутствующие в облаке файлы. Их хеш уже посчитан
-        // при импорте; сервер сверит его ещё раз после потоковой записи.
-        local.filter { it.readable && it.id !in remote }.forEach { book ->
-            val total = library.localFileSize(book.id) ?: return@forEach
-            if (total !in 1..MAX_BOOK_BYTES || book.sourceKey.isBlank()) return@forEach
-            var offset = 0L
-            while (offset < total) {
-                val part = library.readLocalFileChunk(book.id, offset, CHUNK_BYTES) ?: break
-                val accepted = api.uploadBookChunk(
-                    book.id,
-                    "${book.title.ifBlank { "book" }}.${book.format.ifBlank { "epub" }}",
-                    book.sourceKey,
-                    offset,
-                    total,
-                    part,
-                )
-                if (!accepted) break
-                offset += part.size
+            // Сначала отправляем отсутствующие в облаке файлы. Их хеш уже посчитан
+            // при импорте; сервер сверит его ещё раз после потоковой записи.
+            local.filter { it.readable && it.id !in remote }.forEach { book ->
+                val total = library.localFileSize(book.id) ?: return@forEach
+                if (total !in 1..MAX_BOOK_BYTES || book.sourceKey.isBlank()) return@forEach
+                var offset = 0L
+                while (offset < total) {
+                    val part = library.readLocalFileChunk(book.id, offset, CHUNK_BYTES) ?: break
+                    val accepted = api.uploadBookChunk(
+                        book.id,
+                        "${book.title.ifBlank { "book" }}.${book.format.ifBlank { "epub" }}",
+                        book.sourceKey,
+                        offset,
+                        total,
+                        part,
+                    )
+                    if (!accepted) break
+                    offset += part.size
+                }
+            }
+
+            // На втором устройстве книга появляется сразу после sync, а файл
+            // докачивается следом. Пока его нет, экран честно показывает прогресс.
+            remote.values.filter { file ->
+                library.book(file.bookId)?.readable == false && file.size in 1..MAX_BOOK_BYTES
+            }.forEach { file ->
+                downloadIntoLibrary(file)
             }
         }
+    }
 
-        // На втором устройстве книга появляется сразу после sync, а файл
-        // докачивается следом. Пока его нет, экран честно показывает прогресс.
-        remote.values.filter { file ->
-            library.book(file.bookId)?.readable == false && file.size in 1..MAX_BOOK_BYTES
-        }.forEach { file ->
-            val target = library.createDownloadedFile(file.fileName)
-            if (target.isBlank()) return@forEach
-            var offset = 0L
+    /** Качает файл целиком в .part, сверяет SHA-256 и только потом фиксирует. */
+    private suspend fun downloadIntoLibrary(file: SyncBookFile) {
+        val part = library.createDownloadedFile(file.fileName)
+        if (part.isBlank()) return
+
+        var offset = 0L
+        var complete = true
+        try {
             while (offset < file.size) {
-                val part = api.downloadBookChunk(file.bookId, offset, CHUNK_BYTES) ?: break
-                if (part.bytes.isEmpty() || !library.appendDownloadedChunk(target, part.bytes)) break
-                offset += part.bytes.size
+                val chunk = api.downloadBookChunk(file.bookId, offset, CHUNK_BYTES) ?: run {
+                    complete = false
+                    break
+                }
+                if (chunk.bytes.isEmpty() || !library.appendDownloadedChunk(part, chunk.bytes)) {
+                    complete = false
+                    break
+                }
+                offset += chunk.bytes.size
             }
-            if (offset == file.size) library.attachDownloadedFile(file.bookId, target, file.sha256)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // Отмена синхронизации: .part сюда не докатился, оставлять нечего.
+            library.discardDownloadedFile(part)
+            throw e
+        } catch (_: Exception) {
+            // Порыв сети или битая порция — файл начнём качать заново в следующий раз.
+            complete = false
+        }
+        if (complete) {
+            // Неверный отпечаток означает побитую по дороге копию: под финальным
+            // именем она жить не должна.
+            if (!library.finalizeDownloadedFile(file.bookId, part, file.sha256)) {
+                library.discardDownloadedFile(part)
+            }
+        } else {
+            library.discardDownloadedFile(part)
         }
     }
 

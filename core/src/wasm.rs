@@ -378,9 +378,21 @@ impl WolfySession {
     /// Передавайте поколения снапшотов, которые успешно записаны. `-1` = не подтверждать.
     #[wasm_bindgen(js_name = ackSaved)]
     pub fn ack_saved(&mut self, library_gen: i64, settings_gen: i64, practice_gen: i64) {
-        let lib = if library_gen >= 0 { Some(library_gen) } else { None };
-        let set = if settings_gen >= 0 { Some(settings_gen) } else { None };
-        let prac = if practice_gen >= 0 { Some(practice_gen) } else { None };
+        let lib = if library_gen >= 0 {
+            Some(library_gen)
+        } else {
+            None
+        };
+        let set = if settings_gen >= 0 {
+            Some(settings_gen)
+        } else {
+            None
+        };
+        let prac = if practice_gen >= 0 {
+            Some(practice_gen)
+        } else {
+            None
+        };
         self.inner.ack_saved(lib, set, prac);
     }
 

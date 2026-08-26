@@ -149,8 +149,8 @@ pub fn apply_server(
             if book.source_key.is_empty() {
                 continue;
             }
-            let key = canonical_book_id(&book.source_key)
-                .unwrap_or_else(|| book.source_key.clone());
+            let key =
+                canonical_book_id(&book.source_key).unwrap_or_else(|| book.source_key.clone());
             source_to_indices.entry(key).or_default().push(idx);
         }
         let mut to_remove: HashSet<usize> = HashSet::new();
@@ -306,7 +306,10 @@ pub fn migrate(state: &LibraryState, fresh_ids: &mut impl Iterator<Item = String
     migrate_to_canonical(&after_uuid)
 }
 
-fn migrate_uuid(state: &LibraryState, fresh_ids: &mut impl Iterator<Item = String>) -> LibraryState {
+fn migrate_uuid(
+    state: &LibraryState,
+    fresh_ids: &mut impl Iterator<Item = String>,
+) -> LibraryState {
     let mut renamed: Vec<(String, String)> = Vec::new();
     let books: Vec<LibraryBook> = state
         .books
@@ -762,14 +765,7 @@ mod tests {
             ..книга(UUID, "Гэтсби", NOW)
         };
         // Второе применение — другой запрос, с ним ушёл другой снимок отправки.
-        let после_a = apply_server(
-            &после_b,
-            19,
-            &[старый],
-            &[],
-            &Sent::nothing(&после_b),
-            NOW,
-        );
+        let после_a = apply_server(&после_b, 19, &[старый], &[], &Sent::nothing(&после_b), NOW);
 
         assert_eq!(
             после_a.books[0].rev, 20,
@@ -796,14 +792,7 @@ mod tests {
             rev: 8,
             ..книга("99999999-9999-4999-8999-999999999999", "Призрак", NOW)
         };
-        let после_a = apply_server(
-            &после_b,
-            19,
-            &[призрак],
-            &[],
-            &Sent::nothing(&после_b),
-            NOW,
-        );
+        let после_a = apply_server(&после_b, 19, &[призрак], &[], &Sent::nothing(&после_b), NOW);
 
         assert_eq!(после_a.books.len(), 0, "призрак из старого ответа вклеился");
         assert_eq!(после_a.cursor, 20);
@@ -821,10 +810,24 @@ mod tests {
         };
 
         let a_сначала = apply_server(&state, 19, &[record(19)], &[], &Sent::nothing(&state), NOW);
-        let a_сначала = apply_server(&a_сначала, 20, &[record(20)], &[], &Sent::nothing(&a_сначала), NOW);
+        let a_сначала = apply_server(
+            &a_сначала,
+            20,
+            &[record(20)],
+            &[],
+            &Sent::nothing(&a_сначала),
+            NOW,
+        );
 
         let b_сначала = apply_server(&state, 20, &[record(20)], &[], &Sent::nothing(&state), NOW);
-        let b_сначала = apply_server(&b_сначала, 19, &[record(19)], &[], &Sent::nothing(&b_сначала), NOW);
+        let b_сначала = apply_server(
+            &b_сначала,
+            19,
+            &[record(19)],
+            &[],
+            &Sent::nothing(&b_сначала),
+            NOW,
+        );
 
         assert_eq!(a_сначала.books[0].rev, 20);
         assert_eq!(b_сначала.books[0].rev, 20);
@@ -944,11 +947,17 @@ mod tests {
         let a = crate::library::book::canonical_book_id("abc123").unwrap();
         let b = crate::library::book::canonical_book_id("abc123").unwrap();
         assert_eq!(a, b, "один HASH обязан давать один id на всех устройствах");
-        assert!(looks_like_uuid(&a), "canonical обязан пройти серверный uuidPattern: {a}");
+        assert!(
+            looks_like_uuid(&a),
+            "canonical обязан пройти серверный uuidPattern: {a}"
+        );
         assert_ne!(a, "abc123");
         let c = crate::library::book::canonical_book_id("другой").unwrap();
         assert_ne!(a, c);
-        assert!(crate::library::book::canonical_book_id("").is_none(), "пустой отпечаток не каноникализируется");
+        assert!(
+            crate::library::book::canonical_book_id("").is_none(),
+            "пустой отпечаток не каноникализируется"
+        );
     }
 
     #[test]
@@ -958,12 +967,24 @@ mod tests {
         let canonical = crate::library::book::canonical_book_id(hash).unwrap();
         let mut a = книга("11111111-1111-1111-1111-111111111111", "A", NOW);
         a.source_key = hash.to_string();
-        a.progress = crate::library::book::Progress { chapter: 1, within_chapter: 0.2, opened_at: NOW };
+        a.progress = crate::library::book::Progress {
+            chapter: 1,
+            within_chapter: 0.2,
+            block_index: 0,
+            block_offset: 0.0,
+            opened_at: NOW,
+        };
         a.rev = 1;
         a.dirty = true;
         let mut b = книга("22222222-2222-2222-2222-222222222222", "B", NOW + 10);
         b.source_key = hash.to_string();
-        b.progress = crate::library::book::Progress { chapter: 3, within_chapter: 0.5, opened_at: NOW + 100 };
+        b.progress = crate::library::book::Progress {
+            chapter: 3,
+            within_chapter: 0.5,
+            block_index: 0,
+            block_offset: 0.0,
+            opened_at: NOW + 100,
+        };
         b.rev = 2;
         b.dirty = true;
 
@@ -988,17 +1009,30 @@ mod tests {
 
         let migrated = migrate_to_canonical(&state);
         // Должна остаться одна книга с canonical id
-        assert_eq!(migrated.books.len(), 1, "две офлайн книги обязаны схлопнуться в одну: {:?}", migrated.books);
+        assert_eq!(
+            migrated.books.len(),
+            1,
+            "две офлайн книги обязаны схлопнуться в одну: {:?}",
+            migrated.books
+        );
         assert_eq!(migrated.books[0].id, canonical);
         assert_eq!(migrated.books[0].source_key, hash);
         assert!(migrated.books[0].dirty);
         assert_eq!(migrated.books[0].rev, 0);
         // Все карточки перепривязаны к canonical
         for card in &migrated.cards {
-            assert_eq!(card.book_id, canonical, "карточка не перепривязалась: {:?}", card);
+            assert_eq!(
+                card.book_id, canonical,
+                "карточка не перепривязалась: {:?}",
+                card
+            );
         }
         // Дубликат hello схлопнулся: hello один раз, world один раз => 2 карточки, а не 3
-        let hello_count = migrated.cards.iter().filter(|c| c.lemma == "hello" && !c.deleted).count();
+        let hello_count = migrated
+            .cards
+            .iter()
+            .filter(|c| c.lemma == "hello" && !c.deleted)
+            .count();
         assert_eq!(hello_count, 1, "дубликат карточки по lemma не схлопнулся");
         assert_eq!(migrated.cards.len(), 2);
     }
@@ -1013,7 +1047,10 @@ mod tests {
         incoming.source_key = hash.to_string();
         let after = crate::library::ops::add_book(&state, incoming);
         assert_eq!(after.books.len(), 1);
-        assert_eq!(after.books[0].id, canonical, "add_book обязан заменить id на canonical");
+        assert_eq!(
+            after.books[0].id, canonical,
+            "add_book обязан заменить id на canonical"
+        );
     }
 
     #[test]
@@ -1021,25 +1058,37 @@ mod tests {
         // Локально старая случайная книга A с HASH, сервер присылает canonical C с тем же HASH
         let hash = "same-hash-sync";
         let canonical = crate::library::book::canonical_book_id(hash).unwrap();
-        let state = LibraryState { books: vec![{
-            let mut b = книга("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "Локальная", NOW);
-            b.source_key = hash.to_string();
-            b.path = "books/a.epub".to_string();
-            b.rev = 1;
-            b.dirty = false;
-            b
-        }], revision: 5, ..Default::default() };
+        let state = LibraryState {
+            books: vec![{
+                let mut b = книга("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "Локальная", NOW);
+                b.source_key = hash.to_string();
+                b.path = "books/a.epub".to_string();
+                b.rev = 1;
+                b.dirty = false;
+                b
+            }],
+            revision: 5,
+            ..Default::default()
+        };
 
         // Сервер присылает каноническую книгу с тем же hash
         let mut incoming = книга(&canonical, "Серверная", NOW);
         incoming.source_key = hash.to_string();
         incoming.rev = 5;
         let after = apply_server(&state, 5, &[incoming], &[], &Sent::nothing(&state), NOW);
-        assert_eq!(after.books.len(), 1, "после sync должна остаться одна логическая книга, а не две: {:?}", after.books);
+        assert_eq!(
+            after.books.len(),
+            1,
+            "после sync должна остаться одна логическая книга, а не две: {:?}",
+            after.books
+        );
         assert_eq!(after.books[0].id, canonical);
         assert_eq!(after.books[0].source_key, hash);
         // Путь не затирается
-        assert_eq!(after.books[0].path, "books/a.epub", "path-local состояние потерялось");
+        assert_eq!(
+            after.books[0].path, "books/a.epub",
+            "path-local состояние потерялось"
+        );
     }
 
     #[test]
@@ -1109,12 +1158,18 @@ mod tests {
         let after = migrate_to_canonical(&state);
         assert_eq!(after.books.len(), 1);
         assert_eq!(after.books[0].id, canonical);
-        assert_eq!(after.books[0].rev, 9, "ревизия каноничной книги обнулена зря");
+        assert_eq!(
+            after.books[0].rev, 9,
+            "ревизия каноничной книги обнулена зря"
+        );
         assert_eq!(
             after.cards[0].rev, 4,
             "карточка не меняла владельца — её ревизию трогать нельзя"
         );
-        assert!(!after.cards[0].dirty, "карточка не менялась, а помечена к отправке");
+        assert!(
+            !after.cards[0].dirty,
+            "карточка не менялась, а помечена к отправке"
+        );
     }
 
     #[test]
@@ -1125,7 +1180,10 @@ mod tests {
         book.source_key = hash.to_string();
         book.rev = 5;
         book.dirty = false;
-        let state = LibraryState { books: vec![book], ..Default::default() };
+        let state = LibraryState {
+            books: vec![book],
+            ..Default::default()
+        };
         let once = migrate_to_canonical(&state);
         let twice = migrate_to_canonical(&once);
         assert_eq!(once, twice, "повторная миграция не должна менять состояние");
@@ -1134,7 +1192,11 @@ mod tests {
     #[test]
     fn migrate_to_canonical_сохраняет_книги_без_source_key() {
         let state = LibraryState {
-            books: vec![книга("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "Без хеша", NOW)],
+            books: vec![книга(
+                "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "Без хеша",
+                NOW,
+            )],
             ..Default::default()
         };
         let after = migrate_to_canonical(&state);
