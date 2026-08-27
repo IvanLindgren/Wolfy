@@ -1,0 +1,354 @@
+{
+  "schemaVersion": 1,
+  "packId": "notionists-wolfy-v1",
+  "packVersion": 1,
+  "license": "CC0-1.0",
+  "canvas": {
+    "width": 1024,
+    "height": 1024
+  },
+  "layerOrder": [
+    "accessoryBack",
+    "base",
+    "body",
+    "hair",
+    "brows",
+    "eyes",
+    "nose",
+    "mouth",
+    "beard",
+    "gesture",
+    "accessoryFront"
+  ],
+  "colorTokens": [
+    "--wolfy-skin",
+    "--wolfy-hair",
+    "--wolfy-outfit",
+    "--wolfy-accent",
+    "--wolfy-ink"
+  ],
+  "anchors": {
+    "head": {
+      "x": 512,
+      "y": 119
+    },
+    "neck": {
+      "x": 512,
+      "y": 251
+    },
+    "shoulderLeft": {
+      "x": 357,
+      "y": 315
+    },
+    "shoulderRight": {
+      "x": 667,
+      "y": 315
+    }
+  },
+  "assets": [
+    {
+      "id": "base.base",
+      "slot": "base",
+      "file": "layers/base/base.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "body.none",
+      "slot": "body",
+      "file": "layers/body/none.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "hair.none",
+      "slot": "hair",
+      "file": "layers/hair/none.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "brows.none",
+      "slot": "brows",
+      "file": "layers/brows/none.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "eyes.none",
+      "slot": "eyes",
+      "file": "layers/eyes/none.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "nose.none",
+      "slot": "nose",
+      "file": "layers/nose/none.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "mouth.none",
+      "slot": "mouth",
+      "file": "layers/mouth/none.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "beard.none",
+      "slot": "beard",
+      "file": "layers/beard/none.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "accessoryFront.none",
+      "slot": "accessoryFront",
+      "file": "layers/accessoryFront/none.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "gesture.none",
+      "slot": "gesture",
+      "file": "layers/gesture/none.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "body.17",
+      "slot": "body",
+      "file": "layers/body/17.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "body.18",
+      "slot": "body",
+      "file": "layers/body/18.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "body.19",
+      "slot": "body",
+      "file": "layers/body/19.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "body.20",
+      "slot": "body",
+      "file": "layers/body/20.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "body.22",
+      "slot": "body",
+      "file": "layers/body/22.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "body.23",
+      "slot": "body",
+      "file": "layers/body/23.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "hair.01",
+      "slot": "hair",
+      "file": "layers/hair/01.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "hair.11",
+      "slot": "hair",
+      "file": "layers/hair/11.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "hair.23",
+      "slot": "hair",
+      "file": "layers/hair/23.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "hair.02",
+      "slot": "hair",
+      "file": "layers/hair/02.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "hair.04",
+      "slot": "hair",
+      "file": "layers/hair/04.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "hair.28",
+      "slot": "hair",
+      "file": "layers/hair/28.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "hair.36",
+      "slot": "hair",
+      "file": "layers/hair/36.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "brows.02",
+      "slot": "brows",
+      "file": "layers/brows/02.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "brows.04",
+      "slot": "brows",
+      "file": "layers/brows/04.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "brows.06",
+      "slot": "brows",
+      "file": "layers/brows/06.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "brows.01",
+      "slot": "brows",
+      "file": "layers/brows/01.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "eyes.13",
+      "slot": "eyes",
+      "file": "layers/eyes/13.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "eyes.18",
+      "slot": "eyes",
+      "file": "layers/eyes/18.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "eyes.16",
+      "slot": "eyes",
+      "file": "layers/eyes/16.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "eyes.17",
+      "slot": "eyes",
+      "file": "layers/eyes/17.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "eyes.04",
+      "slot": "eyes",
+      "file": "layers/eyes/04.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "eyes.14",
+      "slot": "eyes",
+      "file": "layers/eyes/14.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "mouth.01",
+      "slot": "mouth",
+      "file": "layers/mouth/01.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "mouth.02",
+      "slot": "mouth",
+      "file": "layers/mouth/02.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "beard.02",
+      "slot": "beard",
+      "file": "layers/beard/02.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "beard.03",
+      "slot": "beard",
+      "file": "layers/beard/03.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "accessoryFront.01",
+      "slot": "accessoryFront",
+      "file": "layers/accessoryFront/01.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    }
+  ]
+}

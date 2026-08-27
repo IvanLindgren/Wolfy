@@ -399,6 +399,109 @@ export async function recapRecentPages(title: string, excerpt: string): Promise<
   })
 }
 
+/** Persona компаньона в запросе: сервер сверит её с сохранённым профилем. */
+export interface CompanionPersonaIn {
+  name?: string
+  locale?: string
+  personality?: Record<string, number>
+  mbti?: string | null
+  description?: string
+}
+
+export interface CompanionAiFailure extends Error {
+  code?: string
+}
+
+/** Мнение компаньона о видимой странице. */
+export async function companionOpinion(input: {
+  bookId: string
+  title: string
+  chapter: number
+  offset: number
+  pageText: string
+  companion: CompanionPersonaIn
+  signal?: AbortSignal
+}): Promise<CompanionOpinion> {
+  return request<CompanionOpinion>('/v1/ai/companion/opinion', {
+    method: 'POST',
+    body: {
+      bookId: input.bookId,
+      title: input.title,
+      position: { chapter: input.chapter, offset: input.offset },
+      pageText: input.pageText,
+      companion: input.companion,
+    },
+    signal: input.signal,
+  })
+}
+
+/** Вопрос о книге по уже прочитанному фрагменту. */
+export async function companionQuestion(input: {
+  bookId: string
+  title: string
+  chapter: number
+  offset: number
+  question: string
+  context: string
+  companion: CompanionPersonaIn
+  signal?: AbortSignal
+}): Promise<CompanionQuestion> {
+  return request<CompanionQuestion>('/v1/ai/companion/question', {
+    method: 'POST',
+    body: {
+      bookId: input.bookId,
+      title: input.title,
+      position: { chapter: input.chapter, offset: input.offset },
+      question: input.question,
+      context: input.context,
+      companion: input.companion,
+    },
+    signal: input.signal,
+  })
+}
+
+/** Генерация персонального набора реплик: один запрос за вызов. */
+export async function companionPack(profile: {
+  id: string
+  name: string
+  locale: string
+  personality: Record<string, number>
+  mbti: string | null
+  description: string
+}): Promise<CompanionPackResponse> {
+  return request<CompanionPackResponse>('/v1/ai/companion/pack', {
+    method: 'POST',
+    body: { profile: { id: profile.id, name: profile.name, locale: profile.locale, personality: profile.personality, mbti: profile.mbti, description: profile.description }, locale: profile.locale },
+  })
+}
+
+export interface CompanionOpinion {
+  title: string
+  opinion: string
+  details?: { label: string; text: string }[]
+  uncertainty?: string | null
+  remaining: number
+}
+
+export interface CompanionQuestion {
+  answer: string
+  evidence?: { hint: string; text: string }[]
+  uncertainty?: string | null
+  remaining: number
+}
+
+export interface CompanionPackResponse {
+  pack: {
+    schemaVersion: number
+    profileHash: string
+    locale: string
+    phrases: { id: string; scenario: string; text: string; minMinutes: number; cooldownMinutes: number; weight: number; moods: string[]; motion: string }[]
+  }
+  profileHash: string
+  remaining: number
+  cached: boolean
+}
+
 /** Сетевое толкование — запасной путь для тех, кто не скачал словарь. */
 export async function define(word: string, signal?: AbortSignal) {
   return request<{
@@ -457,6 +560,8 @@ export interface SyncPayload {
   cards: SyncCard[]
   /** Настройки чтения целиком: полтора десятка полей, меняющихся вместе. */
   reading?: unknown
+  /** Профиль компаньона отдельной коллекцией; старые клиенты поле пропускают. */
+  companion?: import('../companion/model').SyncCompanion | null
   /** Файлы передаются отдельно кусками, здесь лежит только их доступность. */
   files?: SyncBookFile[]
 }

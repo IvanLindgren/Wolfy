@@ -1,5 +1,7 @@
 package com.wolfy.data
 
+import com.wolfy.data.companion.CompanionProfile
+import com.wolfy.data.companion.CompanionPhrasePack
 import com.wolfy.data.library.Card
 import com.wolfy.data.library.LibraryBook
 import com.wolfy.data.library.Progress
@@ -33,6 +35,45 @@ data class SyncPayload(
      * с другого.
      */
     val reading: JsonElement? = null,
+    /**
+     * Профиль компаньона отдельной коллекцией.
+     *
+     * Не внутри [reading]: у профиля своя ревизия, свой tombstone и phrase
+     * pack, который в JSON настроек не поместится. Старые клиенты поле
+     * пропускают.
+     */
+    val companion: SyncCompanion? = null,
+)
+
+/**
+ * Сетевой конверт компаньона.
+ *
+ * Профиль и набор реплик лежат в сервере раздельно: так метаданные характера
+ * остаются маленькими, а большой набор можно заменить атомарно. [rev] и
+ * [deleted] принадлежат записи синхронизации, а не JSON профиля.
+ */
+@Serializable
+data class SyncCompanion(
+    val profile: CompanionProfile,
+    val phrasePack: CompanionPhrasePack? = null,
+    val profileHash: String = "",
+    val rev: Long = 0,
+    val deleted: Boolean = false,
+)
+
+fun CompanionProfile.toSyncCompanion(): SyncCompanion = SyncCompanion(
+    profile = copy(phrasePack = null, profileHash = "", rev = 0, deleted = false),
+    phrasePack = phrasePack,
+    profileHash = profileHash,
+    rev = rev,
+    deleted = deleted,
+)
+
+fun SyncCompanion.toCompanionProfile(): CompanionProfile = profile.copy(
+    phrasePack = phrasePack,
+    profileHash = profileHash,
+    rev = rev,
+    deleted = deleted,
 )
 
 @Serializable

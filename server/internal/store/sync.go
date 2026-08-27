@@ -70,6 +70,9 @@ type Changes struct {
 	Cards   []Card          `json:"cards"`
 	Files   []BookFile      `json:"files,omitempty"`
 	Reading json.RawMessage `json:"reading,omitempty"`
+	// Компаньон — отдельная коллекция со своей ревизией и tombstone.
+	// Указатель отличает «поля нет» от «профиль удалён».
+	Companion *Companion `json:"companion,omitempty"`
 }
 
 // NextRev выдаёт следующую ревизию пользователя.
@@ -607,7 +610,7 @@ func (s *Store) Sync(ctx context.Context, userID string, changes Changes) (Chang
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	if len(changes.Books) > 0 || len(changes.Cards) > 0 || len(changes.Reading) > 0 {
+	if len(changes.Books) > 0 || len(changes.Cards) > 0 || len(changes.Reading) > 0 || changes.Companion != nil {
 		// Ревизия выдаётся внутри снимка: отправка с телефона — одно событие,
 		// и второе устройство не должно увидеть книги без их карточек.
 		rev, err := s.NextRev(ctx, tx, userID)
@@ -625,6 +628,9 @@ func (s *Store) Sync(ctx context.Context, userID string, changes Changes) (Chang
 			return Changes{}, err
 		}
 		if err := s.SaveReading(ctx, tx, userID, changes.Reading); err != nil {
+			return Changes{}, err
+		}
+		if err := s.SaveCompanion(ctx, tx, userID, rev, changes.Companion); err != nil {
 			return Changes{}, err
 		}
 	}
@@ -645,6 +651,10 @@ func (s *Store) Sync(ctx context.Context, userID string, changes Changes) (Chang
 	if err != nil {
 		return Changes{}, err
 	}
+	companion, err := s.companionSinceTx(ctx, tx, userID, changes.Cursor, snapshotRev)
+	if err != nil {
+		return Changes{}, err
+	}
 
 	if s.TestHookBeforeCursor != nil {
 		s.TestHookBeforeCursor()
@@ -654,10 +664,11 @@ func (s *Store) Sync(ctx context.Context, userID string, changes Changes) (Chang
 		return Changes{}, fmt.Errorf("фиксация синхронизации: %w", err)
 	}
 	return Changes{
-		Cursor:  snapshotRev,
-		Books:   books,
-		Cards:   cards,
-		Reading: reading,
+		Cursor:    snapshotRev,
+		Books:     books,
+		Cards:     cards,
+		Reading:   reading,
+		Companion: companion,
 	}, nil
 }
 

@@ -20,13 +20,13 @@ import (
 	"github.com/wolfy/server/internal/api"
 	"github.com/wolfy/server/internal/auth"
 	"github.com/wolfy/server/internal/bookfiles"
+	"github.com/wolfy/server/internal/companionai"
 	"github.com/wolfy/server/internal/config"
 	"github.com/wolfy/server/internal/dictionary"
 	"github.com/wolfy/server/internal/discovery"
 	"github.com/wolfy/server/internal/library"
 	"github.com/wolfy/server/internal/ocr"
 	"github.com/wolfy/server/internal/readingai"
-	"github.com/wolfy/server/internal/researchai"
 	"github.com/wolfy/server/internal/social"
 	"github.com/wolfy/server/internal/store"
 	"github.com/wolfy/server/internal/translate"
@@ -101,16 +101,6 @@ func run() error {
 		discovery.NewGutenbergSource(cfg.GutendexURL, cfg.RequestTimeout),
 		cfg.RequestTimeout,
 	)
-	researchService := researchai.New(
-		db, cfg.ResearchFilesPath, cfg.ResearchKey, cfg.ResearchURL,
-		cfg.ResearchModel, 90*time.Second, cfg.ResearchEnabled,
-	)
-	if researchService.Enabled() {
-		log.Info("режим исследования включён")
-		go researchService.Run(ctx)
-	} else {
-		log.Info("режим исследования выключен")
-	}
 	dictionaryService, err := dictionary.Open(cfg.DictionaryPath)
 	if err != nil {
 		log.Warn("словарь не развёрнут — офлайн-загрузка и fallback отключены", "error", err)
@@ -121,24 +111,27 @@ func run() error {
 
 	server := &http.Server{
 		Addr: cfg.Addr,
-		Handler: api.NewServer(
-			db,
-			auth.NewVerifier(db.Pool),
-			translator,
-			library.New(db),
-			ocr.New(cfg.OCRKey, cfg.OCRURL, cfg.OCRModel, cfg.RequestTimeout),
-			accountService,
-			googleAuth,
-			discoveryService,
-			dictionaryService,
-			updates.New(cfg.ReleasesPath),
-			bookfiles.New(db, cfg.BookFilesPath),
-			readingai.New(db, cfg.AIKey, cfg.AIURL, cfg.AIModel, cfg.RequestTimeout),
-			researchService,
-			log,
-		).WithWebOrigin(cfg.WebOrigin).
-			WithGoogleWebClientID(cfg.GoogleWebClientID).
-			Handler(),
+		Handler: func() http.Handler {
+			readingAI := readingai.New(db, cfg.AIKey, cfg.AIURL, cfg.AIModel, cfg.RequestTimeout)
+			return api.NewServer(
+				db,
+				auth.NewVerifier(db.Pool),
+				translator,
+				library.New(db),
+				ocr.New(cfg.OCRKey, cfg.OCRURL, cfg.OCRModel, cfg.RequestTimeout),
+				accountService,
+				googleAuth,
+				discoveryService,
+				dictionaryService,
+				updates.New(cfg.ReleasesPath),
+				bookfiles.New(db, cfg.BookFilesPath),
+				readingAI,
+				companionai.New(db, readingAI),
+				log,
+			).WithWebOrigin(cfg.WebOrigin).
+				WithGoogleWebClientID(cfg.GoogleWebClientID).
+				Handler()
+		}(),
 		// Таймауты обязательны: без них одно зависшее соединение держит
 		// горутину и файловый дескриптор до перезапуска сервиса.
 		ReadHeaderTimeout: 10 * time.Second,

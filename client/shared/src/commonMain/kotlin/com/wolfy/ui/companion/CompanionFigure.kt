@@ -1,0 +1,165 @@
+package com.wolfy.ui.companion
+
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Fill
+import androidx.compose.ui.graphics.drawscope.scale
+import com.wolfy.data.companion.CompanionAppearance
+import com.wolfy.data.companion.CompanionAsset
+import com.wolfy.data.companion.CompanionAssetCache
+import com.wolfy.data.companion.CompanionManifest
+import com.wolfy.theme.WolfyTheme
+
+/**
+ * Отрисовка компаньона слоями пака.
+ *
+ * Рендерер принимает внешность как данные и ничего не знает о хранении: слои
+ * приходят из кеша [CompanionAssetCache], палитра разворачивает токены цветов.
+ * Парсер графики свой и маленький, потому что пак валидирован и содержит ровно
+ * три вида фигур: пути, эллипсы и прямоугольники.
+ *
+ * Фигура не перекрывает текст: размер задаёт родитель, здесь только слои и
+ * палитра. Догрузка слоёв идёт мимо кадра: открытие читалки ассетов не ждёт.
+ */
+@Composable
+fun CompanionFigure(
+    appearance: CompanionAppearance,
+    modifier: Modifier = Modifier,
+) {
+    val cache = remember { CompanionAssetCache.global }
+    val manifest by produceState<CompanionManifest?>(initialValue = null) {
+        value = cache.ensureLoaded()
+    }
+    val assets by produceState<List<CompanionAsset>>(initialValue = emptyList(), appearance, manifest) {
+        val current = manifest ?: return@produceState
+        val resolved = mutableListOf<CompanionAsset>()
+        for (slot in current.layerOrder) {
+            val assetId = appearance.asset(slot)
+            if (assetId.endsWith(".none") && slot != "base") continue
+            val fallbackId = if (slot == "base") "base.base" else "$slot.none"
+            (cache.get(assetId) ?: cache.get(fallbackId))?.let { resolved.add(it) }
+        }
+        value = resolved
+    }
+    val palette = rememberPalette(appearance)
+    val canvas = manifest
+    Box(modifier) {
+        if (canvas != null && assets.isNotEmpty()) {
+            Canvas(Modifier.fillMaxSize()) {
+                val factor = size.minDimension / canvas.canvas.width.toFloat()
+                scale(factor, factor, pivot = Offset.Zero) {
+                    for (asset in assets) {
+                        drawAsset(asset, palette)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun DrawScope.drawAsset(asset: CompanionAsset, palette: CompanionPalette) {
+    for (shape in asset.shapes) {
+        val color = palette.resolve(shape.fill) ?: continue
+        when (shape) {
+            is com.wolfy.data.companion.CompanionShape.Path -> drawPath(shape.path, color, style = Fill)
+            is com.wolfy.data.companion.CompanionShape.Oval -> drawOval(
+                color,
+                topLeft = Offset(shape.cx - shape.rx, shape.cy - shape.ry),
+                size = Size(shape.rx * 2f, shape.ry * 2f),
+            )
+            is com.wolfy.data.companion.CompanionShape.Rect -> drawRect(
+                color,
+                topLeft = Offset(shape.x, shape.y),
+                size = Size(shape.w, shape.h),
+            )
+        }
+    }
+}
+
+@Composable
+private fun rememberPalette(appearance: CompanionAppearance): CompanionPalette {
+    val colors = WolfyTheme.colors
+    return remember(appearance.skin, appearance.hairColor, appearance.outfitColor, appearance.accentColor, colors) {
+        CompanionPalette(
+            skin = CompanionPalettes.of(appearance.skin) ?: CompanionPalettes.defaultSkin,
+            hair = CompanionPalettes.of(appearance.hairColor) ?: CompanionPalettes.defaultHair,
+            outfit = CompanionPalettes.of(appearance.outfitColor) ?: CompanionPalettes.defaultOutfit,
+            accent = CompanionPalettes.of(appearance.accentColor) ?: CompanionPalettes.defaultAccent,
+            ink = colors.ink,
+        )
+    }
+}
+
+/** Палитра рендера: имена из профиля в цвета. */
+data class CompanionPalette(
+    val skin: Color,
+    val hair: Color,
+    val outfit: Color,
+    val accent: Color,
+    val ink: Color,
+) {
+    /** Токен из SVG в цвет; незнакомый токен пропускается. */
+    fun resolve(token: String): Color? = when (token) {
+        CompanionAsset.TOKEN_SKIN -> skin
+        CompanionAsset.TOKEN_HAIR -> hair
+        CompanionAsset.TOKEN_OUTFIT -> outfit
+        CompanionAsset.TOKEN_ACCENT -> accent
+        CompanionAsset.TOKEN_INK -> ink
+        "#FFFFFF" -> Color.White
+        else -> null
+    }
+}
+
+/** Именованные цвета палитры редактора: тёплые, газетные, без кислоты. */
+object CompanionPalettes {
+    val defaultSkin = Color(0xFFF2C6A0)
+    val defaultHair = Color(0xFF2E2A28)
+    val defaultOutfit = Color(0xFF8C3B2E)
+    val defaultAccent = Color(0xFFC9A227)
+
+    val skinOptions: List<Pair<String, Color>> = listOf(
+        "paper" to Color(0xFFF7E1CE),
+        "light" to Color(0xFFF2C6A0),
+        "tan" to Color(0xFFDBA97E),
+        "brown" to Color(0xFF8D5A3B),
+        "deep" to Color(0xFF5C3A25),
+    )
+    val hairOptions: List<Pair<String, Color>> = listOf(
+        "ink" to Color(0xFF1A1816),
+        "chestnut" to Color(0xFF5A3825),
+        "auburn" to Color(0xFF7A4A2B),
+        "sand" to Color(0xFFB98F5E),
+        "gray" to Color(0xFF8B8B8B),
+    )
+    val outfitOptions: List<Pair<String, Color>> = listOf(
+        "brick" to Color(0xFF8C3B2E),
+        "navy" to Color(0xFF274357),
+        "forest" to Color(0xFF4C6B44),
+        "slate" to Color(0xFF4A4E57),
+        "plum" to Color(0xFF5C3A56),
+    )
+    val accentOptions: List<Pair<String, Color>> = listOf(
+        "gold" to Color(0xFFC9A227),
+        "copper" to Color(0xFFB06A3B),
+        "steel" to Color(0xFF9AA5AE),
+        "cream" to Color(0xFFEADFC8),
+    )
+
+    /** Цвет по имени из профиля. Незнакомое имя даёт запасной на рендере. */
+    fun of(name: String): Color? {
+        for (group in listOf(skinOptions, hairOptions, outfitOptions, accentOptions)) {
+            for ((key, value) in group) if (key == name) return value
+        }
+        return null
+    }
+}

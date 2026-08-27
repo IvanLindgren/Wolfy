@@ -52,6 +52,7 @@ func createUser(t *testing.T, s *store.Store) string {
 	t.Cleanup(func() {
 		ctx := context.Background()
 		_, _ = s.Pool.Exec(ctx, `DELETE FROM wolfy.cards WHERE user_id = $1`, id)
+		_, _ = s.Pool.Exec(ctx, `DELETE FROM wolfy.companions WHERE user_id = $1`, id)
 		_, _ = s.Pool.Exec(ctx, `DELETE FROM wolfy.books WHERE user_id = $1`, id)
 		_, _ = s.Pool.Exec(ctx, `DELETE FROM wolfy.practice_components WHERE user_id = $1`, id)
 		_, _ = s.Pool.Exec(ctx, `DELETE FROM wolfy.user_state WHERE user_id = $1`, id)
@@ -265,5 +266,109 @@ func TestСлишкомБольшаяОтправкаОтклоняется(t *t
 	_, err := svc.Sync(context.Background(), user, store.Changes{Books: books})
 	if err == nil {
 		t.Fatal("отправка сверх предела прошла")
+	}
+}
+
+func companionProfile(id string) json.RawMessage {
+	return json.RawMessage(`{"id":"` + id + `","name":"Лис","locale":"ru","personality":{"warmth":72},"rev":0,"deleted":false}`)
+}
+
+func TestКомпаньонЕдетМеждуУстройствами(t *testing.T) {
+	s := open(t)
+	svc := library.New(s)
+	user := createUser(t, s)
+	ctx := context.Background()
+
+	profile := companionProfile(uuid.NewString())
+	if _, err := svc.Sync(ctx, user, store.Changes{
+		Companion: &store.Companion{Profile: profile, ProfileHash: "abc123"},
+	}); err != nil {
+		t.Fatalf("отправка компаньона: %v", err)
+	}
+
+	got, err := svc.Sync(ctx, user, store.Changes{Cursor: 0})
+	if err != nil {
+		t.Fatalf("получение: %v", err)
+	}
+	if got.Companion == nil || got.Companion.Deleted {
+		t.Fatalf("компаньон не доехал: %+v", got.Companion)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(got.Companion.Profile, &parsed); err != nil {
+		t.Fatalf("профиль не разобрался: %v", err)
+	}
+	if parsed["name"] != "Лис" {
+		t.Fatalf("имя потерялось: %v", parsed)
+	}
+}
+
+func TestTombstoneКомпаньонаНеОживает(t *testing.T) {
+	s := open(t)
+	svc := library.New(s)
+	user := createUser(t, s)
+	ctx := context.Background()
+
+	id := uuid.NewString()
+	live := store.Companion{Profile: companionProfile(id), ProfileHash: "h1"}
+	if _, err := svc.Sync(ctx, user, store.Changes{Companion: &live}); err != nil {
+		t.Fatalf("создание: %v", err)
+	}
+	first, err := svc.Sync(ctx, user, store.Changes{Cursor: 0})
+	if err != nil {
+		t.Fatalf("чтение: %v", err)
+	}
+	seenRev := first.Companion.Rev
+
+	// Удаление со второго устройства.
+	tombstone := store.Companion{Profile: companionProfile(id), ProfileHash: "h1", Rev: seenRev, Deleted: true}
+	if _, err := svc.Sync(ctx, user, store.Changes{Companion: &tombstone}); err != nil {
+		t.Fatalf("удаление: %v", err)
+	}
+
+	// Устаревшая живая копия со старой ревизией не должна воскресить профиль.
+	stale := store.Companion{Profile: companionProfile(id), ProfileHash: "h1", Rev: 1}
+	if _, err := svc.Sync(ctx, user, store.Changes{Companion: &stale}); err != nil {
+		t.Fatalf("устаревшая отправка: %v", err)
+	}
+
+	got, err := svc.Sync(ctx, user, store.Changes{Cursor: 0})
+	if err != nil {
+		t.Fatalf("финальное чтение: %v", err)
+	}
+	if got.Companion == nil || !got.Companion.Deleted {
+		t.Fatalf("tombstone потерялся: %+v", got.Companion)
+	}
+}
+
+func TestСтарыйКлиентБезКомпаньонаСинхронизируется(t *testing.T) {
+	// Payload без поля companion обязан пройти: поле новое, а читатель со
+	// старой версией не должен лишиться синхронизации.
+	s := open(t)
+	svc := library.New(s)
+	user := createUser(t, s)
+
+	got, err := svc.Sync(context.Background(), user, store.Changes{Reading: json.RawMessage(`{"theme":"Paper"}`)})
+	if err != nil {
+		t.Fatalf("обмен без компаньона: %v", err)
+	}
+	if got.Companion != nil {
+		t.Fatalf("компаньон появился из ниоткуда: %+v", got.Companion)
+	}
+}
+
+func TestСлишкомБольшойПрофильОтклоняется(t *testing.T) {
+	s := open(t)
+	svc := library.New(s)
+	user := createUser(t, s)
+
+	huge := make([]byte, library.MaxCompanionProfile+1)
+	for i := range huge {
+		huge[i] = 'a'
+	}
+	_, err := svc.Sync(context.Background(), user, store.Changes{
+		Companion: &store.Companion{Profile: append([]byte(`{"id":"`+uuid.NewString()+`","pad":"`), append(huge, '"')...), ProfileHash: "h"},
+	})
+	if err == nil {
+		t.Fatal("гигантский профиль прошёл")
 	}
 }

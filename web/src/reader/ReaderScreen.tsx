@@ -22,6 +22,10 @@ import { useShortcuts } from '../app/shortcuts'
 import { THEMES, applyTheme, motionFor } from '../app/theme'
 import { WordCard, type CardTarget } from '../card/WordCard'
 import * as api from '../api/client'
+import { useCompanion } from '../companion/store'
+import { ReaderCompanion } from '../companion/ReaderCompanion'
+import { CompanionFigure } from '../companion/figure'
+import type { CompanionProfile } from '../companion/model'
 import * as bridge from '../core/bridge'
 import { session, useSession } from '../core/session'
 import type { LibraryBook, ReadingSegment, ThemeName } from '../core/types'
@@ -100,6 +104,9 @@ export function ReaderScreen() {
   const [recap, setRecap] = useState<
     { state: 'idle' | 'loading' | 'ready' | 'failed'; result?: api.AiRecap; message?: string }
   >({ state: 'idle' })
+  // Компаньон: локальный профиль браузера. Обычное чтение сети не трогает.
+  const companionProfile = useCompanion((state) => state.profile)
+  const saveCompanionProfile = useCompanion((state) => state.save)
 
   // --- Инструменты отметок ---------------------------------------------------
   //
@@ -1052,6 +1059,14 @@ export function ReaderScreen() {
       ? ((chapterIndex + page.page / Math.max(1, page.pages)) / chapters) * 100
       : 0
 
+  // Видимый фрагмент: текст главы, ограниченный тем же пределом, что и на
+  // других платформах. Локальный анализ настроения работает по нему же.
+  const activeText = chapter.blocks
+    .map((tokenized) => tokenized.block.text ?? '')
+    .filter(Boolean)
+    .join(' ')
+    .slice(0, 4000)
+
   const content = (
     <ChapterView
       blocks={chapter.blocks}
@@ -1099,6 +1114,31 @@ export function ReaderScreen() {
         </div>
 
         <div className={styles.bar__spacer} />
+
+        {companionProfile && (
+          <button
+            type="button"
+            className={styles.recapButton}
+            onClick={() =>
+              saveCompanionProfile({
+                ...companionProfile,
+                readerMode:
+                  companionProfile.readerMode === 'off'
+                    ? 'quiet'
+                    : companionProfile.readerMode === 'quiet'
+                      ? 'active'
+                      : 'off',
+              })
+            }
+            title="Компаньон: выключен, тихо или рядом"
+          >
+            {companionProfile.readerMode === 'active'
+              ? 'Компаньон: рядом'
+              : companionProfile.readerMode === 'quiet'
+                ? 'Компаньон: тихо'
+                : 'Читать с компаньоном'}
+          </button>
+        )}
 
         <button
           type="button"
@@ -1188,6 +1228,30 @@ export function ReaderScreen() {
         onStopSegment={() => void session.setSegmentWords(0)}
       />
 
+      {companionProfile && (
+        <ReaderCompanion
+          profile={companionProfile}
+          onProfileChange={(updated) => saveCompanionProfile(updated)}
+          persona={{
+            name: companionProfile.name,
+            locale: companionProfile.locale,
+            personality: companionProfile.personality,
+            mbti: companionProfile.mbti,
+            description: companionProfile.description,
+          }}
+          bookId={bookId}
+          bookTitle={book.title}
+          chapter={chapterIndex}
+          offset={() => Math.round((page.page / Math.max(1, page.pages)) * 10000)}
+          pageText={() => activeText}
+          suppressed={card !== null || contents || tuner || recap.state !== 'idle' || openNote !== null}
+          scrolling={false}
+          activeText={activeText}
+          onRecap={() => void recapStory()}
+          onEdit={() => void navigate({ to: '/companion' })}
+        />
+      )}
+
       {recent.length > 0 && (
         <div className={styles.recent}>
           <span>Вы отмечали здесь:</span>
@@ -1210,6 +1274,7 @@ export function ReaderScreen() {
       {recap.state !== 'idle' && (
         <StoryRecap
           state={recap}
+          companion={companionProfile}
           onClose={() => setRecap({ state: 'idle' })}
           onRetry={() => void recapStory()}
         />
@@ -1296,19 +1361,25 @@ export function ReaderScreen() {
 
 function StoryRecap({
   state,
+  companion,
   onClose,
   onRetry,
 }: {
   state: { state: 'idle' | 'loading' | 'ready' | 'failed'; result?: api.AiRecap; message?: string }
+  companion: CompanionProfile | null
   onClose: () => void
   onRetry: () => void
 }) {
   return (
     <aside className={styles.recap} aria-live="polite">
       <div className={styles.recap__head}>
-        <div>
+        <div style={{ display: 'flex', gap: '.75rem', alignItems: 'center' }}>
+          {companion && <CompanionFigure appearance={companion.appearance} size={52} />}
+          <div>
           <strong>О чём были последние страницы · Beta</strong>
+          {companion && <p>{companion.name} вспоминает прочитанное</p>}
           <p>ИИ может ошибаться. До 10 запросов в день.</p>
+          </div>
         </div>
         <button type="button" className={styles.iconButton} onClick={onClose} aria-label="Закрыть пересказ">
           <CloseIcon />

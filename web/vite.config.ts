@@ -79,7 +79,7 @@ export default defineConfig({
       workbox: {
         skipWaiting: true,
         clientsClaim: true,
-        globPatterns: ['**/*.{js,css,html,woff2,svg,wasm}'],
+        globPatterns: ['**/*.{js,css,html,woff2,svg,wasm,json}'],
         // §29: тяжёлые необязательные чанки не попадают в precache — они скачаются по требованию
         globIgnores: ['**/pdf*.js', '**/pdf.worker*.js', '**/dnd*.js', '**/Discovery*.js', '**/Training*.js', '**/Grammar*.js'],
         // Лексикон и словарь заведомо больше умолчания в 2 МБ.

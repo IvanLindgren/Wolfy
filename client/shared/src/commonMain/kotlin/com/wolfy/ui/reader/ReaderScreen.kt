@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -75,6 +76,7 @@ import com.wolfy.widgets.ReaderParagraph
 import com.wolfy.widgets.ReaderQuote
 import com.wolfy.widgets.Rule
 import com.wolfy.widgets.SectionLabel
+import com.wolfy.ui.companion.CompanionFigure
 
 /**
  * Экран чтения.
@@ -113,13 +115,19 @@ fun ReaderScreen(
     onExplainPhrase: () -> Unit,
     onRecap: () -> Unit,
     onDismissRecap: () -> Unit,
-    onResearch: () -> Unit,
-    onResearchDisposition: (String, String) -> Unit,
     /**
      * Выделение завершено: блок, диапазон в границах токенов, текст абзаца и
      * его разбор. По нему открывается карточка сразу на вкладке «Фраза».
      */
     onPhraseSelected: (Int, IntRange, String, com.wolfy.ffi.ParsedText) -> Unit = { _, _, _, _ -> },
+    /** Компаньон: профиль, синхронизация правок и действия. null — раздела нет. */
+    companionProfile: com.wolfy.data.companion.CompanionProfile? = null,
+    companionOnProfileChange: (com.wolfy.data.companion.CompanionProfile) -> Unit = {},
+    companionPersona: com.wolfy.data.CompanionPersonaIn = com.wolfy.data.CompanionPersonaIn(),
+    companionApi: com.wolfy.data.WolfyApi? = null,
+    companionBookId: String = "",
+    companionOnRecap: () -> Unit = {},
+    companionOnEdit: () -> Unit = {},
     onImageVisible: (String) -> Unit,
     theme: ReadingTheme,
     fontScale: Float,
@@ -138,6 +146,7 @@ fun ReaderScreen(
     pacerWpm: Int = 0,
     onPacerChange: (Int) -> Unit = {},
     segmentWords: Int = 0,
+    reduceMotion: Boolean = false,
     onSegmentWordsChange: (Int) -> Unit = {},
     onNextSegment: (Int) -> Unit = {},
     onStopSegments: () -> Unit = {},
@@ -150,7 +159,6 @@ fun ReaderScreen(
     val colors = WolfyTheme.colors
     var contentsOpen by remember { mutableStateOf(false) }
     var readingSettingsOpen by remember { mutableStateOf(false) }
-    var researchOpen by remember { mutableStateOf(false) }
 
     // Живое выделение фразы: блок и диапазон, подсвечиваемый по ходу жеста.
     val phraseSelection = remember { mutableStateOf<PhraseSelection?>(null) }
@@ -167,11 +175,10 @@ fun ReaderScreen(
     }
 
     BackHandler(
-        enabled = readingSettingsOpen || researchOpen || contentsOpen || state.card != null,
+        enabled = readingSettingsOpen || contentsOpen || state.card != null,
     ) {
         when {
             readingSettingsOpen -> readingSettingsOpen = false
-            researchOpen -> researchOpen = false
             contentsOpen -> contentsOpen = false
             state.card != null -> onDismissCard()
         }
@@ -318,15 +325,15 @@ fun ReaderScreen(
                     onOpenContents = { contentsOpen = true },
                     onOpenSettings = { readingSettingsOpen = !readingSettingsOpen },
                     onRecap = onRecap,
-                    onResearch = {
-                        // Лист исследования открывается немедленно: читатель
-                        // должен видеть подготовку текста, процент редакции
-                        // и ошибки. Сам запрос стартует только там, где он
-                        // ещё не был запущен.
-                        researchOpen = true
-                        when (state.research) {
-                            is ReaderResearchState.Idle, is ReaderResearchState.Failed -> onResearch()
-                            else -> Unit
+                    companionMode = companionProfile?.readerMode,
+                    onCompanionMode = {
+                        companionProfile?.let { profile ->
+                            val next = when (profile.readerMode) {
+                                "off" -> "quiet"
+                                "quiet" -> "active"
+                                else -> "off"
+                            }
+                            companionOnProfileChange(profile.copy(readerMode = next))
                         }
                     },
                 )
@@ -381,7 +388,7 @@ fun ReaderScreen(
         // Панель настроек — overlay по-прежнему: открытие не сдвигает строку,
         // на которой читатель остановился. Слой под ней ловит касание мимо:
         // тап вне панели закрывает её, как ведут себя системные листы.
-        if (readingSettingsOpen || researchOpen) {
+        if (readingSettingsOpen) {
             Box(
                 Modifier
                     .fillMaxSize()
@@ -389,7 +396,6 @@ fun ReaderScreen(
                     .pointerInput(Unit) {
                         detectTapGestures {
                             readingSettingsOpen = false
-                            researchOpen = false
                         }
                     },
             )
@@ -446,29 +452,41 @@ fun ReaderScreen(
             // Лист снизу: то же место, где карточка слова, — а не случайный
             // угол, из которого он перекрывает текст.
             Box(Modifier.fillMaxWidth().align(Alignment.BottomCenter).zIndex(2f)) {
-                StoryRecapSheet(state.recap, onRecap, onDismissRecap)
+                StoryRecapSheet(state.recap, companionProfile, onRecap, onDismissRecap)
             }
         }
-        if (researchOpen) {
-            Box(Modifier.fillMaxWidth().align(Alignment.BottomCenter).zIndex(2f)) {
-                val totalWords = (state.research as? ReaderResearchState.Ready)?.status?.sourceWords ?: 0L
-                val place = (state.chapterIndex + withinChapterProgress.coerceIn(0f, 1f)) /
-                    state.chapterCount.coerceAtLeast(1).toFloat()
-                ResearchSheet(
-                    state = state.research,
-                    dispositions = state.researchDispositions,
-                    readWords = (totalWords * place).toLong(),
-                    onDisposition = onResearchDisposition,
-                    onStartRetry = {
-                        researchOpen = true
-                        when (state.research) {
-                            is ReaderResearchState.Idle, is ReaderResearchState.Failed -> onResearch()
-                            else -> Unit
-                        }
-                    },
-                    onDismiss = { researchOpen = false },
-                )
-            }
+
+        // Компаньон: нижний безопасный угол, никакой сети при обычном чтении.
+        if (companionProfile != null && companionApi != null) {
+            CompanionLayer(
+                profile = companionProfile,
+                onProfileChange = companionOnProfileChange,
+                persona = companionPersona,
+                api = companionApi,
+                bookId = companionBookId,
+                bookTitle = state.bookTitle,
+                chapter = state.chapterIndex,
+                offset = { (withinChapterProgress * 10_000).toInt() },
+                pageText = {
+                    // Видимый фрагмент: активный блок и два следом. Лимит
+                    // держит локальный анализ дешёвым и предсказуемым.
+                    state.blocks.drop(activeBlock).take(3)
+                        .joinToString(" ") { it.text }
+                        .take(4000)
+                },
+                suppressed = cardOpen || contentsOpen || readingSettingsOpen || phraseSelection.value != null || state.recap !is StoryRecapState.Idle,
+                scrolling = scroll.isScrollInProgress,
+                compact = !selectViaMouse,
+                reduceMotion = reduceMotion,
+                activeBlock = activeBlock,
+                chapterKey = state.chapterIndex,
+                onRecap = companionOnRecap,
+                onEditCompanion = companionOnEdit,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(bottom = 96.dp, end = 8.dp)
+                    .zIndex(1f),
+            )
         }
     }
 }
@@ -482,7 +500,9 @@ private fun ReaderTopBar(
     onOpenContents: () -> Unit,
     onOpenSettings: () -> Unit,
     onRecap: () -> Unit,
-    onResearch: () -> Unit,
+    /** Режим компаньона или null, если компаньона нет. Тап переключает по кругу. */
+    companionMode: String? = null,
+    onCompanionMode: () -> Unit = {},
 ) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
@@ -524,11 +544,11 @@ private fun ReaderTopBar(
                     .weight(1f)
                     .pressable(onClick = onOpenContents),
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(spacing.small)) {
-                // «Текст» не читался как кнопка настроек — явное название честнее.
-                SectionLabel("Настройки чтения", Modifier.pressable(onClick = onOpenSettings))
-                SectionLabel("${(progress * 100).toInt()}%")
-            }
+                Row(horizontalArrangement = Arrangement.spacedBy(spacing.small)) {
+                    // «Текст» не читался как кнопка настроек — явное название честнее.
+                    SectionLabel("Настройки чтения", Modifier.pressable(onClick = onOpenSettings))
+                    SectionLabel("${(progress * 100).toInt()}%")
+                }
         }
         Box(
             Modifier
@@ -544,7 +564,20 @@ private fun ReaderTopBar(
             )
         }
         Row(Modifier.align(Alignment.End).padding(horizontal = spacing.pageMargin, vertical = spacing.small), horizontalArrangement = Arrangement.spacedBy(spacing.medium)) {
-            Text("Исследование", style = WolfyTheme.typography.caption, color = colors.accent, modifier = Modifier.pressable(onClick = onResearch))
+            // Режимы компаньона в компактном меню: без него чтение не меняется.
+            if (companionMode != null) {
+                val modeLabel = when (companionMode) {
+                    "quiet" -> "Компаньон: тихо"
+                    "active" -> "Компаньон: рядом"
+                    else -> "Читать с компаньоном"
+                }
+                Text(
+                    modeLabel,
+                    style = WolfyTheme.typography.caption,
+                    color = if (companionMode == "active") colors.accent else colors.inkMuted,
+                    modifier = Modifier.pressable(onClick = onCompanionMode),
+                )
+            }
             Text("Вспомнить сюжет · Beta", style = WolfyTheme.typography.caption, color = colors.accent, modifier = Modifier.pressable(onClick = onRecap))
         }
     }
@@ -698,7 +731,12 @@ private fun <T> QuickChoice(
 }
 
 @Composable
-private fun StoryRecapSheet(state: StoryRecapState, onRetry: () -> Unit, onDismiss: () -> Unit) {
+private fun StoryRecapSheet(
+    state: StoryRecapState,
+    companion: com.wolfy.data.companion.CompanionProfile?,
+    onRetry: () -> Unit,
+    onDismiss: () -> Unit,
+) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
     // Итог с событиями может быть длинным, а экран — коротким. Задавленная
@@ -716,8 +754,14 @@ private fun StoryRecapSheet(state: StoryRecapState, onRetry: () -> Unit, onDismi
                 .padding(spacing.large),
             verticalArrangement = Arrangement.spacedBy(spacing.small),
         ) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Сюжет · Beta", style = WolfyTheme.typography.bookTitle, color = colors.ink)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Row(horizontalArrangement = Arrangement.spacedBy(spacing.small), verticalAlignment = Alignment.CenterVertically) {
+                if (companion != null) CompanionFigure(companion.appearance, Modifier.size(52.dp))
+                Column {
+                    Text("Сюжет · Beta", style = WolfyTheme.typography.bookTitle, color = colors.ink)
+                    if (companion != null) Text("${companion.name} вспоминает прочитанное", style = WolfyTheme.typography.caption, color = colors.inkMuted)
+                }
+            }
             Text("закрыть", style = WolfyTheme.typography.caption, color = colors.accent, modifier = Modifier.pressable(onClick = onDismiss))
         }
         Text("ИИ может ошибаться. До 10 запросов в день.", style = WolfyTheme.typography.caption, color = colors.inkMuted)
@@ -739,80 +783,6 @@ private fun StoryRecapSheet(state: StoryRecapState, onRetry: () -> Unit, onDismi
             }
             StoryRecapState.Idle -> Unit
         }
-        }
-    }
-}
-
-@Composable
-private fun ResearchSheet(
-    state: ReaderResearchState,
-    dispositions: Map<String, String>,
-    readWords: Long,
-    onDisposition: (String, String) -> Unit,
-    onStartRetry: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val colors = WolfyTheme.colors
-    val spacing = WolfyTheme.spacing
-    BoxWithConstraints(Modifier.fillMaxWidth()) {
-        Column(
-            Modifier.fillMaxWidth().heightIn(max = maxHeight * 0.78f)
-                .verticalScroll(rememberScrollState())
-                .background(colors.surface, androidx.compose.foundation.shape.RoundedCornerShape(spacing.large))
-                .border(spacing.rule, colors.rule, androidx.compose.foundation.shape.RoundedCornerShape(spacing.large))
-                .padding(spacing.large),
-            verticalArrangement = Arrangement.spacedBy(spacing.small),
-        ) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Исследование · Beta", style = WolfyTheme.typography.bookTitle, color = colors.ink)
-                Text("закрыть", style = WolfyTheme.typography.caption, color = colors.accent, modifier = Modifier.pressable(onClick = onDismiss))
-            }
-            Text("ИИ может ошибаться. До 2 исследований в неделю.", style = WolfyTheme.typography.caption, color = colors.inkMuted)
-            when (state) {
-                ReaderResearchState.Idle -> Text("Собираем исследование…", style = WolfyTheme.typography.body, color = colors.inkMuted)
-                // Подготовка может занять несколько секунд на большой книге:
-                // читатель видит, что именно происходит, а не мёртвую кнопку.
-                ReaderResearchState.Building -> {
-                    Text("Готовим текст книги…", style = WolfyTheme.typography.body, color = colors.inkMuted)
-                    Text("Загружаем главы по одной, чтобы не держать книгу в памяти.", style = WolfyTheme.typography.caption, color = colors.inkMuted)
-                }
-                is ReaderResearchState.Processing -> Column(verticalArrangement = Arrangement.spacedBy(spacing.tight)) {
-                    Text("Редакция собирает нити сюжета…", style = WolfyTheme.typography.body, color = colors.inkMuted)
-                    // Процент живёт в статусе; полоска делает ожидание честным.
-                    Text("${state.status.progress}%", style = WolfyTheme.typography.sectionLabel, color = colors.accent)
-                }
-                is ReaderResearchState.Failed -> {
-                    Text(state.message, style = WolfyTheme.typography.body, color = colors.accent)
-                    // Ошибка не закрывает лист за собой: кнопка повтора лежит
-                    // рядом и запускает тот же путь заново.
-                    Row(Modifier.padding(top = spacing.small)) {
-                        Text("Попробовать снова", style = WolfyTheme.typography.button, color = colors.accent, modifier = Modifier.pressable(onClick = onStartRetry))
-                    }
-                }
-                is ReaderResearchState.Ready -> {
-                    Text(state.artifact.subtitle, style = WolfyTheme.typography.caption, color = colors.accent)
-                    Text(state.artifact.summary, style = WolfyTheme.typography.body, color = colors.ink)
-                    state.artifact.threads.forEach { thread ->
-                        Rule()
-                        Text(thread.title, style = WolfyTheme.typography.sectionLabel, color = colors.ink)
-                        Text(thread.summary, style = WolfyTheme.typography.caption, color = colors.inkMuted)
-                        dispositions[thread.id]?.let { choice -> Text("Пометка: $choice", style = WolfyTheme.typography.caption, color = colors.inkMuted) }
-                        Row(horizontalArrangement = Arrangement.spacedBy(spacing.medium)) {
-                            Text("Копать", style = WolfyTheme.typography.caption, color = colors.accent, modifier = Modifier.pressable { onDisposition(thread.id, "follow") })
-                            Text("Пока мимо", style = WolfyTheme.typography.caption, color = colors.inkMuted, modifier = Modifier.pressable { onDisposition(thread.id, "later") })
-                            Text("Следить фоном", style = WolfyTheme.typography.caption, color = colors.inkMuted, modifier = Modifier.pressable { onDisposition(thread.id, "background") })
-                        }
-                        thread.steps.filter { it.anchorWords <= readWords }.forEach { step ->
-                            Text(step.title, style = WolfyTheme.typography.body, color = colors.ink)
-                            Text(step.text, style = WolfyTheme.typography.caption, color = colors.inkMuted)
-                        }
-                        thread.steps.firstOrNull { it.anchorWords > readWords }?.let { step ->
-                            Text("Следующая заметка откроется примерно через ${step.anchorWords - readWords} слов.", style = WolfyTheme.typography.caption, color = colors.inkMuted)
-                        }
-                    }
-                    Text(state.artifact.notice + " До 2 исследований в неделю.", style = WolfyTheme.typography.caption, color = colors.inkMuted)
-                }
-            }
         }
     }
 }

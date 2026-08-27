@@ -25,19 +25,27 @@ export function syncNow(): Promise<boolean> {
 
 async function exchange(): Promise<boolean> {
   const state = useSession.getState()
+  const [{ useCompanion }, { toSyncCompanion, fromSyncCompanion }] = await Promise.all([
+    import('../companion/store'),
+    import('../companion/model'),
+  ])
+  const sentCompanion = useCompanion.getState().outgoing()
   const pending = await session.pending()
   const sent = {
     revision: state.library.revision,
     books: pending.books.map((book) => book.id),
     cards: pending.cards.map((card) => card.id),
   }
-  useSyncState.setState({ running: true, pending: sent.books.length + sent.cards.length, error: null })
+  useSyncState.setState({ running: true, pending: sent.books.length + sent.cards.length + (sentCompanion ? 1 : 0), error: null })
   try {
     const response = await api.sync({
       cursor: state.library.cursor,
       books: pending.books.map(bookToWire),
       cards: pending.cards.map(cardToWire),
       reading: state.settings,
+      // Компаньон едет отдельной коллекцией. Модуль грузится лениво: его
+      // данные (набор реплик) не должны попадать в стартовый кусок оболочки.
+      companion: sentCompanion ? toSyncCompanion(sentCompanion) : null,
     })
     const current = useSession.getState().library
     const knownBooks = new Map(current.books.map((book) => [book.id, book]))
@@ -48,12 +56,18 @@ async function exchange(): Promise<boolean> {
       response.cards.map((card) => cardFromWire(card, knownCards.get(card.id))),
       sent,
     )
+    // Профиль компаньона: серверная ревизия выигрывает, tombstone гаснет.
+    useCompanion.getState().applyServer(
+      response.companion ? fromSyncCompanion(response.companion) : null,
+      sentCompanion,
+    )
     await syncBookFiles(response.files ?? [])
     if (!hasLocalReadingChoices(state.settings) && isSettings(response.reading)) {
       await session.replaceSettings(response.reading)
     }
     const left = await session.pending()
-    useSyncState.setState({ running: false, lastSuccess: Date.now(), pending: left.books.length + left.cards.length, error: null })
+    const companionLeft = useCompanion.getState().outgoing() ? 1 : 0
+    useSyncState.setState({ running: false, lastSuccess: Date.now(), pending: left.books.length + left.cards.length + companionLeft, error: null })
     return true
   } catch (error) {
     useSyncState.setState({ running: false, error: error instanceof Error ? error.message : 'Синхронизация не состоялась.' })
@@ -136,8 +150,13 @@ export function SyncController() {
   }, [account.data, ready, revision])
   useEffect(() => {
     const online = () => { if (account.data) void syncNow() }
+    const companionDirty = () => { if (account.data && navigator.onLine) void syncNow() }
     window.addEventListener('online', online)
-    return () => window.removeEventListener('online', online)
+    window.addEventListener('wolfy:companion-dirty', companionDirty)
+    return () => {
+      window.removeEventListener('online', online)
+      window.removeEventListener('wolfy:companion-dirty', companionDirty)
+    }
   }, [account.data])
   return null
 }

@@ -43,6 +43,7 @@ class SyncService(
     private val library: Library,
     private val settings: Settings,
     private val api: WolfyApi,
+    private val companion: com.wolfy.data.companion.CompanionRepository? = null,
 ) {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
@@ -56,7 +57,7 @@ class SyncService(
     /** Есть ли что отправлять. */
     fun hasPending(): Boolean {
         val (books, cards) = library.pending()
-        return books.isNotEmpty() || cards.isNotEmpty()
+        return books.isNotEmpty() || cards.isNotEmpty() || companion?.state?.value?.outgoing != null
     }
 
     /**
@@ -80,11 +81,16 @@ class SyncService(
 
             val sent = library.snapshot()
             val (books, cards) = library.pending()
+            val sentCompanion = companion?.state?.value?.outgoing
             val payload = SyncPayload(
                 cursor = library.state.value.cursor,
                 books = books.map { it.toSync() },
                 cards = cards.map { it.toSync() },
                 reading = readingSettings(),
+                // Профиль едет, только если он есть и изменился с последней
+                // ревизии: сверка по серверной ревизии делает отправку пустой
+                // для неизменённого профиля.
+                companion = sentCompanion?.toSyncCompanion(),
             )
 
             return when (val result = api.sync(payload)) {
@@ -94,7 +100,7 @@ class SyncService(
                 }
 
                 is SyncResult.Ready -> {
-                    apply(result.payload, sent)
+                    apply(result.payload, sent, sentCompanion)
                     // Файлы идут отдельно от JSON-обмена. По одному мегабайту
                     // за запрос: даже большая книга не превращается в копию в
                     // памяти телефона, а обычный sync остаётся быстрым.
@@ -102,7 +108,9 @@ class SyncService(
                     _status.value = SyncStatus(
                         running = false,
                         lastSuccess = currentTimeMillis(),
-                        pending = library.pending().let { (b, c) -> b.size + c.size },
+                        pending = library.pending().let { (b, c) ->
+                            b.size + c.size + if (companion?.state?.value?.outgoing != null) 1 else 0
+                        },
                         error = null,
                     )
                     true
@@ -113,7 +121,11 @@ class SyncService(
         }
     }
 
-    private fun apply(payload: SyncPayload, sent: Library.Sent) {
+    private fun apply(
+        payload: SyncPayload,
+        sent: Library.Sent,
+        sentCompanion: com.wolfy.data.companion.CompanionProfile?,
+    ) {
         val state = library.state.value
         val knownBooks = state.books.associateBy { it.id }
         val knownCards = state.cards.associateBy { it.id }
@@ -122,6 +134,11 @@ class SyncService(
         val cards: List<Card> = payload.cards.map { it.toLibrary(knownCards[it.id]) }
 
         library.applyServer(cursor = payload.cursor, books = books, cards = cards, sent = sent)
+
+        // Профиль компаньона: серверная ревизия выигрывает у местной, tombstone
+        // подтверждается и гаснет внутри репозитория. Черновик редактора здесь
+        // не участвует.
+        payload.companion?.let { remote -> companion?.applyServer(remote.toCompanionProfile(), sentCompanion) }
 
         // Настройки чтения с сервера применяются только если местных ещё не
         // было. Иначе читатель, поменявший тему на телефоне, увидел бы, как

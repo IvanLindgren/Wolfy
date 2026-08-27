@@ -31,6 +31,12 @@ const LAZY_PATTERNS = [
   /AccountScreen/i,
   /Onboarding/i,
   /SettingsScreen/i,
+  // Экраны-маршруты, добавленные позже: они так же ленивы, как остальные,
+  // и не должны считаться частью стартового куска.
+  /CompanionScreen/i,
+  /PrivacyScreen/i,
+  /NewspaperScreen/i,
+  /CatalogScreen/i,
   /core\.worker/i,
   /pdf\.worker/i,
 ]

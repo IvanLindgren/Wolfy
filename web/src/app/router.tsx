@@ -132,6 +132,18 @@ const settingsRoute = createRoute({
   component: screen(() => import('../settings/SettingsScreen'), 'SettingsScreen'),
 })
 
+const companionRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/companion',
+  component: screen(() => import('../companion/CompanionScreen'), 'CompanionScreen'),
+})
+
+const privacyRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/privacy',
+  component: screen(() => import('../legal/PrivacyScreen'), 'PrivacyScreen'),
+})
+
 const accountRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/account',
@@ -173,6 +185,8 @@ const routeTree = rootRoute.addChildren([
   newspaperRoute,
   discoveryRoute,
   settingsRoute,
+  companionRoute,
+  privacyRoute,
   accountRoute,
   authReturnRoute,
   photoRoute,

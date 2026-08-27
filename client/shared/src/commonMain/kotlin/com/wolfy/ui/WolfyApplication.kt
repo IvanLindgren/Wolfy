@@ -185,12 +185,13 @@ fun WolfyApplication(
                 },
             )
             val dictionary = DictionaryManager(coreSession, store, api)
+            val companionRepo = com.wolfy.data.companion.CompanionRepository(store)
             Parts(
                 core = core,
                 coreSession = coreSession,
                 library = library,
                 settings = settings,
-                sync = SyncService(library, settings, api),
+                sync = SyncService(library, settings, api, companionRepo),
                 reader = ReaderViewModel(
                     core = core,
                     api = api,
@@ -205,6 +206,7 @@ fun WolfyApplication(
                 newspaper = NewspaperViewModel(api, library),
                 dictionary = dictionary,
                 api = api,
+                companion = companionRepo,
             )
             }
         }
@@ -428,6 +430,8 @@ private class Parts(
     val store: LibraryStore,
     val dictionary: DictionaryManager,
     val api: WolfyApi,
+    /** Локальный профиль компаньона: синхронизация забирает его отсюда. */
+    val companion: com.wolfy.data.companion.CompanionRepository,
 ) {
     /**
      * Ресурсы, не принадлежащие Compose: файл открытой книги, нативная
@@ -560,6 +564,60 @@ private fun Shell(
     // Список слов по книгам: он подробнее хаба и потому лежит под ним.
     var decksOpen by remember { mutableStateOf(false) }
 
+    // Раздел «Компаньон»: поверх настроек, но глубже настроек чтения.
+    var companionOpen by remember { mutableStateOf(false) }
+    val companionViewModel = remember { com.wolfy.ui.companion.CompanionViewModel(parts.companion).also { it.restore() } }
+    val companionState by parts.companion.state.collectAsState()
+    LaunchedEffect(companionState) { companionViewModel.refreshFromRepository() }
+
+    // Генерация набора реплик: один запрос на сто реплик, результат атомарно
+    // в профиль. Провал честен: показываем причину и оставляем fallback.
+    fun generateCompanionPack() {
+        val profile = companionViewModel.state.profile ?: return
+        companionViewModel.markPackLoading()
+        scope.launch {
+            when (val result = parts.api.companionPack(profile)) {
+                is com.wolfy.data.CompanionPackResult.Ready -> {
+                    val response = result.value
+                    val pack = com.wolfy.data.companion.CompanionPhrasePack(
+                        schemaVersion = response.pack.schemaVersion,
+                        profileHash = response.pack.profileHash,
+                        locale = response.pack.locale,
+                        generatedAt = com.wolfy.data.library.currentTimeMillis(),
+                        source = if (response.cached) {
+                            com.wolfy.data.companion.CompanionPhrasePack.SOURCE_CACHE
+                        } else {
+                            com.wolfy.data.companion.CompanionPhrasePack.SOURCE_GENERATED
+                        },
+                        phrases = response.pack.phrases.map { phrase ->
+                            com.wolfy.data.companion.CompanionPhrase(
+                                id = phrase.id,
+                                scenario = phrase.scenario,
+                                text = phrase.text,
+                                minMinutes = phrase.minMinutes,
+                                cooldownMinutes = phrase.cooldownMinutes,
+                                weight = phrase.weight,
+                                moods = phrase.moods,
+                                motion = phrase.motion,
+                            )
+                        },
+                    )
+                    if (com.wolfy.data.companion.validatePhrasePack(pack).valid) {
+                        parts.companion.attachPhrasePack(pack)
+                        companionViewModel.markPackReady()
+                    } else {
+                        companionViewModel.markPackFailed(
+                            "Сервер вернул неполный набор. Приложение продолжит работать с базовыми репликами.",
+                            retryable = true,
+                        )
+                    }
+                }
+                is com.wolfy.data.CompanionPackResult.Failed ->
+                    companionViewModel.markPackFailed(result.message, retryable = result.code != "quota")
+            }
+        }
+    }
+
     // Список сочетаний клавиш. Только там, где эти клавиши есть.
     val hasKeyboard = LocalKeyboard.current
     var helpOpen by remember { mutableStateOf(false) }
@@ -651,7 +709,11 @@ private fun Shell(
             decksOpen -> Route.WordList
             else -> Route.Cards
         }
-        Section.More -> reference?.let(Route::Reference) ?: Route.Settings
+        Section.More -> when {
+            reference != null -> Route.Reference(reference!!)
+            companionOpen -> Route.Companion
+            else -> Route.Settings
+        }
     }
 
     // Состояние библиотеки собирается только пока живёт её маршрут.
@@ -775,10 +837,34 @@ private fun Shell(
                     onExplainPhrase = parts.reader::explainCardPhrase,
                     onRecap = parts.reader::recapRecentPages,
                     onDismissRecap = parts.reader::dismissRecap,
-                    onResearch = parts.reader::startResearch,
-                    onResearchDisposition = parts.reader::setResearchDisposition,
                     onPhraseSelected = { block, range, text, parsed ->
                         parts.reader.openPhrase(block, range, text, parsed)
+                    },
+                    companionProfile = companionState.profile,
+                    companionOnProfileChange = { parts.companion.save(it) },
+                    companionPersona = com.wolfy.data.CompanionPersonaIn(
+                        name = companionState.profile?.name.orEmpty(),
+                        locale = companionState.profile?.locale ?: "ru",
+                        personality = companionState.profile?.personality?.let {
+                            mapOf(
+                                "warmth" to it.warmth, "playfulness" to it.playfulness,
+                                "energy" to it.energy, "directness" to it.directness,
+                                "optimism" to it.optimism, "emotionality" to it.emotionality,
+                                "supportStyle" to it.supportStyle, "verbosity" to it.verbosity,
+                                "curiosity" to it.curiosity, "formality" to it.formality,
+                            )
+                        } ?: emptyMap(),
+                        mbti = companionState.profile?.mbti,
+                        description = companionState.profile?.description.orEmpty(),
+                    ),
+                    companionApi = parts.api,
+                    companionBookId = reading?.id.orEmpty(),
+                    companionOnRecap = parts.reader::recapRecentPages,
+                    companionOnEdit = {
+                        parts.reader.closeCurrent()
+                        reading = null
+                        companionOpen = true
+                        section = Section.More
                     },
                     onImageVisible = parts.reader::loadImage,
                     theme = theme,
@@ -794,6 +880,7 @@ private fun Shell(
                     pacerWpm = readingSettings.pacerWpm,
                     onPacerChange = parts.settings::setPacer,
                     segmentWords = readingSettings.segmentWords,
+                    reduceMotion = readingSettings.reduceMotion,
                     onSegmentWordsChange = parts.settings::setSegmentWords,
                     onNextSegment = parts.reader::planSegment,
                     onStopSegments = { parts.settings.setSegmentWords(0) },
@@ -873,8 +960,19 @@ private fun Shell(
                     onSignIn = onSignIn,
                     onSignOut = onSignOut,
                     onOpenReference = { reference = "" },
+                    onOpenCompanion = { companionOpen = true },
                     dictionary = dictionaryStatus,
                     onDownloadDictionary = { scope.launch { parts.dictionary.download() } },
+                )
+
+                is Route.Companion -> com.wolfy.ui.companion.CompanionScreen(
+                    viewModel = companionViewModel,
+                    onGeneratePack = { generateCompanionPack() },
+                    onDeleteConfirmed = {
+                        companionOpen = false
+                        if (signedIn) scope.launch { parts.sync.sync(waitForRunning = false) }
+                    },
+                    onBack = { companionOpen = false },
                 )
 
                 is Route.Reference -> ReferenceScreen(
@@ -944,6 +1042,11 @@ private sealed interface Route {
 
     data object Settings : Route {
         override val depth: Int get() = 0
+    }
+
+    /** Раздел компаньона: глубже настроек, откуда его и открывают. */
+    data object Companion : Route {
+        override val depth: Int get() = 1
     }
 
     data class Reference(val rule: String) : Route {

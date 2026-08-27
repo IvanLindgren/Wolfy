@@ -37,6 +37,10 @@ const (
 	MaxCards = 50_000
 	// Длина контекста: предложение, а не глава.
 	MaxTextLength = 4_000
+	// Профиль компаньона: имя, десять шкал и внешность. Набор реплик из ста
+	// коротких фраз целиком укладывается в этот же предел.
+	MaxCompanionProfile = 96 << 10
+	MaxCompanionPack    = 256 << 10
 )
 
 // uuidPattern — идентификаторы записей.
@@ -110,5 +114,36 @@ func validate(changes store.Changes) error {
 	if len(changes.Reading) > 0 && !json.Valid(changes.Reading) {
 		return errors.New("настройки чтения не разобраны")
 	}
+
+	if changes.Companion != nil {
+		return validateCompanion(changes.Companion)
+	}
 	return nil
+}
+
+// validateCompanion проверяет профиль и набор реплик до записи в базу.
+//
+// JSON компаньона не доверенные данные: он поедет на другие устройства
+// как есть, поэтому здесь проверяются размер, валидность и обязательный
+// серверный хеш характера для идемпотентности генерации.
+func validateCompanion(c *store.Companion) error {
+	if len(c.Profile) == 0 {
+		return errors.New("профиль компаньона пуст")
+	}
+	if len(c.Profile) > MaxCompanionProfile {
+		return fmt.Errorf("%w: профиль компаньона больше %d байт", ErrTooLarge, MaxCompanionProfile)
+	}
+	if !json.Valid(c.Profile) {
+		return errors.New("профиль компаньона не разобран")
+	}
+	if len(c.PhrasePack) > MaxCompanionPack {
+		return fmt.Errorf("%w: набор реплик больше %d байт", ErrTooLarge, MaxCompanionPack)
+	}
+	if len(c.PhrasePack) > 0 && !json.Valid(c.PhrasePack) {
+		return errors.New("набор реплик не разобран")
+	}
+	if len(c.ProfileHash) > 128 {
+		return errors.New("хеш характера слишком длинный")
+	}
+	return validateCompanionPayload(c)
 }

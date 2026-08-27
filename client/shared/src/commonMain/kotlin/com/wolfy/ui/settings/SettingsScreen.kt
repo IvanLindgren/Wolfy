@@ -22,6 +22,7 @@ import com.wolfy.data.SyncStatus
 import com.wolfy.data.dictionary.DictionaryStatus
 import com.wolfy.theme.ReadingTheme
 import com.wolfy.theme.WolfyTheme
+import com.wolfy.widgets.PrimaryButton
 import com.wolfy.widgets.Rule
 import com.wolfy.widgets.SectionLabel
 import com.wolfy.widgets.Sticker
@@ -81,6 +82,7 @@ fun SettingsScreen(
     onSignIn: () -> Unit,
     onSignOut: () -> Unit,
     onOpenReference: () -> Unit,
+    onOpenCompanion: () -> Unit,
     dictionary: DictionaryStatus,
     onDownloadDictionary: () -> Unit,
     modifier: Modifier = Modifier,
@@ -111,6 +113,18 @@ fun SettingsScreen(
             MotionToggle(reduceMotion, onReduceMotion)
             ReaderPreview(fontScale, focusMode)
         }
+
+        // Компаньон живёт рядом с настройками чтения, но не внутри длинного
+        // текстового блока: это отдельный раздел со своим экраном.
+        SettingsCard("Компаньон") {
+            Text(
+                "Персонаж, которого вы создаёте и наряжаете. Необязательный.",
+                style = WolfyTheme.typography.caption,
+                color = colors.inkMuted,
+            )
+            PrimaryButton("Открыть раздел", onOpenCompanion)
+        }
+
 
         SettingsCard("Чтение") {
             SwitchRow(

@@ -156,12 +156,42 @@ func (s *Service) reserve(ctx context.Context, userID string) (int, error) {
 	}
 	return DailyLimit - used, nil
 }
+
+// Reserve резервирует один запрос дневного лимита для соседних сервисов
+// (компаньон). Возвращает остаток квоты после резервирования.
+//
+// Одна таблица и один счётчик на все Beta-действия: opinion, question, recap
+// и генерация набора реплик делят общий лимит, и обойти его через соседний
+// эндпоинт невозможно.
+func (s *Service) Reserve(ctx context.Context, userID string) (int, error) {
+	return s.reserve(ctx, userID)
+}
+
+// Release возвращает резерв, когда ответ провайдера не прошёл проверку:
+// невалидный ответ не должен стоить читателю дневной квоты.
+func (s *Service) Release(ctx context.Context, userID string) {
+	s.release(ctx, userID)
+}
+
+// Ask задаёт провайдеру один вопрос и возвращает текст ответа.
+//
+// Экспортирован для companionai: транспорту, таймаутам и классификации
+// отказов положено быть общими, а не повторяться в соседнем пакете.
+// Температура задаётся вызывающим: структурированному набору реплик нужна
+// низкая, живому мнению о странице достаточно дефолтной.
+func (s *Service) Ask(ctx context.Context, prompt string, temperature float32) (string, error) {
+	return s.askWith(ctx, prompt, temperature)
+}
 func (s *Service) release(ctx context.Context, userID string) {
 	_, _ = s.store.Pool.Exec(ctx, `UPDATE wolfy.ai_daily_usage SET used=GREATEST(used-1, 0) WHERE user_id=$1::uuid AND day=CURRENT_DATE`, userID)
 }
 
 func (s *Service) ask(ctx context.Context, prompt string) (string, error) {
-	body, _ := json.Marshal(map[string]any{"model": s.model, "temperature": 0.2, "messages": []map[string]string{{"role": "user", "content": prompt}}})
+	return s.askWith(ctx, prompt, 0.2)
+}
+
+func (s *Service) askWith(ctx context.Context, prompt string, temperature float32) (string, error) {
+	body, _ := json.Marshal(map[string]any{"model": s.model, "temperature": temperature, "messages": []map[string]string{{"role": "user", "content": prompt}}})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.url, bytes.NewReader(body))
 	if err != nil {
 		return "", &ProviderError{Kind: FailProvider}
@@ -227,6 +257,12 @@ func cleanJSON(raw string) []byte {
 	raw = strings.TrimPrefix(raw, "```")
 	raw = strings.TrimSuffix(raw, "```")
 	return []byte(strings.TrimSpace(raw))
+}
+
+// CleanJSON снимает markdown-обёртку с ответа провайдера для соседних
+// сервисов: ответы Gemini приходят в ```json даже при просьбе о чистом JSON.
+func CleanJSON(raw string) []byte {
+	return cleanJSON(raw)
 }
 func safe(text string, max int) bool {
 	text = strings.TrimSpace(text)

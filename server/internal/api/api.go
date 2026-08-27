@@ -23,6 +23,7 @@ import (
 	"github.com/wolfy/server/internal/account"
 	"github.com/wolfy/server/internal/auth"
 	"github.com/wolfy/server/internal/bookfiles"
+	"github.com/wolfy/server/internal/companionai"
 	"github.com/wolfy/server/internal/dictionary"
 	"github.com/wolfy/server/internal/discovery"
 	"github.com/wolfy/server/internal/library"
@@ -31,7 +32,6 @@ import (
 	"github.com/wolfy/server/internal/openlibrary"
 	"github.com/wolfy/server/internal/readingai"
 	"github.com/wolfy/server/internal/remotebook"
-	"github.com/wolfy/server/internal/researchai"
 	"github.com/wolfy/server/internal/social"
 	"github.com/wolfy/server/internal/store"
 	"github.com/wolfy/server/internal/translate"
@@ -55,7 +55,7 @@ type Server struct {
 	updates           *updates.Service
 	bookFiles         *bookfiles.Service
 	readingAI         *readingai.Service
-	researchAI        *researchai.Service
+	companionAI       *companionai.Service
 	log               *slog.Logger
 	webOrigin         string
 	googleWebClientID string
@@ -102,7 +102,7 @@ func NewServer(
 	updater *updates.Service,
 	fileStore *bookfiles.Service,
 	ai *readingai.Service,
-	research *researchai.Service,
+	companion *companionai.Service,
 	log *slog.Logger,
 ) *Server {
 	return &Server{
@@ -111,7 +111,7 @@ func NewServer(
 		remoteBooks: remotebook.New(30 * time.Second),
 		catalogue:   openlibrary.New(10 * time.Second),
 		newspaper:   newspaper.New(12 * time.Second),
-		updates:     updater, bookFiles: fileStore, readingAI: ai, researchAI: research, log: log,
+		updates:     updater, bookFiles: fileStore, readingAI: ai, companionAI: companion, log: log,
 		// Двести переводов залпом и один в секунду сверху: страница книги
 		// редко даёт больше двухсот незнакомых слов, а секунда — это дольше,
 		// чем читатель успевает выбрать следующее слово, но много быстрее,
@@ -223,13 +223,11 @@ func (s *Server) Handler() http.Handler {
 	private.HandleFunc("POST /v1/ocr", s.postOCR)
 	private.HandleFunc("POST /v1/ai/phrase", s.postAIPhrase)
 	private.HandleFunc("POST /v1/ai/recap", s.postAIRecap)
-	private.HandleFunc("POST /v1/books/{bookId}/research", s.postResearchStart)
-	private.HandleFunc("GET /v1/books/{bookId}/research/{analysisId}", s.getResearchStatus)
-	private.HandleFunc("PUT /v1/books/{bookId}/research/{analysisId}/source/{index}", s.putResearchSource)
-	private.HandleFunc("POST /v1/books/{bookId}/research/{analysisId}/source/complete", s.postResearchComplete)
-	private.HandleFunc("GET /v1/books/{bookId}/research/{analysisId}/artifact", s.getResearchArtifact)
-	private.HandleFunc("GET /v1/books/{bookId}/research/{analysisId}/state", s.getResearchState)
-	private.HandleFunc("PUT /v1/books/{bookId}/research/{analysisId}/state", s.putResearchState)
+	// Beta-действия компаньона: та же квота и та же проверка ответов, что у
+	// остальных подсказок. Генерация набора реплик считается одним запросом.
+	private.HandleFunc("POST /v1/ai/companion/opinion", s.postAICompanionOpinion)
+	private.HandleFunc("POST /v1/ai/companion/question", s.postAICompanionQuestion)
+	private.HandleFunc("POST /v1/ai/companion/pack", s.postAICompanionPack)
 	private.HandleFunc("GET /v1/discovery/profile", s.getDiscoveryProfile)
 	private.HandleFunc("PUT /v1/discovery/profile", s.putDiscoveryProfile)
 	private.HandleFunc("GET /v1/discovery/feed", s.getDiscoveryFeed)
@@ -599,9 +597,7 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		"translate": s.translate.Configured(),
 		// Клиент прячет съёмку, если распознавание не настроено: кнопка,
 		// которая всегда отвечает ошибкой, хуже её отсутствия.
-		"ocr": s.ocr.Configured(),
-		// Отдельное поле для Beta-подсказки: раньше о её доступности можно
-		// было только догадываться по research, а это разные сервисы.
+		"ocr":        s.ocr.Configured(),
 		"ai":         s.readingAI.Configured(),
 		"dictionary": s.dictionary.Configured(),
 		// По этим двум клиент решает, показывать ли «Создать аккаунт» и
@@ -612,7 +608,6 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		"google":         s.googleWebClientID != "" && s.account.CanGoogle(),
 		"googleClientId": s.googleWebClientID,
 		"yandex":         s.account.CanYandexWeb(),
-		"research":       s.researchAI != nil && s.researchAI.Enabled(),
 	})
 }
 

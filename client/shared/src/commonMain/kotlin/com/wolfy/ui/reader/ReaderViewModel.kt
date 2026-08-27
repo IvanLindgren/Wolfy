@@ -9,13 +9,6 @@ import com.wolfy.data.WolfyApi
 import com.wolfy.data.AiRecap
 import com.wolfy.data.AiRecapResult
 import com.wolfy.data.AiPhraseResult
-import com.wolfy.data.ResearchArtifact
-import com.wolfy.data.ResearchArtifactResult
-import com.wolfy.data.ResearchSourceBuilder
-import com.wolfy.data.ResearchStartResult
-import com.wolfy.data.ResearchStatus
-import com.wolfy.data.ResearchStateResult
-import com.wolfy.data.ResearchUserState
 import com.wolfy.data.library.Library
 import com.wolfy.data.library.LibraryBook
 import com.wolfy.data.library.currentTimeMillis
@@ -113,8 +106,6 @@ data class ReaderState(
     val anchorOffset: Float = 0f,
     val error: String? = null,
     val recap: StoryRecapState = StoryRecapState.Idle,
-    val research: ReaderResearchState = ReaderResearchState.Idle,
-    val researchDispositions: Map<String, String> = emptyMap(),
 ) {
     val chapterCount: Int get() = chapters.size
     val hasPrevious: Boolean get() = chapterIndex > 0
@@ -203,7 +194,6 @@ class ReaderViewModel(
     private var segmentJob: Job? = null
     /** Отложенная запись места: тяжёлая сессия библиотеки не трогает Main. */
     private var progressJob: Job? = null
-    private var researchJob: Job? = null
     private val progressMutex = Mutex()
 
     /** Запрос перевода для текущей карточки — новый тап отменяет предыдущий. */
@@ -499,7 +489,6 @@ class ReaderViewModel(
         chapterJob?.cancel()
         anchorJob?.cancel()
         segmentJob?.cancel()
-        researchJob?.cancel()
         chapterJob = viewModelScope.launch {
             _state.update { it.copy(loading = true, card = null) }
             try {
@@ -903,89 +892,6 @@ class ReaderViewModel(
 
     fun dismissRecap() { _state.update { it.copy(recap = StoryRecapState.Idle) } }
 
-    /** Собирает источник из глав ядра и запускает отдельный AI-конспект. */
-    fun startResearch() {
-        val id = bookId ?: return
-        val opened = handle ?: return
-        val session = generation
-        val chapters = _state.value.chapterCount
-        // Запрос можно запустить только с чистого места: пока идёт подготовка,
-        // обработка или готов результат, вторая кнопка ничего не должна
-        // перезапускать — иначе читатель случайно списывал бы два лимита.
-        when (_state.value.research) {
-            is ReaderResearchState.Idle, is ReaderResearchState.Failed -> Unit
-            else -> return
-        }
-        if (chapters <= 0) return
-        _state.update { it.copy(research = ReaderResearchState.Building) }
-        researchJob?.cancel()
-        researchJob = viewModelScope.launch {
-            val started = withContext(Dispatchers.Default) {
-                runCatching { ResearchSourceBuilder(core).upload(id, opened, chapters, api) }
-                    .getOrElse { ResearchStartResult.Failed("Не удалось подготовить текст книги.") }
-            }
-            if (!owns(session, id, opened)) return@launch
-            val status = (started as? ResearchStartResult.Ready)?.value
-            if (status == null) {
-                _state.update { it.copy(research = ReaderResearchState.Failed((started as ResearchStartResult.Failed).message)) }
-                return@launch
-            }
-            observeResearch(session, id, opened, status)
-        }
-    }
-
-    private suspend fun observeResearch(session: Long, id: String, opened: Long, initial: ResearchStatus) {
-        var status = initial
-        while (owns(session, id, opened)) {
-            if (!owns(session, id, opened)) return
-            _state.update { it.copy(research = ReaderResearchState.Processing(status)) }
-            if (status.stage == "ready") {
-                when (val artifact = api.researchArtifact(id, status.analysisId)) {
-                    is ResearchArtifactResult.Ready -> {
-                        val userState = (api.researchState(id, status.analysisId) as? ResearchStateResult.Ready)?.value
-                        _state.update { current ->
-                            if (owns(session, id, opened)) current.copy(
-                                research = ReaderResearchState.Ready(status, artifact.value),
-                                researchDispositions = userState?.dispositions.orEmpty(),
-                            ) else current
-                        }
-                    }
-                    is ResearchArtifactResult.Failed -> _state.update { it.copy(research = ReaderResearchState.Failed(researchFailureMessage(artifact.message))) }
-                }
-                return
-            }
-            if (status.stage == "failed" || status.stage == "cancelled") {
-                _state.update { it.copy(research = ReaderResearchState.Failed(researchFailureMessage(status.error))) }
-                return
-            }
-            delay(RESEARCH_STATUS_DELAY)
-            when (val fresh = api.researchStatus(id, status.analysisId)) {
-                is ResearchStartResult.Ready -> status = fresh.value
-                is ResearchStartResult.Failed -> {
-                    _state.update { it.copy(research = ReaderResearchState.Failed(researchFailureMessage(fresh.message))) }
-                    return
-                }
-            }
-        }
-    }
-
-    /**
-     * Код ошибки редакции превращается в понятную фразу.
-     *
-     * Сервер кладёт в поле кода машиночитаемое слово (`provider`,
-     * `invalid_answer`…); показывать его читателю — как показать стек-трейс.
-     * Неизвестные коды и живые тексты проходят насквозь без приукрашивания.
-     */
-    private fun researchFailureMessage(code: String): String = when (code) {
-        "provider" -> "Gemini сейчас не ответил. Попробуйте ещё раз позже."
-        "invalid_answer" -> "Gemini вернул ответ неподходящего формата."
-        "spoilers" -> "Ответ скрыт, потому что содержит спойлеры."
-        "quota" -> "На этой неделе лимит исследований исчерпан."
-        "source" -> "Не удалось подготовить текст книги."
-        "" -> "Исследование не удалось завершить."
-        else -> code
-    }
-
     /** Те же коды у Beta-подсказки фразы; без кода остаётся текст сервера. */
     private fun betaFailureMessage(code: String, fallback: String): String = when (code) {
         "provider", "timeout" -> "Gemini сейчас не ответил. Попробуйте ещё раз позже."
@@ -994,23 +900,6 @@ class ReaderViewModel(
         "quota" -> "Лимит подсказок на сегодня исчерпан."
         "key", "model" -> "Подсказка временно не работает на стороне сервера."
         else -> fallback
-    }
-
-    fun setResearchDisposition(cardId: String, disposition: String) {
-        val id = bookId ?: return
-        val ready = _state.value.research as? ReaderResearchState.Ready ?: return
-        val next = _state.value.researchDispositions + (cardId to disposition)
-        _state.update { it.copy(researchDispositions = next) }
-        viewModelScope.launch {
-            val remote = (api.researchState(id, ready.status.analysisId) as? ResearchStateResult.Ready)?.value ?: ResearchUserState()
-            val result = api.saveResearchState(
-                id, ready.status.analysisId,
-                remote.copy(rev = remote.rev + 1, writer = api.researchWriter(), dispositions = remote.dispositions + (cardId to disposition)),
-            )
-            if (result is ResearchStateResult.Ready) _state.update { current ->
-                if (current.research is ReaderResearchState.Ready) current.copy(researchDispositions = result.value.dispositions) else current
-            }
-        }
     }
 
     fun dismissCard() {
@@ -1174,8 +1063,6 @@ class ReaderViewModel(
         chapterJob = null
         anchorJob = null
         segmentJob = null
-        researchJob?.cancel()
-        researchJob = null
         flushPlace()
         deckJob?.cancel()
         deckJob = null
@@ -1209,8 +1096,7 @@ class ReaderViewModel(
     }
 
     private companion object {
-		const val RECAP_CHARS = 18_000
-        const val RESEARCH_STATUS_DELAY = 3_000L
+        const val RECAP_CHARS = 18_000
         /** Как редко место в книге доходит до диска. */
         const val WRITE_EVERY = 3_000L
         /** Не больше 32 MiB готовых растров на открытую книгу. */
@@ -1388,12 +1274,4 @@ sealed interface StoryRecapState {
     data object Loading : StoryRecapState
     data class Ready(val value: AiRecap) : StoryRecapState
     data class Failed(val message: String) : StoryRecapState
-}
-
-sealed interface ReaderResearchState {
-    data object Idle : ReaderResearchState
-    data object Building : ReaderResearchState
-    data class Processing(val status: ResearchStatus) : ReaderResearchState
-    data class Ready(val status: ResearchStatus, val artifact: ResearchArtifact) : ReaderResearchState
-    data class Failed(val message: String) : ReaderResearchState
 }
