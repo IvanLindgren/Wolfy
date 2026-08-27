@@ -574,12 +574,20 @@ func (s *Service) analyze(ctx context.Context, userID, analysisID string) error 
 	}
 	summaries, err := s.summarizeChunks(ctx, file)
 	if err != nil {
+		if errors.Is(err, ErrInvalid) {
+			return s.fail(ctx, analysisID, "invalid_answer")
+		}
 		return s.fail(ctx, analysisID, "provider")
 	}
 	_, _ = s.store.Pool.Exec(ctx, `UPDATE wolfy.research_analyses SET status='synthesizing',updated_at=now(),lease_until=now()+interval '10 minutes' WHERE id=$1::uuid`, analysisID)
 	artifact, err := s.synthesize(ctx, summaries)
 	if err != nil || !validArtifact(&artifact) {
-		return s.fail(ctx, analysisID, "invalid_answer")
+		// Один исправляющий повтор полезнее молчаливого отказа: провайдер иногда
+		// добавляет поле или пропускает шаг, хотя содержание уже готово.
+		artifact, err = s.synthesize(ctx, summaries)
+		if err != nil || !validArtifact(&artifact) {
+			return s.fail(ctx, analysisID, "invalid_answer")
+		}
 	}
 	_, _ = s.store.Pool.Exec(ctx, `UPDATE wolfy.research_analyses SET status='checking_spoilers',updated_at=now() WHERE id=$1::uuid`, analysisID)
 	if !spoilersSafe(&artifact) {
@@ -625,7 +633,7 @@ func (s *Service) summarizeChunks(ctx context.Context, path string) ([]string, e
 	}
 	for scanner.Scan() {
 		line := scanner.Text()
-		if part.Len()+len(line)+1 > 12000 {
+		if part.Len()+len(line)+1 > 48000 {
 			if err := flush(); err != nil {
 				return nil, err
 			}

@@ -71,7 +71,6 @@ import com.wolfy.widgets.Disclosure
 import com.wolfy.widgets.LocalFlight
 import com.wolfy.widgets.PhraseBlocks
 import com.wolfy.widgets.SectionLabel
-import com.wolfy.widgets.WolfyCompanion
 import com.wolfy.widgets.pressable
 import com.wolfy.widgets.rememberLaunchPad
 import kotlinx.coroutines.delay
@@ -179,7 +178,7 @@ private fun CardBody(
     // Карточка после выделения фразы обязана встретить читателя вкладкой
     // «Фраза»: он только что взял фразу — показывать вкладку слова значит
     // делать за него выбор заново.
-    var mode by remember(state.token.start, state.context) {
+    var mode by remember(state.token.start, state.context, state.openOnPhrase) {
         mutableStateOf(if (state.openOnPhrase) CardMode.Phrase else CardMode.Word)
     }
     val flight = LocalFlight.current
@@ -204,8 +203,12 @@ private fun CardBody(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(spacing.medium),
         ) {
-            Header(state, onPronounce, launchModifier)
-            CardModeTabs(mode = mode, onMode = { mode = it })
+            if (state.openOnPhrase) {
+                PhraseHeader(state.phraseText ?: state.context)
+            } else {
+                Header(state, onPronounce, launchModifier)
+                CardModeTabs(mode = mode, onMode = { mode = it })
+            }
             val motion = WolfyTheme.motion
             AnimatedContent(
                 targetState = mode,
@@ -378,7 +381,6 @@ private fun WordEssentials(
                 ContextPhrases(state)
                 Frequency(state.analysis.zipf)
                 FullBreakdown(state)
-                WolfyLexicalTip(state)
             }
         }
     }
@@ -621,18 +623,6 @@ private fun PhraseEssentials(
 ) {
     val spacing = WolfyTheme.spacing
     Column(verticalArrangement = Arrangement.spacedBy(spacing.medium)) {
-        // Выделенная фраза показывается отдельно и без задержки появления:
-        // читатель должен сразу видеть, что переводится/объясняется именно
-        // его выбор, а не всё предложение вокруг.
-        if (state.phraseText != null && state.phraseText != state.context) {
-            PrimaryCard(title = "Выделенная фраза") {
-                Text(
-                    state.phraseText,
-                    style = WolfyTheme.typography.translation,
-                    color = WolfyTheme.colors.ink,
-                )
-            }
-        }
         Appear(0) {
             PrimaryCard(title = "Фраза и части речи") {
                 if (state.chunks.isNotEmpty()) {
@@ -663,7 +653,6 @@ private fun PhraseEssentials(
                         onOpen = onOpenRule,
                     )
                 }
-                WolfyPhraseTip(state)
             }
         }
         Appear(3) { BetaPhraseExplanation(state.betaExplanation, onExplainPhrase) }
@@ -1015,69 +1004,6 @@ private fun GrammarNote(finding: Finding, onOpen: () -> Unit) {
     }
 }
 
-@Composable
-private fun WolfyLexicalTip(state: WordCardState) {
-    val tip = when {
-        !state.analysis.known -> "Вульфи: слово редкое или авторское. Сначала проверь контекст, а затем перевод."
-        state.analysis.form == "irregular" -> "Вульфи: это неправильная форма. Запоминай её вместе с леммой."
-        state.analysis.zipf >= 5f -> "Вульфи: частое слово. Полезнее запомнить его в этой фразе, чем отдельно."
-        else -> "Вульфи: слово книжное. Сохрани пример, если оборот хочется использовать самому."
-    }
-    // Подсказка остаётся короткой и появляется только по желанию в раскрытии.
-    WolfyTip(tip)
-}
-
-@Composable
-private fun WolfyPhraseTip(state: WordCardState) {
-    val tip = if (state.grammar.isEmpty()) {
-        "Вульфи: здесь важнее порядок и смысл слов, чем отдельное грамматическое правило."
-    } else {
-        "Вульфи: цвет показывает часть речи, а скобка соединяет слова, которые работают вместе."
-    }
-    WolfyTip(tip)
-}
-
-@Composable
-private fun WolfyTip(text: String) {
-    var reply by remember { mutableStateOf("") }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(
-                WolfyTheme.colors.paper,
-                RoundedCornerShape(WolfyTheme.spacing.medium),
-            )
-            .border(
-                WolfyTheme.spacing.rule,
-                WolfyTheme.colors.rule,
-                RoundedCornerShape(WolfyTheme.spacing.medium),
-            )
-            .padding(WolfyTheme.spacing.small),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(WolfyTheme.spacing.medium),
-    ) {
-        // Крупнее подписи рядом: Вульфи единственное живое на карточке, и
-        // размером с иконку он читался как значок, а не как зверь, которого
-        // можно погладить.
-        WolfyCompanion(
-            size = 72.dp,
-            onPet = {
-                reply = listOf("Вууу!", "Ты ж мой сладенький!", "Сохрани фразу целиком — так её легче вспомнить.").random()
-            },
-        )
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(WolfyTheme.spacing.small),
-        ) {
-            Text(
-                text.removePrefix("Вульфи: "),
-                style = WolfyTheme.typography.body,
-                color = WolfyTheme.colors.ink,
-            )
-            if (reply.isNotBlank()) Text(reply, style = WolfyTheme.typography.caption, color = WolfyTheme.colors.accent)
-        }
-    }
-}
 
 @Composable
 private fun Header(state: WordCardState, onPronounce: () -> Unit, wordModifier: Modifier) {
@@ -1343,6 +1269,14 @@ private fun CopyQuote(sentence: String, translation: String) {
             feedback = if (clipboard.put(quote, clipboardLabel)) CopyFeedback.Copied else CopyFeedback.Failed
         },
     )
+}
+
+@Composable
+private fun PhraseHeader(text: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(WolfyTheme.spacing.small)) {
+        SectionLabel("Выбранная фраза")
+        Text(text, style = WolfyTheme.typography.translation, color = WolfyTheme.colors.ink)
+    }
 }
 
 private enum class CopyFeedback { Idle, Copied, Failed }

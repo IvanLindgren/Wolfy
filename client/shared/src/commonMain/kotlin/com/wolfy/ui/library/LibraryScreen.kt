@@ -1,6 +1,7 @@
 package com.wolfy.ui.library
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -30,7 +32,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -245,12 +252,14 @@ private fun LibraryHeader(
                     color = colors.accent,
                     modifier = Modifier.pressable(onClick = onImport),
                 )
-                Text(
-                    text = if (recognizing) "…" else "📷",
-                    style = WolfyTheme.typography.button,
-                    color = if (recognizing) colors.inkMuted else colors.accent,
-                    modifier = Modifier.pressable(enabled = !recognizing, onClick = onCameraHelp),
-                )
+                if (recognizing) {
+                    Text("…", style = WolfyTheme.typography.button, color = colors.inkMuted)
+                } else {
+                    CameraGlyph(
+                        tint = colors.accent,
+                        modifier = Modifier.pressable(onClick = onCameraHelp),
+                    )
+                }
             }
         }
         // Каталог — третий способ пополнить библиотеку: без файла на руках и
@@ -291,6 +300,34 @@ private fun LibraryHeader(
                 color = colors.inkMuted,
             )
         }
+    }
+}
+
+/** Простая газетная пиктограмма без системного emoji и его чужого шрифта. */
+@Composable
+private fun CameraGlyph(tint: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier.size(24.dp)) {
+        val stroke = (size.minDimension * 0.075f).coerceAtLeast(1f)
+        drawRoundRect(
+            color = tint,
+            topLeft = Offset(size.width * 0.08f, size.height * 0.25f),
+            size = Size(size.width * 0.84f, size.height * 0.62f),
+            cornerRadius = CornerRadius(size.minDimension * 0.10f),
+            style = Stroke(stroke),
+        )
+        drawRoundRect(
+            color = tint,
+            topLeft = Offset(size.width * 0.30f, size.height * 0.13f),
+            size = Size(size.width * 0.30f, size.height * 0.18f),
+            cornerRadius = CornerRadius(size.minDimension * 0.06f),
+            style = Stroke(stroke),
+        )
+        drawCircle(
+            color = tint,
+            radius = size.minDimension * 0.17f,
+            center = Offset(size.width * 0.50f, size.height * 0.56f),
+            style = Stroke(stroke),
+        )
     }
 }
 

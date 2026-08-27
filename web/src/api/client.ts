@@ -457,10 +457,77 @@ export interface SyncPayload {
   cards: SyncCard[]
   /** Настройки чтения целиком: полтора десятка полей, меняющихся вместе. */
   reading?: unknown
+  /** Файлы передаются отдельно кусками, здесь лежит только их доступность. */
+  files?: SyncBookFile[]
+}
+
+export interface SyncBookFile {
+  bookId: string
+  fileName: string
+  size: number
+  sha256: string
 }
 
 export async function sync(payload: SyncPayload): Promise<SyncPayload> {
   return request<SyncPayload>('/v1/sync', { method: 'POST', body: payload })
+}
+
+/** Отправляет один кусок книги, не превращая бинарный файл в JSON или Base64. */
+export async function uploadBookChunk(
+  bookId: string,
+  fileName: string,
+  sha256: string,
+  offset: number,
+  total: number,
+  chunk: Uint8Array,
+): Promise<void> {
+  let response: Response
+  try {
+    response = await fetch(`/v1/books/${encodeURIComponent(bookId)}/file`, {
+      method: 'PUT',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'X-Wolfy-File-Name': fileName,
+        'X-Wolfy-SHA256': sha256,
+        'X-Wolfy-Offset': String(offset),
+        'X-Wolfy-Total': String(total),
+      },
+      body: chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength) as ArrayBuffer,
+    })
+  } catch {
+    throw new OfflineError()
+  }
+  if (!response.ok) throw await binaryApiError(response)
+}
+
+/** Получает ограниченный Range, чтобы большой файл не создавал лишних копий. */
+export async function downloadBookChunk(
+  bookId: string,
+  offset: number,
+  maxBytes: number,
+): Promise<Uint8Array> {
+  let response: Response
+  try {
+    response = await fetch(`/v1/books/${encodeURIComponent(bookId)}/file`, {
+      credentials: 'same-origin',
+      headers: { Range: `bytes=${offset}-${offset + maxBytes - 1}` },
+    })
+  } catch {
+    throw new OfflineError()
+  }
+  if (!response.ok) throw await binaryApiError(response)
+  return new Uint8Array(await response.arrayBuffer())
+}
+
+async function binaryApiError(response: Response): Promise<ApiError> {
+  const text = await response.text()
+  const problem = (text ? safeParse(text) : null) as { error?: string; message?: string; code?: string } | null
+  return new ApiError(
+    response.status,
+    problem?.message || problem?.error || `Сервер ответил ${response.status}`,
+    problem?.code ?? '',
+  )
 }
 
 // --- Страница по фото -------------------------------------------------------

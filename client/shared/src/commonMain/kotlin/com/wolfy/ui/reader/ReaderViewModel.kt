@@ -774,6 +774,50 @@ class ReaderViewModel(
         analysisJob?.cancel()
         definitionJob?.cancel()
         translationJob?.cancel()
+
+        // Выделенная фраза должна пройти тот же локальный синтаксический
+        // разбор, что и предложение в карточке слова. Раньше здесь запускался
+        // только перевод, поэтому вкладка «Фраза» оставалась пустой и выглядела
+        // как карточка одного длинного слова.
+        analysisJob = viewModelScope.launch {
+            val inspected = withContext(Dispatchers.Default) {
+                runCatching { core.inspectWord(first.text, phraseText) }.getOrNull()
+            }
+            if (inspected != null) {
+                _state.update { current ->
+                    val card = current.card ?: return@update current
+                    if (!ownsCard(session, id, request, block, synthetic)) return@update current
+                    current.copy(
+                        card = card.copy(
+                            grammar = inspected.findings,
+                            sentenceTokens = inspected.toTokens(phraseText),
+                            chunks = inspected.chunks,
+                            markers = inspected.markers,
+                            graphWords = inspected.graphWords.map { GraphWord(it.text, it.tag) },
+                            graphLinks = inspected.graphLinks.map { GraphLink(it.from, it.to, it.label) },
+                        ),
+                    )
+                }
+            } else {
+                // Старые сборки ядра могут не поддерживать inspectWord. Даже
+                // тогда показываем части фразы и найденные правила.
+                val grammar = withContext(Dispatchers.Default) { runCatching { core.explain(phraseText) }.getOrNull() }
+                val tokens = withContext(Dispatchers.Default) { runCatching { core.tokenize(phraseText).tokens }.getOrDefault(emptyList()) }
+                _state.update { current ->
+                    val card = current.card ?: return@update current
+                    if (!ownsCard(session, id, request, block, synthetic)) return@update current
+                    current.copy(
+                        card = card.copy(
+                            grammar = grammar?.findings.orEmpty(),
+                            sentenceTokens = tokens,
+                            chunks = grammar?.chunks.orEmpty(),
+                            markers = grammar?.markers.orEmpty(),
+                        ),
+                    )
+                }
+            }
+        }
+
         translationJob = viewModelScope.launch {
             val result = api.translate(phraseText)
             _state.update { current ->
@@ -821,26 +865,38 @@ class ReaderViewModel(
         if (_state.value.recap is StoryRecapState.Loading) return
         _state.update { it.copy(recap = StoryRecapState.Loading) }
         viewModelScope.launch {
-            val snapshot = _state.value
-            val excerpt = withContext(Dispatchers.Default) {
-                val pieces = mutableListOf<String>()
-                var left = RECAP_CHARS
-                var index = snapshot.chapterIndex
-                while (index >= 0 && left > 0) {
-                    val text = if (index == snapshot.chapterIndex) snapshot.blocks.joinToString("\n\n") { it.text }
-                    else runCatching { core.readChapter(opened, index).plainText() }.getOrDefault("")
-                    if (text.isNotBlank()) { pieces += text.takeLast(left); left -= text.length }
-                    index--
+            try {
+                val snapshot = _state.value
+                val excerpt = withContext(Dispatchers.Default) {
+                    val pieces = mutableListOf<String>()
+                    var left = RECAP_CHARS
+                    var index = snapshot.chapterIndex
+                    while (index >= 0 && left > 0) {
+                        val text = if (index == snapshot.chapterIndex) snapshot.blocks.joinToString("\n\n") { it.text }
+                        else runCatching { core.readChapter(opened, index).plainText() }.getOrDefault("")
+                        if (text.isNotBlank()) { pieces += text.takeLast(left); left -= text.length }
+                        index--
+                    }
+                    pieces.asReversed().joinToString("\n\n")
                 }
-                pieces.asReversed().joinToString("\n\n")
-            }
-            val result = api.recap(snapshot.bookTitle, excerpt)
-            _state.update { current ->
-                if (!owns(session, id)) current
-                else current.copy(recap = when (result) {
-                    is AiRecapResult.Ready -> StoryRecapState.Ready(result.value)
-                    is AiRecapResult.Failed -> StoryRecapState.Failed(result.message)
-                })
+                if (excerpt.length < 200) {
+                    _state.update { current ->
+                        if (owns(session, id)) current.copy(recap = StoryRecapState.Failed("Пока слишком мало текста для пересказа.")) else current
+                    }
+                    return@launch
+                }
+                val result = api.recap(snapshot.bookTitle, excerpt)
+                _state.update { current ->
+                    if (!owns(session, id)) current
+                    else current.copy(recap = when (result) {
+                        is AiRecapResult.Ready -> StoryRecapState.Ready(result.value)
+                        is AiRecapResult.Failed -> StoryRecapState.Failed(result.message)
+                    })
+                }
+            } catch (_: Throwable) {
+                _state.update { current ->
+                    if (owns(session, id)) current.copy(recap = StoryRecapState.Failed("Не удалось собрать сюжет. Попробуйте ещё раз.")) else current
+                }
             }
         }
     }

@@ -5,6 +5,7 @@ import * as api from '../api/client'
 import { session, useSession } from '../core/session'
 import type { AppSettings, Card, LibraryBook } from '../core/types'
 import { useAccount } from '../account/useAccount'
+import { readBook } from '../storage/opfs'
 
 interface SyncState {
   running: boolean
@@ -47,6 +48,7 @@ async function exchange(): Promise<boolean> {
       response.cards.map((card) => cardFromWire(card, knownCards.get(card.id))),
       sent,
     )
+    await syncBookFiles(response.files ?? [])
     if (!hasLocalReadingChoices(state.settings) && isSettings(response.reading)) {
       await session.replaceSettings(response.reading)
     }
@@ -57,6 +59,70 @@ async function exchange(): Promise<boolean> {
     useSyncState.setState({ running: false, error: error instanceof Error ? error.message : 'Синхронизация не состоялась.' })
     return false
   }
+}
+
+const FILE_CHUNK_BYTES = 1024 * 1024
+const MAX_SYNC_FILE_BYTES = 256 * 1024 * 1024
+
+async function syncBookFiles(remoteFiles: api.SyncBookFile[]): Promise<void> {
+  const remote = new Map(remoteFiles.map((file) => [file.bookId, file]))
+  const books = session.books().filter((book) => !book.deleted)
+
+  // Сначала публикуем файлы этого браузера. Вычисляется SHA самого хранимого
+  // представления: у PDF веб хранит извлечённый текст, который тоже можно
+  // безопасно открыть на телефоне и компьютере.
+  for (const book of books) {
+    if (!book.path || remote.has(book.id)) continue
+    const bytes = await readBook(book.path)
+    if (!bytes?.byteLength || bytes.byteLength > MAX_SYNC_FILE_BYTES) continue
+    const sha256 = await digest(bytes)
+    const fileName = syncedFileName(book)
+    for (let offset = 0; offset < bytes.byteLength; offset += FILE_CHUNK_BYTES) {
+      await api.uploadBookChunk(
+        book.id,
+        fileName,
+        sha256,
+        offset,
+        bytes.byteLength,
+        bytes.subarray(offset, Math.min(offset + FILE_CHUNK_BYTES, bytes.byteLength)),
+      )
+    }
+  }
+
+  // Затем восстанавливаем локально отсутствующие книги. Размер и SHA берутся
+  // из подписанных сессией метаданных и проверяются до передачи в воркер.
+  for (const book of session.books().filter((item) => !item.deleted && !item.path)) {
+    const file = remote.get(book.id)
+    if (!file || file.size <= 0 || file.size > MAX_SYNC_FILE_BYTES) continue
+    const bytes = new Uint8Array(file.size)
+    let offset = 0
+    while (offset < file.size) {
+      const chunk = await api.downloadBookChunk(book.id, offset, Math.min(FILE_CHUNK_BYTES, file.size - offset))
+      if (!chunk.byteLength || offset + chunk.byteLength > file.size) throw new Error('Сервер вернул неполный файл книги.')
+      bytes.set(chunk, offset)
+      offset += chunk.byteLength
+    }
+    if ((await digest(bytes)).toLowerCase() !== file.sha256.toLowerCase()) {
+      throw new Error('Файл книги повреждён при загрузке.')
+    }
+    const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+    // PDF.js остаётся ленивым: синхронизация обычного EPUB не должна тянуть
+    // тяжёлый PDF-парсер в стартовую оболочку сайта.
+    const { attachSyncedBook } = await import('../library/import')
+    await attachSyncedBook(book, buffer, file.fileName)
+  }
+}
+
+async function digest(bytes: Uint8Array): Promise<string> {
+  const view = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+  const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', view))
+  return Array.from(hash, (part) => part.toString(16).padStart(2, '0')).join('')
+}
+
+function syncedFileName(book: LibraryBook): string {
+  const leaf = book.path.split('/').pop() ?? ''
+  const extension = leaf.includes('.') ? leaf.split('.').pop()!.replace(/[^a-z0-9]/gi, '').toLowerCase() : ''
+  return `book-${book.id}${extension ? `.${extension}` : ''}`
 }
 
 export function SyncController() {

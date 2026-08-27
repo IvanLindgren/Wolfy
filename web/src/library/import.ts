@@ -1,9 +1,9 @@
 /**
  * Добавление книги: файл → библиотека.
  *
- * Книга остаётся на устройстве. Она не загружается на сервер ни целиком, ни
- * кусками: сервер знает, что вы читаете «Гэтсби» и на какой вы главе, но
- * самого файла у него нет и не будет. Книга пользователя — его файл.
+ * Книга сначала сохраняется на устройстве. Авторизованная синхронизация затем
+ * передаёт её защищённому серверу кусками, чтобы другое устройство могло
+ * продолжить чтение без повторного поиска исходного файла.
  *
  * Заводить ли книгу заново, решает **ядро** по отпечатку содержимого, и
  * решает до записи: книга, приехавшая синхронизацией с другого устройства,
@@ -33,6 +33,25 @@ export const ACCEPTED = '.epub,.txt,.pdf,application/epub+zip,application/pdf,te
 const MAX_SOURCE_BYTES = 80 * 1024 * 1024
 const MAX_TXT_BYTES = 10 * 1024 * 1024
 const TOO_LARGE_MSG = 'Книга слишком велика для безопасной обработки'
+
+/** Подключает файл, приехавший с другого устройства, к уже известной книге. */
+export async function attachSyncedBook(
+  book: LibraryBook,
+  bytes: ArrayBuffer,
+  fileName: string,
+): Promise<void> {
+  const extension = fileName.split('.').pop()?.toLowerCase() ?? book.format.toLowerCase()
+  const opened = extension === 'pdf'
+    ? await bridge.importPages(book.id, book.title, await extractPdfPages(bytes))
+    : await bridge.importBook(book.id, fileName, bytes)
+  await session.attachFile(book.id, opened.path, book.sourceKey)
+  await session.describe(
+    book.id,
+    book.title || opened.title || 'Без названия',
+    book.author ?? opened.author,
+    opened.chapters.length,
+  )
+}
 
 function checkSourceSize(size: number, detail?: string): string | null {
   if (size > MAX_SOURCE_BYTES) {

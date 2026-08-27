@@ -445,8 +445,8 @@ fun ReaderScreen(
         if (state.recap !is StoryRecapState.Idle) {
             // Лист снизу: то же место, где карточка слова, — а не случайный
             // угол, из которого он перекрывает текст.
-            Box(Modifier.fillMaxWidth().align(Alignment.BottomCenter)) {
-                StoryRecapSheet(state.recap, onDismissRecap)
+            Box(Modifier.fillMaxWidth().align(Alignment.BottomCenter).zIndex(2f)) {
+                StoryRecapSheet(state.recap, onRecap, onDismissRecap)
             }
         }
         if (researchOpen) {
@@ -698,7 +698,7 @@ private fun <T> QuickChoice(
 }
 
 @Composable
-private fun StoryRecapSheet(state: StoryRecapState, onDismiss: () -> Unit) {
+private fun StoryRecapSheet(state: StoryRecapState, onRetry: () -> Unit, onDismiss: () -> Unit) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
     // Итог с событиями может быть длинным, а экран — коротким. Задавленная
@@ -723,7 +723,10 @@ private fun StoryRecapSheet(state: StoryRecapState, onDismiss: () -> Unit) {
         Text("ИИ может ошибаться. До 10 запросов в день.", style = WolfyTheme.typography.caption, color = colors.inkMuted)
         when (state) {
             StoryRecapState.Loading -> Text("Gemini собирает события…", style = WolfyTheme.typography.body, color = colors.inkMuted)
-            is StoryRecapState.Failed -> Text(state.message, style = WolfyTheme.typography.caption, color = colors.accent)
+            is StoryRecapState.Failed -> {
+                Text(state.message, style = WolfyTheme.typography.caption, color = colors.accent)
+                Text("Попробовать снова", style = WolfyTheme.typography.button, color = colors.accent, modifier = Modifier.pressable(onClick = onRetry))
+            }
             is StoryRecapState.Ready -> {
                 Text(state.value.summary, style = WolfyTheme.typography.body, color = colors.ink)
                 state.value.events.forEachIndexed { index, event ->
@@ -761,9 +764,10 @@ private fun ResearchSheet(
             verticalArrangement = Arrangement.spacedBy(spacing.small),
         ) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Исследование", style = WolfyTheme.typography.bookTitle, color = colors.ink)
+                Text("Исследование · Beta", style = WolfyTheme.typography.bookTitle, color = colors.ink)
                 Text("закрыть", style = WolfyTheme.typography.caption, color = colors.accent, modifier = Modifier.pressable(onClick = onDismiss))
             }
+            Text("ИИ может ошибаться. До 2 исследований в неделю.", style = WolfyTheme.typography.caption, color = colors.inkMuted)
             when (state) {
                 ReaderResearchState.Idle -> Text("Собираем исследование…", style = WolfyTheme.typography.body, color = colors.inkMuted)
                 // Подготовка может занять несколько секунд на большой книге:
