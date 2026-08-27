@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "packId": "notionists-v1",
+  "displayName": "Notionists v1",
+  "creator": "Zoish / Heyzoish",
+  "sourceUrl": "https://heyzoish.gumroad.com/l/notionists",
+  "license": {
+    "spdx": "CC0-1.0",
+    "url": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  "runtimeReady": false,
+  "sourceInventory": {
+    "vector": {
+      "accessories": 2,
+      "base": 1,
+      "beards": 13,
+      "bodies": 56,
+      "brows": 14,
+      "eyes": 32,
+      "gestures": 11,
+      "hair": 59,
+      "mouths": 31,
+      "noses": 21,
+      "examples": 18,
+      "total": 258
+    },
+    "raster": {
+      "accessories": 2,
+      "base": 1,
+      "beards": 13,
+      "bodies": 56,
+      "brows": 14,
+      "eyes": 32,
+      "gestures": 11,
+      "hair": 59,
+      "mouths": 31,
+      "noses": 21,
+      "examples": 18,
+      "total": 258
+    }
+  },
+  "generatedConcepts": [
+    {
+      "id": "outfit-concepts-01",
+      "category": "outfits",
+      "path": "generated/outfits/outfit-concepts-01.png",
+      "runtimeReady": false
+    },
+    {
+      "id": "accessory-concepts-01",
+      "category": "accessories",
+      "path": "generated/accessories/accessory-concepts-01.png",
+      "runtimeReady": false
+    },
+    {
+      "id": "hair-concepts-01",
+      "category": "hair",
+      "path": "generated/hair/hair-concepts-01.png",
+      "runtimeReady": false
+    },
+    {
+      "id": "reading-pose-concepts-01",
+      "category": "poses",
+      "path": "generated/poses/reading-pose-concepts-01.png",
+      "runtimeReady": false
+    }
+  ],
+  "integrationBlockers": [
+    "Generated concept sheets have a baked checkerboard background and no alpha channel.",
+    "Source components do not yet share a documented canonical view box and anchor contract.",
+    "Approved outfit and pose concepts must be redrawn as composable vectors.",
+    "A runtime asset manifest and automated geometry validator must be created before packaging."
+  ]
+}
+

@@ -113,6 +113,10 @@ jobs:
           go vet ./...
           go test -p 1 ./...
 
+      - name: Validate companion runtime pack
+        shell: bash
+        run: node tools/companions/validate.mjs
+
       - name: Install web dependencies
         working-directory: web
         run: npm ci

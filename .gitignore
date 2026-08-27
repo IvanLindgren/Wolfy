@@ -71,3 +71,9 @@ WOLFY_OPTIM.txt
 # Ћокальные сборки APK и прочие артефакты доставки
 Wolfy-*.apk
 release-download/
+
+# “€жЄлые исходники компаньонов: живут в рабочей копии у владельца, в git не нужны
+client/assets/companions/notionists-v1/raw/
+client/assets/companions/notionists-v1/library/raster/
+client/assets/companions/notionists-v1/generated/
+client/assets/companions/notionists-v1/library/examples/raster/
