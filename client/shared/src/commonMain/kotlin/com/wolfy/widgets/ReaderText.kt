@@ -1,6 +1,5 @@
 package com.wolfy.widgets
 
-import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
@@ -11,8 +10,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.positionChange
-import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
@@ -25,6 +22,7 @@ import androidx.compose.material3.Text
 import com.wolfy.ffi.ParsedText
 import com.wolfy.ffi.Token
 import com.wolfy.theme.WolfyTheme
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Абзац книги, в котором можно тапнуть по слову и выделить фразу.
@@ -221,29 +219,28 @@ private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.tou
     val slop = viewConfiguration.touchSlop
     while (true) {
         val down = awaitFirstDown(requireUnconsumed = false)
-        val startTime = down.uptimeMillis
-
-        // Ждём конца долгого нажатия: любое движение сильнее slop отменяет
-        // кандидатуру — это прокрутка, и её нельзя блокировать.
+        // Ожидание ограничено настоящим таймером. `awaitPointerEvent` само не
+        // присылает кадров, пока палец неподвижен, поэтому проверка времени
+        // только внутри цикла превращала спокойный long press в обычный тап.
         var moved = false
-        var held = false
         var lifted = false
-        while (true) {
-            val event = awaitPointerEvent()
-            val change = event.changes.firstOrNull() ?: break
-            if (!change.pressed) {
-                lifted = true
-                break
-            }
-            if (change.uptimeMillis - startTime >= longPressMillis) {
-                held = true
-                break
-            }
-            if (change.positionChange().getDistance() > slop) {
-                moved = true
-                break
+        val eventBeforeDeadline = withTimeoutOrNull(longPressMillis) {
+            while (true) {
+                val event = awaitPointerEvent()
+                val change = event.changes.firstOrNull { it.id == down.id } ?: continue
+                if (!change.pressed) {
+                    lifted = true
+                    return@withTimeoutOrNull true
+                }
+                // Считаем путь от исходной точки, а не маленькую дельту одного
+                // события: медленная прокрутка тоже должна отменить long press.
+                if ((change.position - down.position).getDistance() > slop) {
+                    moved = true
+                    return@withTimeoutOrNull true
+                }
             }
         }
+        val held = eventBeforeDeadline == null && !lifted && !moved
 
         val result = layout() ?: continue
         val anchor = result.getOffsetForPosition(down.position) + shift
@@ -289,37 +286,59 @@ private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.mou
     onPhraseDone: (IntRange) -> Unit,
 ) {
     val doubleWindowMs = 400L
-    var lastClickTime = 0L
-    var lastClickPos = Offset.Zero
-    val radiusPx = 12f
+    val radiusPx = viewConfiguration.touchSlop * 2f
+    var pendingClick: PendingMouseClick? = null
 
     while (true) {
-        val down = awaitFirstDown(requireUnconsumed = false)
-        val isSecondClick = down.uptimeMillis - lastClickTime < doubleWindowMs &&
-            (down.position - lastClickPos).getDistance() <= radiusPx
+        // Первый клик нельзя отдавать карточке сразу: она успевает появиться и
+        // перехватить второй. Пока есть кандидат, ждём второй down ровно окно
+        // двойного клика; по таймауту честно выполняем одиночный клик.
+        val nextDown = if (pendingClick == null) {
+            awaitFirstDown(requireUnconsumed = false)
+        } else {
+            withTimeoutOrNull(doubleWindowMs) {
+                awaitFirstDown(requireUnconsumed = false)
+            }
+        }
+        if (nextDown == null) {
+            pendingClick?.let { click ->
+                parsed.tokenAt(click.offset)?.takeIf(Token::tappable)?.let(onWordTap)
+            }
+            pendingClick = null
+            continue
+        }
+        val down = nextDown
+        val previous = pendingClick
+        val isSecondClick = previous != null &&
+            (down.position - previous.position).getDistance() <= radiusPx
 
         if (!isSecondClick) {
-            // Первый клик: запоминаем момент и место, ждём отпускания.
-            lastClickTime = down.uptimeMillis
-            lastClickPos = down.position
+            // Клик в другом месте завершает предыдущий одиночный и сам
+            // становится новым кандидатом на double click.
+            previous?.let { click ->
+                parsed.tokenAt(click.offset)?.takeIf(Token::tappable)?.let(onWordTap)
+            }
+            pendingClick = null
             var dragged = false
             while (true) {
                 val event = awaitPointerEvent()
-                val change = event.changes.firstOrNull() ?: break
-                if (change.positionChange().getDistance() > 8f) dragged = true
+                val change = event.changes.firstOrNull { it.id == down.id } ?: continue
+                if ((change.position - down.position).getDistance() > viewConfiguration.touchSlop) dragged = true
                 if (!change.pressed) break
             }
             if (!dragged) {
                 layout()?.let { result ->
-                    val token = parsed.tokenAt(result.getOffsetForPosition(down.position) + shift)
-                    if (token?.tappable == true) onWordTap(token)
+                    pendingClick = PendingMouseClick(
+                        position = down.position,
+                        offset = result.getOffsetForPosition(down.position) + shift,
+                    )
                 }
             }
             continue
         }
 
         // Второй клик: включаем выделение.
-        lastClickTime = 0L
+        pendingClick = null
         val result = layout() ?: continue
         val anchor = result.getOffsetForPosition(down.position) + shift
         var range = parsed.spanBetween(anchor, anchor)
@@ -336,6 +355,9 @@ private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.mou
         onPhraseDone(range)
     }
 }
+
+/** Первый отпущенный клик, пока ещё способный стать двойным. */
+private data class PendingMouseClick(val position: Offset, val offset: Int)
 
 /** Кусок текста между двумя точками касания, растянутый до границ слов. */
 private fun ParsedText.spanBetween(from: Int, to: Int): IntRange {

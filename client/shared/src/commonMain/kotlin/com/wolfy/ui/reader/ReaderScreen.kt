@@ -158,6 +158,14 @@ fun ReaderScreen(
     // нажатием. Признак берётся у клавиатуры: она есть на десктопе.
     val selectViaMouse = LocalKeyboard.current
 
+    // Подсветка принадлежит открытой карточке и текущей главе. Раньше она
+    // переживала закрытие карточки и на следующей главе могла подсветить
+    // случайный диапазон с теми же смещениями.
+    LaunchedEffect(state.chapterIndex) { phraseSelection.value = null }
+    LaunchedEffect(state.card == null) {
+        if (state.card == null) phraseSelection.value = null
+    }
+
     BackHandler(
         enabled = readingSettingsOpen || researchOpen || contentsOpen || state.card != null,
     ) {

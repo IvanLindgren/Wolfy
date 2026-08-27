@@ -880,7 +880,7 @@ class ReaderViewModel(
 
     private suspend fun observeResearch(session: Long, id: String, opened: Long, initial: ResearchStatus) {
         var status = initial
-        repeat(RESEARCH_STATUS_ATTEMPTS) {
+        while (owns(session, id, opened)) {
             if (!owns(session, id, opened)) return
             _state.update { it.copy(research = ReaderResearchState.Processing(status)) }
             if (status.stage == "ready") {
@@ -911,7 +911,6 @@ class ReaderViewModel(
                 }
             }
         }
-        _state.update { it.copy(research = ReaderResearchState.Processing(status)) }
     }
 
     /**
@@ -1119,6 +1118,7 @@ class ReaderViewModel(
         chapterJob = null
         anchorJob = null
         segmentJob = null
+        researchJob?.cancel()
         researchJob = null
         flushPlace()
         deckJob?.cancel()
@@ -1155,7 +1155,6 @@ class ReaderViewModel(
     private companion object {
 		const val RECAP_CHARS = 18_000
         const val RESEARCH_STATUS_DELAY = 3_000L
-        const val RESEARCH_STATUS_ATTEMPTS = 20
         /** Как редко место в книге доходит до диска. */
         const val WRITE_EVERY = 3_000L
         /** Не больше 32 MiB готовых растров на открытую книгу. */

@@ -719,7 +719,12 @@ private fun BetaPhraseExplanation(state: BetaPhraseState, onAsk: () -> Unit) {
 
 @Composable
 private fun SentenceTranslation(state: WordCardState) {
-    val translated = (state.translation as? TranslationState.Ready)?.sentence.orEmpty()
+    val ready = state.translation as? TranslationState.Ready
+    val translated = if (state.phraseText != null) {
+        ready?.word.orEmpty().ifBlank { ready?.sentence.orEmpty() }
+    } else {
+        ready?.sentence.orEmpty()
+    }
 
     when {
         translated.isNotBlank() -> Text(
