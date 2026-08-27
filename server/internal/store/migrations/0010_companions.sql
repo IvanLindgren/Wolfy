@@ -5,7 +5,7 @@
 -- миграцию ради нового слота шляпы не стоит. Сервер доверяет этому JSON
 -- только после проверки: размер ограничен, структура валидируется в library.
 CREATE TABLE IF NOT EXISTS wolfy.companions (
-    user_id uuid PRIMARY KEY REFERENCES wolfy.users(id) ON DELETE CASCADE,
+    user_id uuid PRIMARY KEY REFERENCES public.users(id) ON DELETE CASCADE,
     companion_id uuid NOT NULL,
     profile jsonb NOT NULL,
     phrase_pack jsonb,

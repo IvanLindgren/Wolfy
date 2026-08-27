@@ -1,7 +1,7 @@
 -- Набор реплик должен переживать перезапуск сервера и не генерироваться
 -- дважды при двух одновременных нажатиях с одного характера.
 CREATE TABLE IF NOT EXISTS wolfy.companion_phrase_packs (
-    user_id uuid NOT NULL REFERENCES wolfy.users(id) ON DELETE CASCADE,
+    user_id uuid NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
     profile_hash text NOT NULL,
     phrase_pack jsonb,
     status text NOT NULL CHECK (status IN ('generating', 'ready')),
