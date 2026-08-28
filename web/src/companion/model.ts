@@ -98,6 +98,7 @@ export interface CompanionProfile {
   id: string
   name: string
   pronouns?: string | null
+  presentation: 'masculine' | 'feminine' | 'neutral' | ''
   locale: string
   personality: CompanionPersonality
   mbti?: string | null
@@ -258,6 +259,7 @@ export function validateProfile(profile: CompanionProfile): string[] {
   const nameLength = [...profile.name.trim()].length
   if (nameLength < 1 || nameLength > 40) issues.push('name')
   if ([...(profile.pronouns ?? '')].length > 80) issues.push('pronouns')
+  if (!['masculine', 'feminine', 'neutral'].includes(profile.presentation)) issues.push('presentation')
   if ([...profile.description].length > 1200) issues.push('description')
   if (profile.mbti && !MBTI_CODES.includes(profile.mbti.toUpperCase())) issues.push('mbti')
   if (profile.locale !== 'ru' && profile.locale !== 'en') issues.push('locale')

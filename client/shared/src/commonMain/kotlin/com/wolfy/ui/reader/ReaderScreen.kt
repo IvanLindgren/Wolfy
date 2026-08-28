@@ -496,7 +496,7 @@ fun ReaderScreen(
                 onEditCompanion = companionOnEdit,
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .padding(bottom = 96.dp, end = 8.dp)
+                    .padding(bottom = if (selectViaMouse) 32.dp else 20.dp, end = 6.dp)
                     .zIndex(1f),
             )
         }
@@ -562,13 +562,13 @@ private fun ReaderTopBar(
                 ) {
                     ReaderActionIcon(
                         label = "Настройки чтения",
-                        icon = NavIcon.More,
+                        icon = NavIcon.Reading,
                         tint = colors.inkMuted,
                         onClick = onOpenSettings,
                     )
                     ReaderActionIcon(
                         label = "Вспомнить сюжет",
-                        icon = NavIcon.Star,
+                        icon = NavIcon.Recap,
                         tint = colors.accent,
                         onClick = onRecap,
                     )

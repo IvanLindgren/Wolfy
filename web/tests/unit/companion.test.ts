@@ -17,6 +17,7 @@ function profile(overrides: Partial<CompanionProfile> = {}): CompanionProfile {
     id: 'test',
     name: 'Лис',
     pronouns: null,
+    presentation: 'neutral',
     locale: 'ru',
     personality: { ...DEFAULT_PERSONALITY },
     mbti: null,
@@ -82,6 +83,11 @@ describe('profile validation', () => {
   it('mbti allowlist is closed', () => {
     expect(validateProfile(profile({ mbti: 'infp' }))).toHaveLength(0)
     expect(validateProfile(profile({ mbti: 'ABCD' }))).toContain('mbti')
+  })
+
+  it('requires an explicit known presentation for new profiles', () => {
+    expect(validateProfile(profile({ presentation: 'neutral' }))).toHaveLength(0)
+    expect(validateProfile(profile({ presentation: '' }))).toContain('presentation')
   })
 })
 

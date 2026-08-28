@@ -349,6 +349,38 @@
       "tags": [],
       "incompatibleWith": [],
       "anchorsVersion": 1
+    },
+    {
+      "id": "nose.01",
+      "slot": "nose",
+      "file": "layers/nose/01.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "nose.02",
+      "slot": "nose",
+      "file": "layers/nose/02.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "nose.03",
+      "slot": "nose",
+      "file": "layers/nose/03.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
+    },
+    {
+      "id": "nose.04",
+      "slot": "nose",
+      "file": "layers/nose/04.svg",
+      "tags": [],
+      "incompatibleWith": [],
+      "anchorsVersion": 1
     }
   ]
 }

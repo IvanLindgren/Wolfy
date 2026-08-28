@@ -22,6 +22,8 @@ data class CompanionProfile(
     val id: String,
     val name: String,
     val pronouns: String? = null,
+    /** Стартовый визуальный образ: не ограничивает одежду или обращение. */
+    val presentation: String = "neutral",
     /** BCP 47. На MVP приложение говорит о компаньоне на двух языках. */
     val locale: String = "ru",
     val personality: CompanionPersonality = CompanionPersonality(),
@@ -239,6 +241,7 @@ fun validateProfile(profile: CompanionProfile): ProfileIssues {
     val nameLength = profile.name.trim().unicodeLength()
     if (nameLength !in 1..MAX_NAME) issues.add("name")
     if (profile.pronouns.orEmpty().unicodeLength() > MAX_PRONOUNS) issues.add("pronouns")
+    if (profile.presentation !in PRESENTATIONS) issues.add("presentation")
     if (profile.description.unicodeLength() > MAX_DESCRIPTION) issues.add("description")
     profile.mbti?.let {
         if (it.uppercase() !in MBTI_CODES) issues.add("mbti")
@@ -251,6 +254,8 @@ fun validateProfile(profile: CompanionProfile): ProfileIssues {
     }
     return ProfileIssues(issues)
 }
+
+val PRESENTATIONS = setOf("masculine", "feminine", "neutral")
 
 /** Проверка набора реплик: контракт, который сервер держит перед отправкой. */
 fun validatePhrasePack(pack: CompanionPhrasePack): ProfileIssues {

@@ -602,7 +602,7 @@ class WolfyApi(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
-            CompanionAiResult.Failed("Нет связи с Beta-подсказкой.")
+            CompanionAiResult.Failed("Сервер Wolfy не ответил или вернул повреждённый ответ.", "network")
         }
     }
 

@@ -67,6 +67,16 @@ export function ReaderCompanion(props: ReaderCompanionProps) {
   useEffect(() => () => requestRef.current?.abort(), [])
 
   useEffect(() => {
+    if (!suppressed) return
+    requestRef.current?.abort()
+    requestRef.current = null
+    pendingConsentRef.current = null
+    setBubble(null)
+    setMenuOpen(false)
+    setSheet(null)
+  }, [suppressed])
+
+  useEffect(() => {
     engine.newSession()
     if (profile.readerMode !== 'active' || !profile.reactionsEnabled) return
     const decision = engine.decide({ kind: 'session_start' }, { sessionMinutes: 0, overlayOpen: false, scrolling: false, reactionsEnabled: true })
@@ -192,11 +202,11 @@ export function ReaderCompanion(props: ReaderCompanionProps) {
         </button>
       )}
 
-      {menuOpen && (
+      {menuOpen && !suppressed && (
         <div
           role="menu"
           style={{
-            maxWidth: 300, padding: '0.9rem', borderRadius: 12, display: 'grid', gap: '0.5rem',
+            maxWidth: compact ? 260 : 300, padding: '0.9rem', borderRadius: 12, display: 'grid', gap: '0.5rem',
             background: 'var(--paper, #F7F2E9)', border: '1px solid rgba(0,0,0,.2)', color: 'inherit',
           }}
         >
@@ -213,11 +223,11 @@ export function ReaderCompanion(props: ReaderCompanionProps) {
         </div>
       )}
 
-      {sheet && (
+      {sheet && !suppressed && (
         <div
           role="dialog"
           style={{
-            maxWidth: 340, padding: '0.9rem', borderRadius: 12, display: 'grid', gap: '0.5rem',
+            maxWidth: compact ? 300 : 340, padding: '0.9rem', borderRadius: 12, display: 'grid', gap: '0.5rem',
             background: 'var(--paper, #F7F2E9)', border: '1px solid rgba(0,0,0,.2)', color: 'inherit',
           }}
         >
@@ -304,18 +314,18 @@ export function ReaderCompanion(props: ReaderCompanionProps) {
         </div>
       )}
 
-      <button
+      {!suppressed && !menuOpen && !sheet && <button
         type="button"
         aria-label={profile.name ? `Компаньон ${profile.name}, ${characterLine(profile)}` : 'Компаньон'}
         onClick={() => { if (!suppressed) { setMenuOpen((open) => !open); setBubble(null) } }}
         style={{
           background: 'none', border: 'none', padding: 0, cursor: suppressed ? 'default' : 'pointer',
-          transform: `translate(${compact ? '70%' : '0'}, ${scrolling || suppressed ? '70%' : '0'})`,
+          transform: `translate(${compact ? '45%' : '0'}, ${scrolling ? '70%' : '0'})`,
           transition: reducedMotion ? 'none' : 'transform 350ms ease',
         }}
       >
-        <CompanionFigure appearance={profile.appearance} size={96} />
-      </button>
+        <CompanionFigure appearance={profile.appearance} size={compact ? 52 : 96} />
+      </button>}
     </div>
   )
 }

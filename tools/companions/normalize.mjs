@@ -501,9 +501,12 @@ if (process.env.DEBUG_BASE) {
     const b = body1 ? matchInExample(body1, ex) : null;
     console.log("body.01", ex.file, b ? `${b.fill} r=${b.recall.toFixed(3)} off=[${b.offset.map((v) => v.toFixed(1))}]` : "РЅРµС‚");
   }
-  for (const slot of ["hair", "beard", "gesture", "accessoryFront"]) {
-    const comp = components.find((c) => c.slot === slot && !c.id.endsWith("none"));
+  for (const slot of ["hair", "beard", "nose", "mouth", "gesture", "accessoryFront"]) {
+    const requested = process.env.DEBUG_COMPONENT;
+    const comp = components.find((c) => c.slot === slot && c.id === requested)
+      ?? components.find((c) => c.slot === slot && !c.id.endsWith("none"));
     if (!comp) continue;
+    if (requested === comp.id) console.log("component-box", comp.id, JSON.stringify(comp.box));
     const obs = [];
     for (const ex of examples) {
       const b = matchInExample(comp, ex);
@@ -511,7 +514,7 @@ if (process.env.DEBUG_BASE) {
       if (!b || !bb) continue;
       obs.push(`${ex.file}:${b.fill} r=${b.recall.toFixed(2)} rel=[${(b.offset[0] - bb.offset[0]).toFixed(0)},${(b.offset[1] - bb.offset[1]).toFixed(0)}]`);
     }
-    console.log(id, obs.join("  "));
+    console.log(comp.id, obs.join("  "));
   }
   process.exit(0);
 }
@@ -610,6 +613,90 @@ for (const comp of components) {
   if (!anchored.has(comp.slot)) anchored.set(comp.slot, []);
   anchored.get(comp.slot).push({ comp, off: can, votes: can.votes });
 }
+
+// Носы в исходном Notionists экспортированы маленькими обрезанными SVG и в
+// готовых примерах совпадают с другими короткими штрихами лица. Поэтому
+// строгий поиск геометрического отпечатка не набирает достаточно голосов и
+// раньше оставлял пользователю единственный пункт «Нет». Для этого слота
+// безопаснее канонический центр лица: итог всё равно проходит геометрический
+// валидатор и остаётся внутри окна nose.
+if (!(anchored.get("nose") ?? []).some(({ comp }) => !comp.id.endsWith(".none"))) {
+  // База нарисована в три четверти и смотрит вправо: геометрический центр
+  // головы находится заметно левее реального центра лица.
+  const targetX = baseComp.box.w * 0.67;
+  const targetY = baseComp.box.h * 0.21;
+  const noses = components
+    .filter((comp) => comp.slot === "nose" && !comp.id.endsWith(".none"))
+    .slice(0, WANTED.nose);
+  anchored.set("nose", noses.map((comp) => ({
+    comp,
+    off: {
+      dx: targetX - comp.box.w / 2,
+      dy: targetY - comp.box.h / 2,
+      votes: 0,
+      share: 0,
+    },
+    votes: 0,
+  })));
+}
+
+// Hair/11 имеет точное положение в примере 013. Без явного приоритета три
+// неточных совпадения с другими большими чёрными силуэтами побеждают одно
+// точное и поднимают причёску над головой.
+const hairOffsets = new Map([
+  ["hair.11", { dx: -264, dy: -286 }],
+]);
+const hairs = (anchored.get("hair") ?? [])
+  .filter(({ comp }) => !comp.id.endsWith(".none"))
+  .map(({ comp, off, votes }) => ({
+    comp,
+    off: hairOffsets.get(comp.id)
+      ? { ...hairOffsets.get(comp.id), votes: off.votes, share: off.share }
+      : off,
+    votes,
+  }));
+if (hairs.length > 0) anchored.set("hair", hairs);
+
+// Маленькие SVG губ геометрически почти неотличимы от коротких штрихов носа
+// и бровей. В исходных готовых персонажах это иногда даёт уверенное, но
+// неверное совпадение в верхней части лица. Рот у всех совместимых голов
+// находится в одной безопасной зоне, поэтому нормализуем найденные варианты
+// относительно её центра, сохраняя исходный размер каждого рисунка.
+const mouths = (anchored.get("mouth") ?? [])
+  .filter(({ comp }) => !comp.id.endsWith(".none"))
+  .slice(0, WANTED.mouth);
+if (mouths.length > 0) {
+  const targetX = baseComp.box.w * 0.5;
+  const targetY = baseComp.box.h * 0.38;
+  anchored.set("mouth", mouths.map(({ comp }) => ({
+    comp,
+    off: {
+      dx: targetX - comp.box.w / 2,
+      dy: targetY - comp.box.h / 2,
+      votes: 0,
+      share: 0,
+    },
+    votes: 0,
+  })));
+}
+
+// У сплошной бороды большой чёрный силуэт, поэтому поиск по маске ошибочно
+// совмещает её с волосами и одеждой. Эти смещения взяты из исходных собранных
+// персонажей: Beard/2 из примера 013, Beard/3 из примера 002.
+const beardOffsets = new Map([
+  ["beard.02", { dx: 122.5, dy: 314 }],
+  ["beard.03", { dx: 127, dy: 329 }],
+]);
+const beards = (anchored.get("beard") ?? [])
+  .filter(({ comp }) => !comp.id.endsWith(".none"))
+  .map(({ comp, off, votes }) => ({
+    comp,
+    off: beardOffsets.get(comp.id)
+      ? { ...beardOffsets.get(comp.id), votes: 0, share: 0 }
+      : off,
+    votes: beardOffsets.has(comp.id) ? 0 : votes,
+  }));
+if (beards.length > 0) anchored.set("beard", beards);
 
 
 mkdirSync(join(out, "layers"), { recursive: true });

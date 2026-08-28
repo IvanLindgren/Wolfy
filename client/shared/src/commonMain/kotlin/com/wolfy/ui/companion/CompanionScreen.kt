@@ -31,6 +31,7 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.wolfy.data.companion.CompanionPersonality
+import com.wolfy.data.companion.CompanionAppearance
 import com.wolfy.data.companion.CompanionProfile
 import com.wolfy.data.companion.PHRASE_COUNT
 import com.wolfy.data.companion.MAX_NAME
@@ -107,7 +108,7 @@ private fun Landing(onCreate: () -> Unit, onContinue: () -> Unit) {
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
             CompanionFigure(
                 appearance = LandingExample,
-                modifier = Modifier.size(200.dp),
+                modifier = Modifier.size(160.dp),
             )
         }
         Text(
@@ -195,7 +196,31 @@ private fun StepName(viewModel: CompanionViewModel) {
             modifier = Modifier.fillMaxWidth(),
             placeholder = { Text("Например: он, она, они, по имени") },
         )
-        Text("Имя и внешность ни к какому полу не привязаны: любая одежда доступна любому телу.", style = WolfyTheme.typography.caption, color = colors.inkMuted)
+        SectionLabel("Какой образ собрать?")
+        Row(horizontalArrangement = Arrangement.spacedBy(spacing.small)) {
+            for ((value, label) in PRESENTATION_OPTIONS) {
+                val selected = draft.presentation == value
+                Text(
+                    label,
+                    style = WolfyTheme.typography.caption,
+                    color = if (selected) colors.paper else colors.ink,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(spacing.huge))
+                        .background(if (selected) colors.inverse else colors.surface)
+                        .border(1.dp, colors.rule, RoundedCornerShape(spacing.huge))
+                        .pressable {
+                            viewModel.updateDraft {
+                                it.copy(
+                                    presentation = value,
+                                    appearance = presentationAppearance(it.appearance, value),
+                                )
+                            }
+                        }
+                        .padding(horizontal = spacing.medium, vertical = 8.dp),
+                )
+            }
+        }
+        Text("Это только стартовый вид. Дальше любую причёску, одежду и обращение можно выбрать независимо.", style = WolfyTheme.typography.caption, color = colors.inkMuted)
     }
 }
 
@@ -206,26 +231,24 @@ private fun StepLook(viewModel: CompanionViewModel, face: Boolean) {
     val spacing = WolfyTheme.spacing
     val slots = if (face) listOf("hair", "brows", "eyes", "nose", "mouth", "beard") else listOf("body", "accessoryFront")
     val assetsBySlot = rememberCompanionCatalog()
+    val draft = viewModel.state.editing ?: return
     Column(verticalArrangement = Arrangement.spacedBy(spacing.large)) {
         CompanionFigure(
-            appearance = viewModel.state.editing?.appearance ?: return,
+            appearance = draft.appearance,
             modifier = Modifier
-                .size(220.dp)
+                .size(160.dp)
                 .align(Alignment.CenterHorizontally),
         )
         for (slot in slots) {
             SectionLabel(CompanionCatalog.slotTitle(slot))
             val options = assetsBySlot[slot].orEmpty().map { it.id }
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(spacing.medium),
-            ) {
-                for ((index, assetId) in options.withIndex()) {
-                    val selected = viewModel.state.editing?.appearance?.asset(slot) == assetId
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(spacing.medium)) {
+                items(options) { assetId ->
+                    val selected = draft.appearance.asset(slot) == assetId
                     Box(
                         Modifier
-                            .weight(1f)
-                            .height(72.dp)
+                            .width(82.dp)
+                            .height(92.dp)
                             .clip(RoundedCornerShape(spacing.medium))
                             .background(colors.surface)
                             .border(
@@ -241,50 +264,12 @@ private fun StepLook(viewModel: CompanionViewModel, face: Boolean) {
                             .semantics { contentDescription = CompanionCatalog.label(assetId) },
                         contentAlignment = Alignment.Center,
                     ) {
-                        Text(
-                            CompanionCatalog.label(assetId),
-                            style = WolfyTheme.typography.caption,
-                            color = colors.ink,
-                            textAlign = TextAlign.Center,
-                            maxLines = 1,
+                        CompanionFigure(
+                            appearance = draft.appearance.withAsset(slot, assetId),
+                            modifier = Modifier.size(76.dp),
                         )
-                    }
-                    if (index == 3 && options.size > 4) break
-                }
-            }
-            if (options.size > 4) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(spacing.medium),
-                ) {
-                    for (assetId in options.drop(4)) {
-                        val selected = viewModel.state.editing?.appearance?.asset(slot) == assetId
-                        Box(
-                            Modifier
-                                .weight(1f)
-                                .height(72.dp)
-                                .clip(RoundedCornerShape(spacing.medium))
-                                .background(colors.surface)
-                                .border(
-                                    width = if (selected) 2.dp else 1.dp,
-                                    color = if (selected) colors.accent else colors.rule,
-                                    shape = RoundedCornerShape(spacing.medium),
-                                )
-                                .pressable(enabled = true) {
-                                    viewModel.updateDraft { draft ->
-                                        draft.copy(appearance = draft.appearance.withAsset(slot, assetId))
-                                    }
-                                }
-                                .semantics { contentDescription = CompanionCatalog.label(assetId) },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                CompanionCatalog.label(assetId),
-                                style = WolfyTheme.typography.caption,
-                                color = colors.ink,
-                                textAlign = TextAlign.Center,
-                                maxLines = 1,
-                            )
+                        if (assetId.endsWith(".none")) {
+                            Text("Нет", style = WolfyTheme.typography.caption, color = colors.inkMuted)
                         }
                     }
                 }
@@ -310,6 +295,19 @@ private fun StepLook(viewModel: CompanionViewModel, face: Boolean) {
             }
         }
     }
+}
+
+private val PRESENTATION_OPTIONS = listOf(
+    "masculine" to "Мужской",
+    "feminine" to "Женский",
+    "neutral" to "Нейтральный",
+)
+
+/** Стартовые варианты не закрывают ни один предмет в следующих шагах. */
+private fun presentationAppearance(current: CompanionAppearance, presentation: String): CompanionAppearance = when (presentation) {
+    "masculine" -> current.copy(hair = "hair.11", brows = "brows.04", eyes = "eyes.17", mouth = "mouth.01", beard = "beard.none", body = "body.20")
+    "feminine" -> current.copy(hair = "hair.01", brows = "brows.02", eyes = "eyes.17", mouth = "mouth.01", beard = "beard.none", body = "body.17")
+    else -> current.copy(hair = "hair.23", brows = "brows.01", eyes = "eyes.16", mouth = "mouth.02", beard = "beard.none", body = "body.22")
 }
 
 @Composable
@@ -421,7 +419,7 @@ private fun Review(viewModel: CompanionViewModel, onSave: () -> Unit) {
         verticalArrangement = Arrangement.spacedBy(spacing.large),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        CompanionFigure(appearance = draft.appearance, modifier = Modifier.size(240.dp))
+        CompanionFigure(appearance = draft.appearance, modifier = Modifier.size(180.dp))
         Text(draft.name, style = WolfyTheme.typography.bookTitle, color = colors.ink)
         CharacterLine(draft)
         PrimaryButton("Сохранить", onSave, enabled = viewModel.draftValid())
@@ -448,7 +446,7 @@ private fun Profile(
         CompanionFigure(
             appearance = profile.appearance,
             modifier = Modifier
-                .size(240.dp)
+                .size(180.dp)
                 .align(Alignment.CenterHorizontally),
         )
         Text(

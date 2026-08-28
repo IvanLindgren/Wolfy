@@ -30,6 +30,7 @@ type companionProfilePayload struct {
 	ID               string          `json:"id"`
 	Name             string          `json:"name"`
 	Pronouns         *string         `json:"pronouns"`
+	Presentation     string          `json:"presentation"`
 	Locale           string          `json:"locale"`
 	Personality      map[string]int  `json:"personality"`
 	MBTI             *string         `json:"mbti"`
@@ -57,6 +58,9 @@ func ValidateCompanionProfile(body json.RawMessage) error {
 	}
 	if profile.Pronouns != nil && utf8.RuneCountInString(*profile.Pronouns) > 80 {
 		return errors.New("обращение к компаньону слишком длинное")
+	}
+	if profile.Presentation != "" && profile.Presentation != "masculine" && profile.Presentation != "feminine" && profile.Presentation != "neutral" {
+		return errors.New("неизвестный стартовый образ компаньона")
 	}
 	if profile.Locale != "ru" && profile.Locale != "en" {
 		return errors.New("неизвестная локаль компаньона")

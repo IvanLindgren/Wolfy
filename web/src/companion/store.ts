@@ -21,6 +21,7 @@ function normalizeProfile(profile: CompanionProfile): CompanionProfile {
   const aiConsentAt = profile.aiConsentAt ?? 0
   return {
     ...profile,
+    presentation: profile.presentation || 'neutral',
     aiConsentAt: Number.isFinite(aiConsentAt) && aiConsentAt > 0 ? aiConsentAt : 0,
   }
 }
@@ -175,6 +176,7 @@ export function blankDraft(): CompanionProfile {
     id: newId(),
     name: '',
     pronouns: null,
+    presentation: '',
     locale: 'ru',
     personality: { ...DEFAULT_PERSONALITY },
     mbti: null,

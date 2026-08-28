@@ -50,16 +50,48 @@ func (e *ProviderError) Is(target error) bool {
 }
 
 type Service struct {
-	store           *store.Store
-	client          *http.Client
-	log             *slog.Logger
-	key, url, model string
+	store     *store.Store
+	client    *http.Client
+	log       *slog.Logger
+	providers []provider
+}
+
+type provider struct {
+	name, key, url, model string
+	structured            bool
 }
 
 func New(s *store.Store, key, url, model string, timeout time.Duration) *Service {
-	return &Service{store: s, log: slog.Default(), client: &http.Client{Timeout: timeout}, key: strings.TrimSpace(key), url: strings.TrimSpace(url), model: strings.TrimSpace(model)}
+	service := &Service{store: s, log: slog.Default(), client: &http.Client{Timeout: timeout}}
+	service.addProvider(provider{name: "primary", key: key, url: url, model: model})
+	return service
 }
-func (s *Service) Configured() bool { return s.key != "" && s.url != "" && s.model != "" }
+
+// WithOpenRouter добавляет резервные бесплатные модели. Отказ одной модели
+// не завершает пользовательский запрос: следующая пробуется в том же вызове.
+func (s *Service) WithOpenRouter(key, modelList string) *Service {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return s
+	}
+	for _, model := range strings.Split(modelList, ",") {
+		s.addProvider(provider{
+			name: "openrouter", key: key,
+			url:   "https://openrouter.ai/api/v1/chat/completions",
+			model: strings.TrimSpace(model), structured: true,
+		})
+	}
+	return s
+}
+
+func (s *Service) addProvider(p provider) {
+	p.key, p.url, p.model = strings.TrimSpace(p.key), strings.TrimSpace(p.url), strings.TrimSpace(p.model)
+	if p.key != "" && p.url != "" && p.model != "" {
+		s.providers = append(s.providers, p)
+	}
+}
+
+func (s *Service) Configured() bool { return len(s.providers) > 0 }
 
 type PhraseStep struct {
 	Label string `json:"label"`
@@ -191,40 +223,68 @@ func (s *Service) ask(ctx context.Context, prompt string) (string, error) {
 }
 
 func (s *Service) askWith(ctx context.Context, prompt string, temperature float32) (string, error) {
-	body, _ := json.Marshal(map[string]any{"model": s.model, "temperature": temperature, "messages": []map[string]string{{"role": "user", "content": prompt}}})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.url, bytes.NewReader(body))
+	var last error = ErrUnavailable
+	for _, current := range s.providers {
+		answer, err := s.askProvider(ctx, current, prompt, temperature)
+		if err == nil {
+			return answer, nil
+		}
+		last = err
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	return "", last
+}
+
+func (s *Service) askProvider(ctx context.Context, current provider, prompt string, temperature float32) (string, error) {
+	payload := map[string]any{
+		"model": current.model, "temperature": temperature,
+		"messages": []map[string]string{{"role": "user", "content": prompt}},
+	}
+	if current.structured {
+		// Все резервные модели в дефолтном списке заявляют structured output.
+		// JSON mode резко сокращает долю ответов с markdown-обёрткой.
+		payload["response_format"] = map[string]string{"type": "json_object"}
+	}
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, current.url, bytes.NewReader(body))
 	if err != nil {
 		return "", &ProviderError{Kind: FailProvider}
 	}
-	req.Header.Set("Authorization", "Bearer "+s.key)
+	req.Header.Set("Authorization", "Bearer "+current.key)
 	req.Header.Set("Content-Type", "application/json")
+	if current.name == "openrouter" {
+		req.Header.Set("HTTP-Referer", "https://wolfy.citavuk.ru")
+		req.Header.Set("X-Title", "Wolfy")
+	}
 	resp, err := s.client.Do(req)
 	if err != nil {
 		// Ключ и текст книги в лог не пишутся никогда: здесь важны только
 		// вид отказа и модель, по ним чинят конфигурацию.
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || isTimeout(err) {
-			s.log.Warn("gemini не ответил вовремя", "kind", FailTimeout, "model", s.model)
+			s.log.Warn("ии-провайдер не ответил вовремя", "provider", current.name, "kind", FailTimeout, "model", current.model)
 			return "", &ProviderError{Kind: FailTimeout}
 		}
-		s.log.Warn("gemini недоступен", "kind", FailProvider, "error", err.Error(), "model", s.model)
+		s.log.Warn("ии-провайдер недоступен", "provider", current.name, "kind", FailProvider, "error", err.Error(), "model", current.model)
 		return "", &ProviderError{Kind: FailProvider}
 	}
 	defer resp.Body.Close()
 	switch {
 	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-		s.log.Warn("gemini отверг ключ", "kind", FailKey, "status", resp.StatusCode)
+		s.log.Warn("ии-провайдер отверг ключ", "provider", current.name, "kind", FailKey, "status", resp.StatusCode)
 		return "", &ProviderError{Kind: FailKey, Status: resp.StatusCode}
 	case resp.StatusCode == http.StatusNotFound:
-		s.log.Warn("gemini не нашёл модель или адрес", "kind", FailModel, "status", resp.StatusCode, "model", s.model)
+		s.log.Warn("ии-провайдер не нашёл модель или адрес", "provider", current.name, "kind", FailModel, "status", resp.StatusCode, "model", current.model)
 		return "", &ProviderError{Kind: FailModel, Status: resp.StatusCode}
 	case resp.StatusCode == http.StatusTooManyRequests:
-		s.log.Warn("gemини лимит исчерпан", "kind", FailLimit, "status", resp.StatusCode)
+		s.log.Warn("лимит ии-провайдера исчерпан", "provider", current.name, "kind", FailLimit, "status", resp.StatusCode)
 		return "", &ProviderError{Kind: FailLimit, Status: resp.StatusCode}
 	case resp.StatusCode >= 500:
-		s.log.Warn("gemини сбой провайдера", "kind", FailProvider, "status", resp.StatusCode)
+		s.log.Warn("сбой ии-провайдера", "provider", current.name, "kind", FailProvider, "status", resp.StatusCode)
 		return "", &ProviderError{Kind: FailProvider, Status: resp.StatusCode}
 	case resp.StatusCode != http.StatusOK:
-		s.log.Warn("gemини неожиданный статус", "kind", FailProvider, "status", resp.StatusCode)
+		s.log.Warn("неожиданный статус ии-провайдера", "provider", current.name, "kind", FailProvider, "status", resp.StatusCode)
 		return "", &ProviderError{Kind: FailProvider, Status: resp.StatusCode}
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 128<<10))
@@ -239,10 +299,16 @@ func (s *Service) askWith(ctx context.Context, prompt string, temperature float3
 		} `json:"choices"`
 	}
 	if json.Unmarshal(raw, &decoded) != nil || len(decoded.Choices) == 0 {
-		s.log.Warn("ответ gemini не разобран", "kind", FailBadJSON, "bytes", len(raw))
+		s.log.Warn("ответ ии-провайдера не разобран", "provider", current.name, "kind", FailBadJSON, "bytes", len(raw))
 		return "", &ProviderError{Kind: FailBadJSON}
 	}
-	return decoded.Choices[0].Message.Content, nil
+	content := decoded.Choices[0].Message.Content
+	var object map[string]json.RawMessage
+	if json.Unmarshal(cleanJSON(content), &object) != nil || len(object) == 0 {
+		s.log.Warn("ии-провайдер вернул не JSON-объект", "provider", current.name, "kind", FailBadJSON, "model", current.model)
+		return "", &ProviderError{Kind: FailBadJSON}
+	}
+	return content, nil
 }
 
 // isTimeout отличает сетевой таймаут от прочих ошибок транспорта.

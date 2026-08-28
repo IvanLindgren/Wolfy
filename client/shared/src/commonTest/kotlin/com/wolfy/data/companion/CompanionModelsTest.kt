@@ -62,6 +62,13 @@ class CompanionModelsTest {
     }
 
     @Test
+    fun creationRequiresKnownPresentation() {
+        assertTrue(validateProfile(profile().copy(presentation = "neutral")).valid)
+        assertFalse(validateProfile(profile().copy(presentation = "")).valid)
+        assertFalse(validateProfile(profile().copy(presentation = "unknown")).valid)
+    }
+
+    @Test
     fun canonicalHashIsStableAgainstKeyOrder() {
         // Хеш строится по фиксированному порядку ключей, поэтому одинаковый
         // характер даёт одинаковый хеш независимо от истории правок.

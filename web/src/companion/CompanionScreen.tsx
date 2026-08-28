@@ -55,13 +55,25 @@ export function CompanionScreen() {
       {step >= 1 && step <= 6 && (
         <div style={{ display: 'grid', gap: '1.5rem', justifyItems: 'center' }}>
           <div style={{ background: 'var(--paper, #F7F2E9)', padding: '1rem', borderRadius: '1rem', border: '1px solid rgba(0,0,0,.15)' }}>
-            <CompanionFigure appearance={profile.appearance} size={220} />
+            <CompanionFigure appearance={profile.appearance} size={160} />
           </div>
           {step === 1 && (
             <div style={{ display: 'grid', gap: '.75rem', width: 'min(28rem, 100%)' }}>
               <input value={profile.name} placeholder="Как его зовут?" onChange={(event) => update((draft) => ({ ...draft, name: [...event.target.value].slice(0, 40).join('') }))} aria-label="Имя" />
               <input value={profile.pronouns ?? ''} placeholder="Обращение, необязательно" onChange={(event) => update((draft) => { const value = [...event.target.value].slice(0, 80).join(''); return { ...draft, pronouns: value || null } })} aria-label="Обращение" />
-              <small>Имя и внешность ни к какому полу не привязаны: любая одежда доступна любому телу.</small>
+              <strong>Какой образ собрать?</strong>
+              <div style={{ display: 'flex', gap: '.5rem', flexWrap: 'wrap' }}>
+                {PRESENTATION_OPTIONS.map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    aria-pressed={profile.presentation === value}
+                    data-active={profile.presentation === value}
+                    onClick={() => update((draft) => ({ ...draft, presentation: value, appearance: presentationAppearance(draft.appearance, value) }))}
+                  >{label}</button>
+                ))}
+              </div>
+              <small>Это только стартовый вид. Дальше любую причёску, одежду и обращение можно выбрать независимо.</small>
               {issues.includes('name') && profile.name.length > 0 && <small role="status">Имя обязательно, до 40 знаков.</small>}
             </div>
           )}
@@ -132,7 +144,7 @@ export function CompanionScreen() {
           <div style={{ display: 'flex', gap: '1rem', width: 'min(34rem, 100%)', justifyContent: 'space-between' }}>
             <Button variant="quiet" onClick={() => (step > 1 ? setStep(step - 1) : setStep(store.profile ? 7 : 0))}>Назад</Button>
             {step < 6 && (
-              <Button variant="primary" disabled={step === 1 && issues.includes('name')} onClick={() => setStep(step + 1)}>Дальше</Button>
+              <Button variant="primary" disabled={step === 1 && (issues.includes('name') || issues.includes('presentation'))} onClick={() => setStep(step + 1)}>Дальше</Button>
             )}
           </div>
         </div>
@@ -151,7 +163,7 @@ function Landing({ onCreate, onContinue }: { onCreate: () => void; onContinue: (
     <div style={{ display: 'grid', gap: '1.25rem', justifyItems: 'center', textAlign: 'center' }}>
       <h2>Читатель, рядом с которым кто-то есть</h2>
       <div style={{ background: 'var(--paper, #F7F2E9)', padding: '1rem', borderRadius: '1rem', border: '1px solid rgba(0,0,0,.15)' }}>
-        <CompanionFigure appearance={{ ...DEFAULT_APPEARANCE, hair: 'hair.01', brows: 'brows.02', eyes: 'eyes.17', mouth: 'mouth.01', body: 'body.17' }} size={200} />
+        <CompanionFigure appearance={{ ...DEFAULT_APPEARANCE, hair: 'hair.01', brows: 'brows.02', eyes: 'eyes.17', mouth: 'mouth.01', body: 'body.17' }} size={160} />
       </div>
       <p style={{ maxWidth: '34rem' }}>
         Компаньон это персонаж, которого вы создаёте и наряжаете. Он сидит рядом
@@ -202,7 +214,7 @@ function ProfileView({ profile, onEdit }: { profile: CompanionProfile; onEdit: (
   return (
     <div style={{ display: 'grid', gap: '1.25rem', justifyItems: 'center' }}>
       <div style={{ background: 'var(--paper, #F7F2E9)', padding: '1rem', borderRadius: '1rem', border: '1px solid rgba(0,0,0,.15)' }}>
-        <CompanionFigure appearance={profile.appearance} size={240} />
+        <CompanionFigure appearance={profile.appearance} size={180} />
       </div>
       <div style={{ textAlign: 'center' }}>
         <strong>{profile.name}</strong>
@@ -260,13 +272,41 @@ function AssetPicker({ appearance, slot, onPick }: { appearance: CompanionAppear
   }, [slot])
 
   return (
-    <label style={{ display: 'grid', gap: '.35rem' }}>
+    <div style={{ display: 'grid', gap: '.35rem' }}>
       <span>{SLOT_TITLES[slot] ?? slot}</span>
-      <select value={selected} onChange={(event) => onPick(event.target.value)} aria-label={SLOT_TITLES[slot] ?? slot}>
-        {ids.map((id) => <option key={id} value={id}>{assetLabel(id)}</option>)}
-      </select>
-    </label>
+      <div style={{ display: 'flex', gap: '.55rem', overflowX: 'auto', paddingBottom: '.25rem' }}>
+        {ids.map((id) => (
+          <button
+            key={id}
+            type="button"
+            aria-label={assetLabel(id)}
+            aria-pressed={selected === id}
+            onClick={() => onPick(id)}
+            style={{
+              flex: '0 0 82px', width: 82, height: 92, padding: 2, borderRadius: 12,
+              border: selected === id ? '2px solid #8C3B2E' : '1px solid rgba(0,0,0,.2)',
+              background: 'var(--surface, #fff)', cursor: 'pointer', position: 'relative',
+            }}
+          >
+            <CompanionFigure appearance={appearanceWithAsset(appearance, slot, id)} size={76} />
+            {id.endsWith('.none') && <small style={{ position: 'absolute', inset: 'auto 0 4px' }}>Нет</small>}
+          </button>
+        ))}
+      </div>
+    </div>
   )
+}
+
+const PRESENTATION_OPTIONS = [
+  ['masculine', 'Мужской'],
+  ['feminine', 'Женский'],
+  ['neutral', 'Нейтральный'],
+] as const
+
+function presentationAppearance(current: CompanionAppearance, presentation: CompanionProfile['presentation']): CompanionAppearance {
+  if (presentation === 'masculine') return { ...current, hair: 'hair.11', brows: 'brows.04', eyes: 'eyes.17', mouth: 'mouth.01', beard: 'beard.none', body: 'body.20' }
+  if (presentation === 'feminine') return { ...current, hair: 'hair.01', brows: 'brows.02', eyes: 'eyes.17', mouth: 'mouth.01', beard: 'beard.none', body: 'body.17' }
+  return { ...current, hair: 'hair.23', brows: 'brows.01', eyes: 'eyes.16', mouth: 'mouth.02', beard: 'beard.none', body: 'body.22' }
 }
 
 function PaletteRow({ title, options, value, onPick }: { title: string; options: ReadonlyArray<readonly [string, string]>; value: string; onPick: (name: string) => void }) {

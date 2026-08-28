@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -67,4 +68,20 @@ func TestEnvOrFallsBackOnQuotedEmpty(t *testing.T) {
 		t.Errorf("пустое значение в кавычках не уступило умолчанию: %q", got)
 	}
 	_ = os.Unsetenv("WOLFY_TEST_EMPTY")
+}
+
+func TestLoadAcceptsExistingOpenRouterVariable(t *testing.T) {
+	t.Setenv("WOLFY_DB_URL", "postgres://test")
+	t.Setenv("WOLFY_OPENROUTER_KEY", "")
+	t.Setenv("WOLFY_OPENROUTER", "legacy-key")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OpenRouterKey != "legacy-key" {
+		t.Fatalf("старое имя ключа не прочитано: %q", cfg.OpenRouterKey)
+	}
+	if !strings.Contains(cfg.OpenRouterModels, "openrouter/free") {
+		t.Fatalf("в резерве нет стабильного free router: %q", cfg.OpenRouterModels)
+	}
 }

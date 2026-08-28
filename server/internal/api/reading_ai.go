@@ -74,11 +74,11 @@ func (s *Server) writeAI(w http.ResponseWriter, result any, err error) {
 		case readingai.FailLimit:
 			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "Провайдер ИИ ограничил запросы.", "code": "limit"})
 		case readingai.FailTimeout:
-			writeJSON(w, http.StatusGatewayTimeout, map[string]string{"error": "Gemini не успел ответить. Попробуйте ещё раз.", "code": "timeout"})
+			writeJSON(w, http.StatusGatewayTimeout, map[string]string{"error": "ИИ не успел ответить. Попробуйте ещё раз.", "code": "timeout"})
 		case readingai.FailBadJSON:
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Ответ ИИ не подошёл по формату.", "code": "badjson"})
 		default:
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Gemini сейчас не ответил.", "code": "provider"})
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "ИИ-провайдер сейчас не ответил.", "code": "provider"})
 		}
 	default:
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Beta-подсказка сейчас недоступна."})

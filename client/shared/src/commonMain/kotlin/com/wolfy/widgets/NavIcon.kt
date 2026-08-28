@@ -15,7 +15,7 @@ import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.unit.dp
 
 /** Значки нижней навигации и компактных действий читалки. */
-enum class NavIcon { Books, Shelves, Discover, Cards, More, Star }
+enum class NavIcon { Books, Shelves, Discover, Cards, More, Reading, Recap }
 
 /**
  * Значок нижней навигации, нарисованный кодом.
@@ -34,7 +34,8 @@ fun NavGlyph(icon: NavIcon, tint: Color, modifier: Modifier = Modifier) {
             NavIcon.Discover -> drawDiscover(tint)
             NavIcon.Cards -> drawCards(tint)
             NavIcon.More -> drawGear(tint)
-            NavIcon.Star -> drawStar(tint)
+            NavIcon.Reading -> drawReadingSettings(tint)
+            NavIcon.Recap -> drawRecap(tint)
         }
     }
 }
@@ -148,20 +149,34 @@ private fun DrawScope.drawGear(tint: Color) {
     }
 }
 
-/** Пятиконечная звезда для действия «Вспомнить сюжет». */
-private fun DrawScope.drawStar(tint: Color) {
-    val path = Path().apply {
-        moveTo(size.width * 0.50f, size.height * 0.10f)
-        lineTo(size.width * 0.60f, size.height * 0.39f)
-        lineTo(size.width * 0.91f, size.height * 0.40f)
-        lineTo(size.width * 0.66f, size.height * 0.58f)
-        lineTo(size.width * 0.75f, size.height * 0.88f)
-        lineTo(size.width * 0.50f, size.height * 0.70f)
-        lineTo(size.width * 0.25f, size.height * 0.88f)
-        lineTo(size.width * 0.34f, size.height * 0.58f)
-        lineTo(size.width * 0.09f, size.height * 0.40f)
-        lineTo(size.width * 0.40f, size.height * 0.39f)
-        close()
+/** Три типографских ползунка: настройки именно текста, не всего приложения. */
+private fun DrawScope.drawReadingSettings(tint: Color) {
+    val line = size.minDimension * 0.09f
+    val ys = listOf(0.24f, 0.50f, 0.76f)
+    val knobs = listOf(0.68f, 0.34f, 0.58f)
+    for (index in ys.indices) {
+        val y = size.height * ys[index]
+        drawLine(tint, Offset(size.width * 0.12f, y), Offset(size.width * 0.88f, y), strokeWidth = line)
+        drawCircle(tint, radius = line * 1.35f, center = Offset(size.width * knobs[index], y))
     }
-    drawPath(path, tint, style = Stroke(width = size.minDimension * 0.09f))
+}
+
+/** Круговая стрелка назад: вернуться к недавним событиям книги. */
+private fun DrawScope.drawRecap(tint: Color) {
+    val line = size.minDimension * 0.09f
+    drawArc(
+        color = tint,
+        startAngle = -65f,
+        sweepAngle = 285f,
+        useCenter = false,
+        topLeft = Offset(size.width * 0.13f, size.height * 0.13f),
+        size = Size(size.width * 0.74f, size.height * 0.74f),
+        style = Stroke(width = line),
+    )
+    val arrow = Path().apply {
+        moveTo(size.width * 0.12f, size.height * 0.38f)
+        lineTo(size.width * 0.13f, size.height * 0.13f)
+        lineTo(size.width * 0.37f, size.height * 0.18f)
+    }
+    drawPath(arrow, tint, style = Stroke(width = line))
 }

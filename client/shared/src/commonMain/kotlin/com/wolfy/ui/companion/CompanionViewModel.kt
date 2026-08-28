@@ -70,6 +70,7 @@ class CompanionViewModel(private val repository: CompanionRepository) {
         val existing = state.editing ?: CompanionProfile(
             id = randomId(),
             name = "",
+            presentation = "",
         )
         repository.saveDraft(existing)
         state = repository.state.value

@@ -45,6 +45,10 @@ type Config struct {
 	AIKey   string
 	AIModel string
 	AIURL   string
+	// OpenRouter* — резервный OpenAI-совместимый провайдер. Поддерживается
+	// старое имя WOLFY_OPENROUTER, уже использованное в production env.
+	OpenRouterKey    string
+	OpenRouterModels string
 
 	// Читавук выдаёт общую сессию и заводит аккаунты. Каждый адрес
 	// настраивается отдельно: сервис, поднятый только ради чтения, вправе
@@ -112,6 +116,8 @@ func Load() (Config, error) {
 		AIKey:                    envOr("WOLFY_AI_KEY", env("WOLFY_OCR_KEY")),
 		AIModel:                  envOr("WOLFY_AI_MODEL", envOr("WOLFY_OCR_MODEL", "google/gemini-3.7-flash")),
 		AIURL:                    envOr("WOLFY_AI_URL", envOr("WOLFY_OCR_URL", "https://api.polza.ai/api/v1/chat/completions")),
+		OpenRouterKey:            envOr("WOLFY_OPENROUTER_KEY", env("WOLFY_OPENROUTER")),
+		OpenRouterModels:         envOr("WOLFY_OPENROUTER_MODELS", "nvidia/nemotron-3-super-120b-a12b:free,z-ai/glm-5.2:free,openrouter/free"),
 		CitavukLoginURL:          envOr("WOLFY_CITAVUK_LOGIN_URL", "https://api.citavuk.ru/v1/auth/login"),
 		CitavukRegisterURL:       envOr("WOLFY_CITAVUK_REGISTER_URL", "https://api.citavuk.ru/v1/auth/register"),
 		CitavukResendURL:         envOr("WOLFY_CITAVUK_RESEND_URL", "https://api.citavuk.ru/v1/auth/resend-verification"),

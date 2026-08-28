@@ -117,6 +117,18 @@ fun CompanionLayer(
         aiSheet = null
     }
 
+    // Карточка слова, настройки и оглавление имеют безусловный приоритет.
+    // Раньше закрывалась только фигура, а меню/согласие продолжали лежать
+    // поверх карточки и активный запрос мог завершиться в уже чужом экране.
+    LaunchedEffect(suppressed) {
+        if (suppressed) {
+            bubble = null
+            menuOpen = false
+            pendingAiAction = null
+            closeAiSheet()
+        }
+    }
+
     // Старт сессии: одна реплика на открытие читалки.
     LaunchedEffect(profile.id) {
         engine.newSession()
@@ -249,14 +261,14 @@ fun CompanionLayer(
         // Меню действий по тапу. Предупреждение о Beta стоит один раз под
         // действиями, а не под каждой кнопкой.
         AnimatedVisibility(
-            visible = menuOpen,
+            visible = menuOpen && !suppressed,
             enter = fadeIn(),
             exit = fadeOut(),
             modifier = Modifier.align(Alignment.BottomEnd),
         ) {
             Column(
                 Modifier
-                    .widthIn(max = 300.dp)
+                    .widthIn(max = if (compact) 260.dp else 300.dp)
                     .clip(RoundedCornerShape(spacing.medium))
                     .background(colors.paper)
                     .border(1.dp, colors.rule, RoundedCornerShape(spacing.medium))
@@ -295,7 +307,7 @@ fun CompanionLayer(
 
         // Лист с ответом: мнение или вопрос. Отмена и повтор всегда доступны.
         AnimatedVisibility(
-            visible = aiSheet != null,
+            visible = aiSheet != null && !suppressed,
             enter = fadeIn(),
             exit = fadeOut(),
             modifier = Modifier.align(Alignment.BottomEnd),
@@ -303,7 +315,7 @@ fun CompanionLayer(
             val sheet = aiSheet
             Column(
                 Modifier
-                    .widthIn(max = 340.dp)
+                    .widthIn(max = if (compact) 300.dp else 340.dp)
                     .clip(RoundedCornerShape(spacing.medium))
                     .background(colors.paper)
                     .border(1.dp, colors.rule, RoundedCornerShape(spacing.medium))
@@ -418,19 +430,27 @@ fun CompanionLayer(
             animationSpec = if (reduceMotion) snap() else tween(350),
             label = "companionHide",
         )
-        CompanionFigure(
-            appearance = profile.appearance,
-            modifier = Modifier
-                .size(96.dp)
-                .graphicsLayer {
-                    translationX = if (compact) size.width * 0.7f else 0f
-                    translationY = size.height * 0.8f * hidden
-                }
-                .pressable(enabled = !suppressed) {
-                    menuOpen = !menuOpen
-                    bubble = null
-                },
-        )
+        AnimatedVisibility(
+            visible = !suppressed && !menuOpen && aiSheet == null,
+            enter = fadeIn(),
+            exit = fadeOut(),
+        ) {
+            CompanionFigure(
+                appearance = profile.appearance,
+                modifier = Modifier
+                    .size(if (compact) 52.dp else 96.dp)
+                    .graphicsLayer {
+                        // На телефоне остаётся маленький «язычок» у поля,
+                        // а не почти целый ростовой персонаж поверх строки.
+                        translationX = if (compact) size.width * 0.45f else 0f
+                        translationY = size.height * 0.8f * hidden
+                    }
+                    .pressable(enabled = true) {
+                        menuOpen = true
+                        bubble = null
+                    },
+            )
+        }
     }
 }
 
