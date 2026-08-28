@@ -496,7 +496,9 @@ fun ReaderScreen(
                 onEditCompanion = companionOnEdit,
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .padding(bottom = if (selectViaMouse) 32.dp else 20.dp, end = 6.dp)
+                    // На телефоне нижняя навигация приложения занимает около
+                    // 64 dp. Ярлычок живёт над ней и не закрывает вкладки.
+                    .padding(bottom = if (selectViaMouse) 32.dp else 84.dp, end = 6.dp)
                     .zIndex(1f),
             )
         }

@@ -1,11 +1,10 @@
 /**
  * Компаньон в читалке веб-версии.
  *
- * Фигура живёт в нижнем безопасном углу и не перекрывает текст: карточка
- * слова, выделение и системные жесты сильнее. Во время прокрутки фигура
- * уходит за край, после двух секунд покоя возвращается. Пузырь с репликой
- * закрывается сам; тап открывает меню действий. Сеть трогают только явные
- * действия читателя.
+ * В обычном состоянии у правого края виден только узкий газетный ярлычок.
+ * Читатель тянет его влево или нажимает мышью, после чего появляется фигура.
+ * Прокрутка снова освобождает страницу. Сеть трогают только явные действия
+ * читателя.
  */
 import { useEffect, useRef, useState } from 'react'
 
@@ -42,6 +41,7 @@ interface AiSheet {
 export function ReaderCompanion(props: ReaderCompanionProps) {
   const { profile, onProfileChange, persona, bookId, bookTitle, chapter, offset, pageText, suppressed, scrolling, activeText } = props
   const [bubble, setBubble] = useState<string | null>(null)
+  const [revealed, setRevealed] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [sheet, setSheet] = useState<AiSheet | null>(null)
   const [question, setQuestion] = useState('')
@@ -57,6 +57,7 @@ export function ReaderCompanion(props: ReaderCompanionProps) {
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
   const requestRef = useRef<AbortController | null>(null)
   const pendingConsentRef = useRef<(() => void) | null>(null)
+  const ribbonStartRef = useRef<number | null>(null)
 
   const cancelRequest = () => {
     requestRef.current?.abort()
@@ -72,9 +73,20 @@ export function ReaderCompanion(props: ReaderCompanionProps) {
     requestRef.current = null
     pendingConsentRef.current = null
     setBubble(null)
+    setRevealed(false)
     setMenuOpen(false)
     setSheet(null)
   }, [suppressed])
+
+  useEffect(() => {
+    if (scrolling) setRevealed(false)
+  }, [scrolling])
+
+  useEffect(() => {
+    if (!revealed || bubble || menuOpen || sheet) return
+    const timer = window.setTimeout(() => setRevealed(false), 8_000)
+    return () => window.clearTimeout(timer)
+  }, [revealed, bubble, menuOpen, sheet])
 
   useEffect(() => {
     engine.newSession()
@@ -187,8 +199,8 @@ export function ReaderCompanion(props: ReaderCompanionProps) {
   }
 
   return (
-    <div style={{ position: 'fixed', right: 12, bottom: 12, zIndex: 30, display: 'grid', justifyItems: 'end', gap: 8 }}>
-      {bubble && !suppressed && !menuOpen && !sheet && (
+    <div style={{ position: 'fixed', right: 12, bottom: compact ? 84 : 12, zIndex: 30, display: 'grid', justifyItems: 'end', gap: 8 }}>
+      {revealed && bubble && !suppressed && !menuOpen && !sheet && (
         <button
           type="button"
           onClick={() => { setMenuOpen(true); setBubble(null) }}
@@ -196,6 +208,7 @@ export function ReaderCompanion(props: ReaderCompanionProps) {
             maxWidth: 260, textAlign: 'left', padding: '0.5rem 0.75rem', borderRadius: 12,
             background: 'var(--surface, #fff)', border: '1px solid rgba(0,0,0,.2)',
             fontFamily: 'inherit', fontSize: '0.85rem', cursor: 'pointer', color: 'inherit',
+            marginBottom: compact ? 60 : 104,
           }}
         >
           {bubble}
@@ -218,6 +231,7 @@ export function ReaderCompanion(props: ReaderCompanionProps) {
             onClick={() => { onProfileChange({ ...profile, reactionsEnabled: !profile.reactionsEnabled }); setMenuOpen(false) }}
           />
           <MenuRow label="Изменить компаньона" onClick={() => { setMenuOpen(false); props.onEdit() }} />
+          <MenuRow label="Спрятать компаньона" onClick={() => { setMenuOpen(false); setBubble(null); setRevealed(false) }} />
           <hr style={{ border: 'none', borderTop: '1px solid rgba(0,0,0,.15)', width: '100%' }} />
           <small>ИИ может ошибаться. До 10 запросов в день.</small>
         </div>
@@ -314,17 +328,55 @@ export function ReaderCompanion(props: ReaderCompanionProps) {
         </div>
       )}
 
-      {!suppressed && !menuOpen && !sheet && <button
+      {!suppressed && !revealed && !menuOpen && !sheet && <button
+        type="button"
+        aria-label="Потяните влево, чтобы открыть компаньона"
+        onClick={() => setRevealed(true)}
+        onPointerDown={(event) => {
+          ribbonStartRef.current = event.clientX
+        }}
+        onPointerMove={(event) => {
+          const start = ribbonStartRef.current
+          if (start !== null && start - event.clientX >= 22) {
+            ribbonStartRef.current = null
+            setRevealed(true)
+          }
+        }}
+        onPointerUp={(event) => {
+          const start = ribbonStartRef.current
+          ribbonStartRef.current = null
+          if (start !== null && start - event.clientX >= 22) setRevealed(true)
+        }}
+        onPointerLeave={(event) => {
+          const start = ribbonStartRef.current
+          if (start !== null && start - event.clientX >= 6 && event.buttons === 1) {
+            ribbonStartRef.current = null
+            setRevealed(true)
+          }
+        }}
+        onPointerCancel={() => { ribbonStartRef.current = null }}
+        style={{
+          width: 30, height: 68, marginRight: -12, borderRadius: '12px 0 0 12px',
+          border: '1px solid rgba(0,0,0,.25)', background: 'var(--accent, #b43227)',
+          color: 'var(--paper, #fff)', fontFamily: 'Georgia, serif', fontSize: '1.8rem',
+          lineHeight: 1, cursor: 'ew-resize', touchAction: 'none',
+          transform: 'translateX(0)', transition: reducedMotion ? 'none' : 'transform 240ms ease',
+        }}
+      >
+        ‹
+      </button>}
+
+      {revealed && !suppressed && !menuOpen && !sheet && <button
         type="button"
         aria-label={profile.name ? `Компаньон ${profile.name}, ${characterLine(profile)}` : 'Компаньон'}
         onClick={() => { if (!suppressed) { setMenuOpen((open) => !open); setBubble(null) } }}
         style={{
           background: 'none', border: 'none', padding: 0, cursor: suppressed ? 'default' : 'pointer',
-          transform: `translate(${compact ? '45%' : '0'}, ${scrolling ? '70%' : '0'})`,
-          transition: reducedMotion ? 'none' : 'transform 350ms ease',
+          transform: 'translate(0, 0)',
+          transition: reducedMotion ? 'none' : 'transform 240ms ease',
         }}
       >
-        <CompanionFigure appearance={profile.appearance} size={compact ? 52 : 96} />
+        <CompanionFigure appearance={profile.appearance} size={compact ? 54 : 96} />
       </button>}
     </div>
   )

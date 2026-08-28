@@ -48,12 +48,22 @@ class DiscoveryViewModel(
         // Поэтому одного снимка token при создании мало: лента должна сразу
         // заметить вход и выход, сделанные на основном экране аккаунта.
         viewModelScope.launch {
+            // Первое значение StateFlow тоже является событием входа. Если
+            // сессия восстановлена с диска, его нельзя считать уже
+            // обработанным: иначе экран покажет вкладку, но не загрузит ни
+            // профиль, ни саму ленту до следующей смены токена.
+            var wasSignedIn = false
             session.token.collectLatest { token ->
-                if (token == null) {
+                val isSignedIn = token != null
+                if (!isSignedIn) {
                     _state.value = DiscoveryUiState()
-                } else {
+                    wasSignedIn = false
+                } else if (!wasSignedIn) {
+                    // Обновляем только при переходе из signed out в signed in,
+                    // а не при каждом изменении токена
                     change { it.copy(signedIn = true, message = null) }
                     refresh()
+                    wasSignedIn = true
                 }
             }
         }

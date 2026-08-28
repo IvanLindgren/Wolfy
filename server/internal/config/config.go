@@ -45,6 +45,9 @@ type Config struct {
 	AIKey   string
 	AIModel string
 	AIURL   string
+	// AIJSONMode включает response_format только для endpoint, у которого
+	// эта возможность подтверждена конфигурацией.
+	AIJSONMode bool
 	// OpenRouter* — резервный OpenAI-совместимый провайдер. Поддерживается
 	// старое имя WOLFY_OPENROUTER, уже использованное в production env.
 	OpenRouterKey    string
@@ -116,6 +119,7 @@ func Load() (Config, error) {
 		AIKey:                    envOr("WOLFY_AI_KEY", env("WOLFY_OCR_KEY")),
 		AIModel:                  envOr("WOLFY_AI_MODEL", envOr("WOLFY_OCR_MODEL", "google/gemini-3.7-flash")),
 		AIURL:                    envOr("WOLFY_AI_URL", envOr("WOLFY_OCR_URL", "https://api.polza.ai/api/v1/chat/completions")),
+		AIJSONMode:               envBool("WOLFY_AI_JSON_MODE", true),
 		OpenRouterKey:            envOr("WOLFY_OPENROUTER_KEY", env("WOLFY_OPENROUTER")),
 		OpenRouterModels:         envOr("WOLFY_OPENROUTER_MODELS", "nvidia/nemotron-3-super-120b-a12b:free,z-ai/glm-5.2:free,openrouter/free"),
 		CitavukLoginURL:          envOr("WOLFY_CITAVUK_LOGIN_URL", "https://api.citavuk.ru/v1/auth/login"),

@@ -1,13 +1,13 @@
 package com.wolfy.ui.reader
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.core.snap
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -31,8 +31,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.wolfy.data.CompanionAiResult
 import com.wolfy.data.CompanionOpinion
@@ -59,12 +61,11 @@ import kotlinx.coroutines.launch
 /**
  * Компаньон в читалке.
  *
- * Персонаж живёт в нижнем безопасном углу и никогда не перекрывает текст:
- * карточка слова, выделение фразы, настройки чтения и оглавление всегда
- * сильнее. Во время прокрутки фигура мягко уходит за край и возвращается
- * после двух секунд покоя. Обычное чтение не делает ни одного сетевого
- * запроса: реплики выбираются локальным движком из заготовленного набора,
- * сеть трогают только явные действия читателя.
+ * В обычном состоянии виден только узкий газетный ярлычок у правого края.
+ * Читатель тянет его влево (или нажимает мышью), и компаньон появляется по
+ * его просьбе. Так персонаж не закрывает строки и не возвращается сам после
+ * прокрутки. Обычное чтение не делает ни одного сетевого запроса: реплики
+ * выбираются локально, сеть трогают только явные действия читателя.
  */
 @Composable
 fun CompanionLayer(
@@ -104,6 +105,7 @@ fun CompanionLayer(
     }
 
     var bubble by remember { mutableStateOf<String?>(null) }
+    var revealed by remember(profile.id, bookId) { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
     var aiSheet by remember { mutableStateOf<AiSheetState?>(null) }
     var questionDraft by remember { mutableStateOf("") }
@@ -122,10 +124,26 @@ fun CompanionLayer(
     // поверх карточки и активный запрос мог завершиться в уже чужом экране.
     LaunchedEffect(suppressed) {
         if (suppressed) {
+            revealed = false
             bubble = null
             menuOpen = false
             pendingAiAction = null
             closeAiSheet()
+        }
+    }
+
+    // Любая прокрутка снова освобождает поле книги. Компаньон не появляется
+    // обратно сам: открыть его можно только новой протяжкой ярлычка.
+    LaunchedEffect(scrolling) {
+        if (scrolling) revealed = false
+    }
+
+    // Если персонажа вытащили и ничего не открыли, он спокойно прячется сам.
+    // Меню и ответы ИИ не закрываются по таймеру.
+    LaunchedEffect(revealed, bubble, menuOpen, aiSheet) {
+        if (revealed && bubble == null && !menuOpen && aiSheet == null) {
+            delay(8_000)
+            revealed = false
         }
     }
 
@@ -232,13 +250,18 @@ fun CompanionLayer(
         onRecap()
     }
 
+    val ribbonEnter = if (reduceMotion) fadeIn() else fadeIn() + slideInHorizontally { it }
+    val ribbonExit = if (reduceMotion) fadeOut() else fadeOut() + slideOutHorizontally { it }
+
     Box(modifier, contentAlignment = Alignment.BottomEnd) {
         // Пузырь. Карточка слова и любые оверлеи полностью его скрывают.
         AnimatedVisibility(
-            visible = bubble != null && !suppressed && !menuOpen && aiSheet == null,
+            visible = revealed && bubble != null && !suppressed && !menuOpen && aiSheet == null,
             enter = fadeIn() + slideInVertically { it / 2 },
             exit = fadeOut() + slideOutVertically { it / 2 },
-            modifier = Modifier.align(Alignment.BottomEnd),
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(bottom = if (compact) 62.dp else 106.dp),
         ) {
             Text(
                 bubble.orEmpty(),
@@ -295,6 +318,11 @@ fun CompanionLayer(
                 ActionRow("Изменить компаньона") {
                     menuOpen = false
                     onEditCompanion()
+                }
+                ActionRow("Спрятать компаньона") {
+                    menuOpen = false
+                    bubble = null
+                    revealed = false
                 }
                 Rule()
                 Text(
@@ -423,28 +451,55 @@ fun CompanionLayer(
             }
         }
 
-        // Сама фигура. Тап открывает меню, прокрутка уводит за край: не
-        // исчезает, а именно уходит в угол, чтобы читатель видел, куда она.
-        val hidden by animateFloatAsState(
-            targetValue = if (scrolling || suppressed) 1f else 0f,
-            animationSpec = if (reduceMotion) snap() else tween(350),
-            label = "companionHide",
-        )
+        // Закрытый компаньон оставляет только узкий ярлычок. Он принимает и
+        // протяжку влево на сенсорном экране, и обычный клик мышью.
         AnimatedVisibility(
-            visible = !suppressed && !menuOpen && aiSheet == null,
-            enter = fadeIn(),
-            exit = fadeOut(),
+            visible = !suppressed && !revealed && !menuOpen && aiSheet == null,
+            enter = ribbonEnter,
+            exit = ribbonExit,
+        ) {
+            var dragged by remember { mutableStateOf(0f) }
+            Box(
+                Modifier
+                    .size(width = 30.dp, height = 68.dp)
+                    .clip(RoundedCornerShape(topStart = 12.dp, bottomStart = 12.dp))
+                    .background(colors.accent)
+                    .border(1.dp, colors.rule, RoundedCornerShape(topStart = 12.dp, bottomStart = 12.dp))
+                    .semantics { contentDescription = "Потяните влево, чтобы открыть компаньона" }
+                    .pointerInput(profile.id) {
+                        val threshold = 22.dp.toPx()
+                        detectHorizontalDragGestures(
+                            onDragStart = { dragged = 0f },
+                            onDragCancel = { dragged = 0f },
+                            onDragEnd = {
+                                if (dragged <= -threshold) revealed = true
+                                dragged = 0f
+                            },
+                        ) { change, amount ->
+                            change.consume()
+                            dragged += amount
+                            if (dragged <= -threshold) revealed = true
+                        }
+                    }
+                    .pressable { revealed = true },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("‹", style = WolfyTheme.typography.bookTitle, color = colors.paper)
+            }
+        }
+
+        // Полная фигура появляется только после осознанного действия. Тап по
+        // ней открывает меню, а прокрутка или отдельная команда снова прячут.
+        AnimatedVisibility(
+            visible = revealed && !suppressed && !menuOpen && aiSheet == null,
+            enter = ribbonEnter,
+            exit = ribbonExit,
         ) {
             CompanionFigure(
                 appearance = profile.appearance,
                 modifier = Modifier
-                    .size(if (compact) 52.dp else 96.dp)
-                    .graphicsLayer {
-                        // На телефоне остаётся маленький «язычок» у поля,
-                        // а не почти целый ростовой персонаж поверх строки.
-                        translationX = if (compact) size.width * 0.45f else 0f
-                        translationY = size.height * 0.8f * hidden
-                    }
+                    .size(if (compact) 54.dp else 96.dp)
+                    .semantics { contentDescription = "Компаньон ${profile.name}. Нажмите, чтобы открыть действия" }
                     .pressable(enabled = true) {
                         menuOpen = true
                         bubble = null

@@ -63,8 +63,20 @@ type provider struct {
 
 func New(s *store.Store, key, url, model string, timeout time.Duration) *Service {
 	service := &Service{store: s, log: slog.Default(), client: &http.Client{Timeout: timeout}}
+	// Поддержка response_format является возможностью endpoint, а не свойством
+	// строки с именем модели. Её включает конфигурация через WithJSONMode.
 	service.addProvider(provider{name: "primary", key: key, url: url, model: model})
 	return service
+}
+
+// WithJSONMode явно сообщает о поддержке response_format основным
+// OpenAI-совместимым endpoint. Имя модели для этого намеренно не изучается:
+// одна и та же модель у разных посредников имеет разные возможности.
+func (s *Service) WithJSONMode(enabled bool) *Service {
+	if len(s.providers) > 0 {
+		s.providers[0].structured = enabled
+	}
+	return s
 }
 
 // WithOpenRouter добавляет резервные бесплатные модели. Отказ одной модели
@@ -212,7 +224,15 @@ func (s *Service) Release(ctx context.Context, userID string) {
 // Температура задаётся вызывающим: структурированному набору реплик нужна
 // низкая, живому мнению о странице достаточно дефолтной.
 func (s *Service) Ask(ctx context.Context, prompt string, temperature float32) (string, error) {
-	return s.askWith(ctx, prompt, temperature)
+	return s.askMessages(ctx, "", prompt, temperature)
+}
+
+// AskWithSystem отделяет правила безопасности от недоверенного книжного и
+// пользовательского текста. Для companionai это важнее дополнительных
+// формулировок внутри одного user-сообщения: system имеет более высокий
+// приоритет у всех используемых OpenAI-совместимых провайдеров.
+func (s *Service) AskWithSystem(ctx context.Context, system, prompt string, temperature float32) (string, error) {
+	return s.askMessages(ctx, system, prompt, temperature)
 }
 func (s *Service) release(ctx context.Context, userID string) {
 	_, _ = s.store.Pool.Exec(ctx, `UPDATE wolfy.ai_daily_usage SET used=GREATEST(used-1, 0) WHERE user_id=$1::uuid AND day=CURRENT_DATE`, userID)
@@ -223,9 +243,13 @@ func (s *Service) ask(ctx context.Context, prompt string) (string, error) {
 }
 
 func (s *Service) askWith(ctx context.Context, prompt string, temperature float32) (string, error) {
+	return s.askMessages(ctx, "", prompt, temperature)
+}
+
+func (s *Service) askMessages(ctx context.Context, system, prompt string, temperature float32) (string, error) {
 	var last error = ErrUnavailable
 	for _, current := range s.providers {
-		answer, err := s.askProvider(ctx, current, prompt, temperature)
+		answer, err := s.askProvider(ctx, current, system, prompt, temperature)
 		if err == nil {
 			return answer, nil
 		}
@@ -237,10 +261,15 @@ func (s *Service) askWith(ctx context.Context, prompt string, temperature float3
 	return "", last
 }
 
-func (s *Service) askProvider(ctx context.Context, current provider, prompt string, temperature float32) (string, error) {
+func (s *Service) askProvider(ctx context.Context, current provider, system, prompt string, temperature float32) (string, error) {
+	messages := make([]map[string]string, 0, 2)
+	if strings.TrimSpace(system) != "" {
+		messages = append(messages, map[string]string{"role": "system", "content": system})
+	}
+	messages = append(messages, map[string]string{"role": "user", "content": prompt})
 	payload := map[string]any{
 		"model": current.model, "temperature": temperature,
-		"messages": []map[string]string{{"role": "user", "content": prompt}},
+		"messages": messages,
 	}
 	if current.structured {
 		// Все резервные модели в дефолтном списке заявляют structured output.
@@ -263,10 +292,10 @@ func (s *Service) askProvider(ctx context.Context, current provider, prompt stri
 		// Ключ и текст книги в лог не пишутся никогда: здесь важны только
 		// вид отказа и модель, по ним чинят конфигурацию.
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || isTimeout(err) {
-			s.log.Warn("ии-провайдер не ответил вовремя", "provider", current.name, "kind", FailTimeout, "model", current.model)
+			s.log.Warn("ии-провайдер не ответил вовремя", "provider", current.name, "kind", FailTimeout, "model", current.model, "url", current.url)
 			return "", &ProviderError{Kind: FailTimeout}
 		}
-		s.log.Warn("ии-провайдер недоступен", "provider", current.name, "kind", FailProvider, "error", err.Error(), "model", current.model)
+		s.log.Warn("ии-провайдер недоступен", "provider", current.name, "kind", FailProvider, "error", err.Error(), "model", current.model, "url", current.url)
 		return "", &ProviderError{Kind: FailProvider}
 	}
 	defer resp.Body.Close()
