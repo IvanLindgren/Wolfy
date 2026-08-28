@@ -37,6 +37,8 @@ data class AppSettings(
     val onboardingSeen: Boolean = false,
     val lastSeenVersion: String = "",
     val reduceMotion: Boolean = false,
+    /** Короткие звуки компаньона; не влияет на радио и произношение. */
+    val companionSounds: Boolean = true,
     /**
      * Набирать основу слова полужирным.
      *
@@ -184,6 +186,10 @@ class Settings(private val session: CoreSession) {
 
     fun setReduceMotion(on: Boolean) {
         send(command("setReduceMotion") { put("on", on) })
+    }
+
+    fun setCompanionSounds(on: Boolean) {
+        send(command("setCompanionSounds") { put("on", on) })
     }
 
     fun setIntensity(intensity: Intensity) {

@@ -7,6 +7,11 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -31,6 +36,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.contentDescription
@@ -49,6 +55,8 @@ import com.wolfy.data.companion.FallbackPhrases
 import com.wolfy.data.companion.MoodScorer
 import com.wolfy.data.companion.PHRASE_COUNT
 import com.wolfy.data.library.currentTimeMillis
+import com.wolfy.platform.CompanionSound
+import com.wolfy.platform.playCompanionSound
 import com.wolfy.theme.WolfyTheme
 import com.wolfy.ui.companion.CompanionFigure
 import com.wolfy.widgets.PrimaryButton
@@ -82,6 +90,7 @@ fun CompanionLayer(
     scrolling: Boolean,
     compact: Boolean,
     reduceMotion: Boolean,
+    soundsEnabled: Boolean,
     activeBlock: Int,
     chapterKey: Int,
     onRecap: () -> Unit,
@@ -112,6 +121,24 @@ fun CompanionLayer(
     var aiJob by remember { mutableStateOf<Job?>(null) }
     var pendingAiAction by remember { mutableStateOf<PendingAiAction?>(null) }
     val uriHandler = LocalUriHandler.current
+    val idleMotion = rememberInfiniteTransition(label = "companion-idle")
+    val bob by idleMotion.animateFloat(
+        initialValue = 0f,
+        targetValue = if (reduceMotion) 0f else -3f,
+        animationSpec = infiniteRepeatable(tween(1_150), RepeatMode.Reverse),
+        label = "companion-bob",
+    )
+    val tilt by idleMotion.animateFloat(
+        initialValue = if (reduceMotion) 0f else -0.7f,
+        targetValue = if (reduceMotion) 0f else 0.7f,
+        animationSpec = infiniteRepeatable(tween(1_500), RepeatMode.Reverse),
+        label = "companion-tilt",
+    )
+
+    fun revealCompanion() {
+        if (!revealed && soundsEnabled) playCompanionSound(CompanionSound.Reveal)
+        revealed = true
+    }
 
     fun closeAiSheet() {
         aiJob?.cancel()
@@ -472,16 +499,16 @@ fun CompanionLayer(
                             onDragStart = { dragged = 0f },
                             onDragCancel = { dragged = 0f },
                             onDragEnd = {
-                                if (dragged <= -threshold) revealed = true
+                                if (dragged <= -threshold) revealCompanion()
                                 dragged = 0f
                             },
                         ) { change, amount ->
                             change.consume()
                             dragged += amount
-                            if (dragged <= -threshold) revealed = true
+                            if (dragged <= -threshold) revealCompanion()
                         }
                     }
-                    .pressable { revealed = true },
+                    .pressable { revealCompanion() },
                 contentAlignment = Alignment.Center,
             ) {
                 Text("‹", style = WolfyTheme.typography.bookTitle, color = colors.paper)
@@ -492,13 +519,20 @@ fun CompanionLayer(
         // ней открывает меню, а прокрутка или отдельная команда снова прячут.
         AnimatedVisibility(
             visible = revealed && !suppressed && !menuOpen && aiSheet == null,
-            enter = ribbonEnter,
-            exit = ribbonExit,
+            // Только прозрачность: slide-контейнер обрезал волосы и одежду
+            // своим промежуточным квадратом во время появления.
+            enter = fadeIn(tween(if (reduceMotion) 0 else 180)),
+            exit = fadeOut(tween(if (reduceMotion) 0 else 120)),
         ) {
             CompanionFigure(
                 appearance = profile.appearance,
                 modifier = Modifier
                     .size(if (compact) 54.dp else 96.dp)
+                    .graphicsLayer {
+                        translationY = bob
+                        rotationZ = tilt
+                        clip = false
+                    }
                     .semantics { contentDescription = "Компаньон ${profile.name}. Нажмите, чтобы открыть действия" }
                     .pressable(enabled = true) {
                         menuOpen = true

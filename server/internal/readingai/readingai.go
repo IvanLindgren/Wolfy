@@ -262,6 +262,21 @@ func (s *Service) askMessages(ctx context.Context, system, prompt string, temper
 }
 
 func (s *Service) askProvider(ctx context.Context, current provider, system, prompt string, temperature float32) (string, error) {
+	answer, err := s.askProviderWithMode(ctx, current, system, prompt, temperature, current.structured)
+	var failure *ProviderError
+	if current.structured && errors.As(err, &failure) && failure.Status == http.StatusBadRequest && ctx.Err() == nil {
+		// OpenRouter маршрутизирует одно имя через разные реализации. Часть
+		// бесплатных маршрутов принимает JSON mode, часть отвечает 400 на
+		// response_format, хотя сама модель способна вернуть JSON по промпту.
+		// Повтор без расширения сохраняет эту модель в цепочке fallback и не
+		// заставляет все следующие модели падать по той же причине.
+		s.log.Info("ии-провайдер не принял JSON mode, повторяем без него", "provider", current.name, "model", current.model)
+		return s.askProviderWithMode(ctx, current, system, prompt, temperature, false)
+	}
+	return answer, err
+}
+
+func (s *Service) askProviderWithMode(ctx context.Context, current provider, system, prompt string, temperature float32, structured bool) (string, error) {
 	messages := make([]map[string]string, 0, 2)
 	if strings.TrimSpace(system) != "" {
 		messages = append(messages, map[string]string{"role": "system", "content": system})
@@ -271,7 +286,7 @@ func (s *Service) askProvider(ctx context.Context, current provider, system, pro
 		"model": current.model, "temperature": temperature,
 		"messages": messages,
 	}
-	if current.structured {
+	if structured {
 		// Все резервные модели в дефолтном списке заявляют structured output.
 		// JSON mode резко сокращает долю ответов с markdown-обёрткой.
 		payload["response_format"] = map[string]string{"type": "json_object"}

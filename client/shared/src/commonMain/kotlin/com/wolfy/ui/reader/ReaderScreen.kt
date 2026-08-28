@@ -77,6 +77,8 @@ import androidx.compose.ui.backhandler.BackHandler
 import androidx.compose.runtime.derivedStateOf
 import com.wolfy.data.FocusMode
 import com.wolfy.platform.KeepScreenAwake
+import com.wolfy.platform.CompanionSound
+import com.wolfy.platform.playCompanionSound
 import com.wolfy.theme.ReadingTheme
 import kotlinx.coroutines.delay
 import com.wolfy.theme.WolfyTheme
@@ -159,6 +161,7 @@ fun ReaderScreen(
     onPacerChange: (Int) -> Unit = {},
     segmentWords: Int = 0,
     reduceMotion: Boolean = false,
+    companionSounds: Boolean = true,
     onSegmentWordsChange: (Int) -> Unit = {},
     onNextSegment: (Int) -> Unit = {},
     onStopSegments: () -> Unit = {},
@@ -464,7 +467,7 @@ fun ReaderScreen(
             // Лист снизу: то же место, где карточка слова, — а не случайный
             // угол, из которого он перекрывает текст.
             Box(Modifier.fillMaxWidth().align(Alignment.BottomCenter).zIndex(2f)) {
-                StoryRecapSheet(state.recap, companionProfile, onRecap, onDismissRecap)
+                StoryRecapSheet(state.recap, companionProfile, companionSounds, onRecap, onDismissRecap)
             }
         }
 
@@ -490,6 +493,7 @@ fun ReaderScreen(
                 scrolling = scroll.isScrollInProgress,
                 compact = !selectViaMouse,
                 reduceMotion = reduceMotion,
+                soundsEnabled = companionSounds,
                 activeBlock = activeBlock,
                 chapterKey = state.chapterIndex,
                 onRecap = companionOnRecap,
@@ -789,11 +793,17 @@ private fun <T> QuickChoice(
 private fun StoryRecapSheet(
     state: StoryRecapState,
     companion: com.wolfy.data.companion.CompanionProfile?,
+    soundsEnabled: Boolean,
     onRetry: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
+    LaunchedEffect(state) {
+        if (soundsEnabled && state is StoryRecapState.Ready) {
+            playCompanionSound(CompanionSound.Ready)
+        }
+    }
     // Итог с событиями может быть длинным, а экран — коротким. Задавленная
     // кнопка «закрыть» хуже любого листания, поэтому sheet ограничен тремя
     // четвертями экрана и прокручивается целиком.
@@ -809,19 +819,27 @@ private fun StoryRecapSheet(
                 .padding(spacing.large),
             verticalArrangement = Arrangement.spacedBy(spacing.small),
         ) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Row(horizontalArrangement = Arrangement.spacedBy(spacing.small), verticalAlignment = Alignment.CenterVertically) {
-                if (companion != null) CompanionFigure(companion.appearance, Modifier.size(52.dp))
-                Column {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(spacing.small),
+            verticalAlignment = Alignment.Top,
+        ) {
+            if (companion != null) {
+                // Выделенная колонка держит весь портрет, включая волосы и
+                // одежду. Текст больше не начинается под рисунком.
+                Box(Modifier.size(width = 68.dp, height = 76.dp), contentAlignment = Alignment.Center) {
+                    CompanionFigure(companion.appearance, Modifier.fillMaxSize())
+                }
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(spacing.tight)) {
                     Text("Сюжет · Beta", style = WolfyTheme.typography.bookTitle, color = colors.ink)
                     if (companion != null) Text("${companion.name} вспоминает прочитанное", style = WolfyTheme.typography.caption, color = colors.inkMuted)
-                }
+                    Text("ИИ может ошибаться. До 10 запросов в день.", style = WolfyTheme.typography.caption, color = colors.inkMuted)
             }
             Text("закрыть", style = WolfyTheme.typography.caption, color = colors.accent, modifier = Modifier.pressable(onClick = onDismiss))
         }
-        Text("ИИ может ошибаться. До 10 запросов в день.", style = WolfyTheme.typography.caption, color = colors.inkMuted)
         when (state) {
-            StoryRecapState.Loading -> Text("Gemini собирает события…", style = WolfyTheme.typography.body, color = colors.inkMuted)
+            StoryRecapState.Loading -> Text("Собираю события из прочитанного…", style = WolfyTheme.typography.body, color = colors.inkMuted)
             is StoryRecapState.Failed -> {
                 Text(state.message, style = WolfyTheme.typography.caption, color = colors.accent)
                 Text("Попробовать снова", style = WolfyTheme.typography.button, color = colors.accent, modifier = Modifier.pressable(onClick = onRetry))

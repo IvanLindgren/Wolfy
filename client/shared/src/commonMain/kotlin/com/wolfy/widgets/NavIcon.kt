@@ -161,22 +161,26 @@ private fun DrawScope.drawReadingSettings(tint: Color) {
     }
 }
 
-/** Круговая стрелка назад: вернуться к недавним событиям книги. */
+/** Раскрытая книга с закладкой назад: вспомнить уже прочитанный сюжет. */
 private fun DrawScope.drawRecap(tint: Color) {
-    val line = size.minDimension * 0.09f
-    drawArc(
-        color = tint,
-        startAngle = -65f,
-        sweepAngle = 285f,
-        useCenter = false,
-        topLeft = Offset(size.width * 0.13f, size.height * 0.13f),
-        size = Size(size.width * 0.74f, size.height * 0.74f),
-        style = Stroke(width = line),
-    )
-    val arrow = Path().apply {
-        moveTo(size.width * 0.12f, size.height * 0.38f)
-        lineTo(size.width * 0.13f, size.height * 0.13f)
-        lineTo(size.width * 0.37f, size.height * 0.18f)
+    val line = size.minDimension * 0.075f
+    val stroke = Stroke(width = line)
+    val book = Path().apply {
+        moveTo(size.width * 0.08f, size.height * 0.28f)
+        quadraticTo(size.width * 0.31f, size.height * 0.19f, size.width * 0.50f, size.height * 0.34f)
+        quadraticTo(size.width * 0.69f, size.height * 0.19f, size.width * 0.92f, size.height * 0.28f)
+        lineTo(size.width * 0.92f, size.height * 0.82f)
+        quadraticTo(size.width * 0.69f, size.height * 0.72f, size.width * 0.50f, size.height * 0.88f)
+        quadraticTo(size.width * 0.31f, size.height * 0.72f, size.width * 0.08f, size.height * 0.82f)
+        close()
     }
-    drawPath(arrow, tint, style = Stroke(width = line))
+    drawPath(book, tint, style = stroke)
+    drawLine(tint, Offset(size.width * 0.50f, size.height * 0.34f), Offset(size.width * 0.50f, size.height * 0.88f), line)
+    val arrow = Path().apply {
+        moveTo(size.width * 0.38f, size.height * 0.49f)
+        lineTo(size.width * 0.23f, size.height * 0.57f)
+        lineTo(size.width * 0.38f, size.height * 0.65f)
+    }
+    drawPath(arrow, tint, style = stroke)
+    drawLine(tint, Offset(size.width * 0.24f, size.height * 0.57f), Offset(size.width * 0.44f, size.height * 0.57f), line)
 }

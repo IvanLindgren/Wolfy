@@ -54,6 +54,8 @@ fun SettingsScreen(
     accountEmail: String,
     reduceMotion: Boolean,
     onReduceMotion: (Boolean) -> Unit,
+    companionSounds: Boolean,
+    onCompanionSounds: (Boolean) -> Unit,
     /*
      * Помощь вниманию: якорь слова, окно чтения, ведущая строка, отрезок.
      * Всё выключено по умолчанию — навязанная помощь мешает тем, кому она не
@@ -121,6 +123,12 @@ fun SettingsScreen(
                 "Персонаж, которого вы создаёте и наряжаете. Необязательный.",
                 style = WolfyTheme.typography.caption,
                 color = colors.inkMuted,
+            )
+            SwitchRow(
+                title = "Звуки компаньона",
+                hint = "Тихие сигналы при появлении и готовом ответе.",
+                on = companionSounds,
+                onChange = onCompanionSounds,
             )
             PrimaryButton("Открыть раздел", onOpenCompanion)
         }

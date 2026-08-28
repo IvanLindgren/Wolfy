@@ -12,6 +12,8 @@ import * as api from '../api/client'
 import { CompanionFigure } from './figure'
 import { CompanionReactionEngine, analyzeMood, type Decision } from './engine'
 import { characterLine, type CompanionProfile } from './model'
+import { playCompanionSound } from './sound'
+import motionStyles from './ReaderCompanion.module.css'
 
 export interface ReaderCompanionProps {
   profile: CompanionProfile
@@ -25,6 +27,8 @@ export interface ReaderCompanionProps {
   suppressed: boolean
   scrolling: boolean
   activeText: string
+  soundsEnabled: boolean
+  reduceMotion: boolean
   onRecap: () => void
   onEdit: () => void
 }
@@ -54,10 +58,15 @@ export function ReaderCompanion(props: ReaderCompanionProps) {
   const rests = useRef(0)
   const previousChapter = useRef(chapter)
   const compact = window.matchMedia('(max-width: 42rem)').matches
-  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  const reducedMotion = props.reduceMotion || window.matchMedia('(prefers-reduced-motion: reduce)').matches
   const requestRef = useRef<AbortController | null>(null)
   const pendingConsentRef = useRef<(() => void) | null>(null)
   const ribbonStartRef = useRef<number | null>(null)
+
+  const revealCompanion = () => {
+    if (!revealed) playCompanionSound('reveal', props.soundsEnabled)
+    setRevealed(true)
+  }
 
   const cancelRequest = () => {
     requestRef.current?.abort()
@@ -331,7 +340,7 @@ export function ReaderCompanion(props: ReaderCompanionProps) {
       {!suppressed && !revealed && !menuOpen && !sheet && <button
         type="button"
         aria-label="Потяните влево, чтобы открыть компаньона"
-        onClick={() => setRevealed(true)}
+        onClick={revealCompanion}
         onPointerDown={(event) => {
           ribbonStartRef.current = event.clientX
         }}
@@ -339,19 +348,19 @@ export function ReaderCompanion(props: ReaderCompanionProps) {
           const start = ribbonStartRef.current
           if (start !== null && start - event.clientX >= 22) {
             ribbonStartRef.current = null
-            setRevealed(true)
+            revealCompanion()
           }
         }}
         onPointerUp={(event) => {
           const start = ribbonStartRef.current
           ribbonStartRef.current = null
-          if (start !== null && start - event.clientX >= 22) setRevealed(true)
+          if (start !== null && start - event.clientX >= 22) revealCompanion()
         }}
         onPointerLeave={(event) => {
           const start = ribbonStartRef.current
           if (start !== null && start - event.clientX >= 6 && event.buttons === 1) {
             ribbonStartRef.current = null
-            setRevealed(true)
+            revealCompanion()
           }
         }}
         onPointerCancel={() => { ribbonStartRef.current = null }}
@@ -370,13 +379,13 @@ export function ReaderCompanion(props: ReaderCompanionProps) {
         type="button"
         aria-label={profile.name ? `Компаньон ${profile.name}, ${characterLine(profile)}` : 'Компаньон'}
         onClick={() => { if (!suppressed) { setMenuOpen((open) => !open); setBubble(null) } }}
+        className={`${motionStyles.figure} ${reducedMotion ? motionStyles.reduced : ''}`}
         style={{
           background: 'none', border: 'none', padding: 0, cursor: suppressed ? 'default' : 'pointer',
-          transform: 'translate(0, 0)',
-          transition: reducedMotion ? 'none' : 'transform 240ms ease',
+          width: compact ? 72 : 108, height: compact ? 72 : 108, overflow: 'visible',
         }}
       >
-        <CompanionFigure appearance={profile.appearance} size={compact ? 54 : 96} />
+        <CompanionFigure appearance={profile.appearance} size={compact ? 72 : 108} />
       </button>}
     </div>
   )

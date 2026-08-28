@@ -9,11 +9,12 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Fill
-import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.drawscope.withTransform
 import com.wolfy.data.companion.CompanionAppearance
 import com.wolfy.data.companion.CompanionAsset
 import com.wolfy.data.companion.CompanionAssetCache
@@ -53,11 +54,33 @@ fun CompanionFigure(
     }
     val palette = rememberPalette(appearance)
     val canvas = manifest
+    val contentBounds = remember(assets) { assets.contentBounds() }
     Box(modifier) {
         if (canvas != null && assets.isNotEmpty()) {
             Canvas(Modifier.fillMaxSize()) {
-                val factor = size.minDimension / canvas.canvas.width.toFloat()
-                scale(factor, factor, pivot = Offset.Zero) {
+                // Некоторые причёски и украшения выходят за условные
+                // 1024×1024 исходного пака. Масштаб по размеру холста их
+                // обрезал и позволял рисунку вылезать в соседний текст.
+                // Вписываем реальные границы всех выбранных слоёв.
+                val bounds = contentBounds ?: Rect(
+                    0f,
+                    0f,
+                    canvas.canvas.width.toFloat(),
+                    canvas.canvas.height.toFloat(),
+                )
+                val inset = size.minDimension * 0.035f
+                val availableWidth = (size.width - inset * 2f).coerceAtLeast(1f)
+                val availableHeight = (size.height - inset * 2f).coerceAtLeast(1f)
+                val factor = minOf(
+                    availableWidth / bounds.width.coerceAtLeast(1f),
+                    availableHeight / bounds.height.coerceAtLeast(1f),
+                )
+                val left = (size.width - bounds.width * factor) / 2f - bounds.left * factor
+                val top = (size.height - bounds.height * factor) / 2f - bounds.top * factor
+                withTransform({
+                    translate(left, top)
+                    scale(factor, factor, pivot = Offset.Zero)
+                }) {
                     for (asset in assets) {
                         drawAsset(asset, palette)
                     }
@@ -65,6 +88,38 @@ fun CompanionFigure(
             }
         }
     }
+}
+
+private fun List<CompanionAsset>.contentBounds(): Rect? {
+    var combined: Rect? = null
+    for (asset in this) {
+        for (shape in asset.shapes) {
+            val next = when (shape) {
+                is com.wolfy.data.companion.CompanionShape.Path -> shape.path.getBounds()
+                is com.wolfy.data.companion.CompanionShape.Oval -> Rect(
+                    shape.cx - shape.rx,
+                    shape.cy - shape.ry,
+                    shape.cx + shape.rx,
+                    shape.cy + shape.ry,
+                )
+                is com.wolfy.data.companion.CompanionShape.Rect -> Rect(
+                    shape.x,
+                    shape.y,
+                    shape.x + shape.w,
+                    shape.y + shape.h,
+                )
+            }
+            combined = combined?.let { current ->
+                Rect(
+                    minOf(current.left, next.left),
+                    minOf(current.top, next.top),
+                    maxOf(current.right, next.right),
+                    maxOf(current.bottom, next.bottom),
+                )
+            } ?: next
+        }
+    }
+    return combined
 }
 
 private fun DrawScope.drawAsset(asset: CompanionAsset, palette: CompanionPalette) {

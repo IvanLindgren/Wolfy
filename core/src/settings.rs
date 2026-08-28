@@ -70,6 +70,10 @@ pub struct AppSettings {
     /// Свести согласованные анимации к мгновенным переходам.
     #[serde(default)]
     pub reduce_motion: bool,
+    /// Короткие звуки компаньона. Включены по умолчанию, но всегда
+    /// отключаются отдельно от анимаций.
+    #[serde(default = "yes")]
+    pub companion_sounds: bool,
     /// Набирать основу слова полужирным.
     ///
     /// Приём беглого чтения: взгляд цепляется за начало слова, а окончание
@@ -162,6 +166,10 @@ fn one() -> f32 {
     1.0
 }
 
+fn yes() -> bool {
+    true
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         AppSettings {
@@ -171,6 +179,7 @@ impl Default for AppSettings {
             onboarding_seen: false,
             last_seen_version: String::new(),
             reduce_motion: false,
+            companion_sounds: true,
             emphasize_stems: false,
             focus_mode: default_focus(),
             pacer_wpm: 0,
@@ -510,6 +519,7 @@ mod reading_tests {
         assert_eq!(settings.pacer_wpm, 0);
         assert_eq!(settings.segment_words, 0);
         assert!(settings.newspaper_topics.is_empty());
+        assert!(settings.companion_sounds, "старый файл должен получить звуки по умолчанию");
     }
 
     #[test]

@@ -1,0 +1,28 @@
+.figure {
+  overflow: visible;
+  transform-origin: 55% 90%;
+  animation: companionBreathe 3.2s ease-in-out infinite;
+}
+
+.figure:hover {
+  animation: companionHello 520ms cubic-bezier(.2, .8, .2, 1) both;
+}
+
+@keyframes companionBreathe {
+  0%, 100% { transform: translateY(0) rotate(-0.5deg); }
+  50% { transform: translateY(-4px) rotate(0.7deg); }
+}
+
+@keyframes companionHello {
+  0% { transform: translateY(0) rotate(0); }
+  35% { transform: translateY(-5px) rotate(-2deg); }
+  70% { transform: translateY(-2px) rotate(1.5deg); }
+  100% { transform: translateY(0) rotate(0); }
+}
+
+.reduced,
+.reduced:hover { animation: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .figure, .figure:hover { animation: none; }
+}

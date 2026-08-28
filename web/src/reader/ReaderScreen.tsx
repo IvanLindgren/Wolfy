@@ -25,6 +25,7 @@ import * as api from '../api/client'
 import { useCompanion } from '../companion/store'
 import { ReaderCompanion } from '../companion/ReaderCompanion'
 import { CompanionFigure } from '../companion/figure'
+import { playCompanionSound } from '../companion/sound'
 import type { CompanionProfile } from '../companion/model'
 import * as bridge from '../core/bridge'
 import { session, useSession } from '../core/session'
@@ -41,7 +42,7 @@ import {
   ForwardIcon,
   ReaderIcon,
   SettingsIcon,
-  StarIcon,
+  RecapIcon,
 } from '../widgets/icons'
 import { WolfyCompanion } from '../widgets/Wolfy'
 import { ToolDock, lastPencilTone, savePencilTone, type OpenAnnotation, type Tool } from './annotate'
@@ -1150,7 +1151,7 @@ export function ReaderScreen() {
           data-tooltip={recap.state === 'loading' ? 'Пересказ готовится' : 'Вспомнить сюжет'}
           data-loading={recap.state === 'loading'}
         >
-          <StarIcon />
+          <RecapIcon />
         </button>
 
         <button
@@ -1250,6 +1251,8 @@ export function ReaderScreen() {
           suppressed={card !== null || contents || tuner || recap.state !== 'idle' || openNote !== null}
           scrolling={false}
           activeText={activeText}
+          soundsEnabled={settings.companionSounds}
+          reduceMotion={settings.reduceMotion}
           onRecap={() => void recapStory()}
           onEdit={() => void navigate({ to: '/companion' })}
         />
@@ -1278,6 +1281,7 @@ export function ReaderScreen() {
         <StoryRecap
           state={recap}
           companion={companionProfile}
+          soundsEnabled={settings.companionSounds}
           onClose={() => setRecap({ state: 'idle' })}
           onRetry={() => void recapStory()}
         />
@@ -1365,25 +1369,30 @@ export function ReaderScreen() {
 function StoryRecap({
   state,
   companion,
+  soundsEnabled,
   onClose,
   onRetry,
 }: {
   state: { state: 'idle' | 'loading' | 'ready' | 'failed'; result?: api.AiRecap; message?: string }
   companion: CompanionProfile | null
+  soundsEnabled: boolean
   onClose: () => void
   onRetry: () => void
 }) {
+  useEffect(() => {
+    if (state.state === 'ready') playCompanionSound('ready', soundsEnabled)
+  }, [state.state, soundsEnabled])
   return (
     <aside className={styles.recap} aria-live="polite">
       <div className={styles.recap__head}>
-        <div style={{ display: 'flex', gap: '.75rem', alignItems: 'center' }}>
-          {companion && <CompanionFigure appearance={companion.appearance} size={52} />}
-          <div>
+        <div className={styles.recap__portrait} aria-hidden={!companion}>
+          {companion && <CompanionFigure appearance={companion.appearance} size={68} />}
+        </div>
+          <div className={styles.recap__copy}>
           <strong>О чём были последние страницы · Beta</strong>
           {companion && <p>{companion.name} вспоминает прочитанное</p>}
           <p>ИИ может ошибаться. До 10 запросов в день.</p>
           </div>
-        </div>
         <button type="button" className={styles.iconButton} onClick={onClose} aria-label="Закрыть пересказ">
           <CloseIcon />
         </button>

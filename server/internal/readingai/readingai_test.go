@@ -56,6 +56,39 @@ func TestAskFallsBackToNextProvider(t *testing.T) {
 	}
 }
 
+func TestAskRetriesProviderWithoutUnsupportedJSONMode(t *testing.T) {
+	requests := make(chan map[string]any, 2)
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		requests <- body
+		if body["response_format"] != nil {
+			http.Error(w, "response_format is not supported", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"ok\":true}"}}]}`))
+	}))
+	defer endpoint.Close()
+
+	service := New(nil, "key", endpoint.URL, "model", time.Second).WithJSONMode(true)
+	answer, err := service.Ask(context.Background(), "json", 0.2)
+	if err != nil {
+		t.Fatalf("повтор без JSON mode не сработал: %v", err)
+	}
+	if answer != `{"ok":true}` {
+		t.Fatalf("неожиданный ответ: %q", answer)
+	}
+	if first := <-requests; first["response_format"] == nil {
+		t.Fatal("первый запрос должен использовать явно включённый JSON mode")
+	}
+	if second := <-requests; second["response_format"] != nil {
+		t.Fatal("повтор должен убрать несовместимый response_format")
+	}
+}
+
 func TestJSONModeНеОпределяетсяПоИмениМодели(t *testing.T) {
 	requests := make(chan map[string]any, 2)
 	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

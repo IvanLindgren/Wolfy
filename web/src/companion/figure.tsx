@@ -82,7 +82,7 @@ export function useCompanionFigure(appearance: CompanionAppearance): string | nu
         parts.push(recolor(await layerText(asset.file), appearance))
       }
       const combined =
-        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${data.canvas.width} ${data.canvas.height}">` +
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-64 -64 ${data.canvas.width + 128} ${data.canvas.height + 128}" overflow="visible">` +
         parts.join('') +
         '</svg>'
       if (alive) setUri(`data:image/svg+xml;utf8,${encodeURIComponent(combined)}`)
@@ -95,15 +95,16 @@ export function useCompanionFigure(appearance: CompanionAppearance): string | nu
 
 export function CompanionFigure({ appearance, size = 180 }: { appearance: CompanionAppearance; size?: number }) {
   const uri = useCompanionFigure(appearance)
-  if (!uri) return <div style={{ width: size, height: size }} aria-hidden />
+  if (!uri) return <span style={{ display: 'block', width: size, height: size }} aria-hidden />
   return (
-    <img
-      src={uri}
-      width={size}
-      height={size}
-      alt=""
-      aria-hidden
-      style={{ display: 'block', maxWidth: '100%' }}
-    />
+    <span style={{ display: 'block', width: size, height: size, overflow: 'visible' }} aria-hidden>
+      <img
+        src={uri}
+        width={size}
+        height={size}
+        alt=""
+        style={{ display: 'block', width: '100%', height: '100%', objectFit: 'contain', overflow: 'visible' }}
+      />
+    </span>
   )
 }

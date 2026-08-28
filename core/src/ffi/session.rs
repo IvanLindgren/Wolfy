@@ -267,6 +267,9 @@ pub enum Command {
     SetReduceMotion {
         on: bool,
     },
+    SetCompanionSounds {
+        on: bool,
+    },
     /// Набирать основу слова полужирным.
     SetEmphasizeStems {
         on: bool,
@@ -907,6 +910,12 @@ impl Session {
 
             Command::SetReduceMotion { on } => {
                 self.settings.reduce_motion = on;
+                self.mark_settings_dirty();
+                self.done(Outcome::default())
+            }
+
+            Command::SetCompanionSounds { on } => {
+                self.settings.companion_sounds = on;
                 self.mark_settings_dirty();
                 self.done(Outcome::default())
             }
@@ -1588,6 +1597,7 @@ mod tests {
             r#"{"op":"seenOnboarding"}"#,
             r#"{"op":"seenVersion","version":"1.0.5"}"#,
             r#"{"op":"setReduceMotion","on":true}"#,
+            r#"{"op":"setCompanionSounds","on":false}"#,
             r#"{"op":"setIntensity","intensity":"Strong"}"#,
             r#"{"op":"markDemoAdded"}"#,
             r#"{"op":"replaceSettings","settings":{"theme":"Oled"}}"#,

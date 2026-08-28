@@ -49,6 +49,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   onboardingSeen: false,
   lastSeenVersion: '',
   reduceMotion: false,
+  companionSounds: true,
   emphasizeStems: false,
   focusMode: 'off',
   pacerWpm: 0,
@@ -348,6 +349,10 @@ export const session = {
 
   async setReduceMotion(on: boolean): Promise<void> {
     await run({ op: 'setReduceMotion', on })
+  },
+
+  async setCompanionSounds(on: boolean): Promise<void> {
+    await run({ op: 'setCompanionSounds', on })
   },
 
   async setEmphasizeStems(on: boolean): Promise<void> {

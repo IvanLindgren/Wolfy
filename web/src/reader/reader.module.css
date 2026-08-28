@@ -207,11 +207,21 @@
 }
 
 .recap__head {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: flex-start;
-  justify-content: space-between;
   gap: 0.75rem;
 }
+
+.recap__portrait {
+  display: grid;
+  width: 4.25rem;
+  height: 4.75rem;
+  place-items: center;
+  overflow: visible;
+}
+
+.recap__copy { min-width: 0; }
 
 .recap__head p,
 .recap__muted,

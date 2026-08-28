@@ -401,6 +401,8 @@ export interface AppSettings {
   onboardingSeen: boolean
   lastSeenVersion: string
   reduceMotion: boolean
+  /** Короткие звуки компаньона; отдельно от радио и озвучки слов. */
+  companionSounds: boolean
   /** Набирать основу слова полужирным: якорь для беглого чтения. */
   emphasizeStems: boolean
   /** Прожектор: `off`, `sentence`, `paragraph`. */
@@ -540,6 +542,7 @@ export type Command =
   | { op: 'seenOnboarding' }
   | { op: 'seenVersion'; version: string }
   | { op: 'setReduceMotion'; on: boolean }
+  | { op: 'setCompanionSounds'; on: boolean }
   | { op: 'setIntensity'; intensity: string }
   | { op: 'markDemoAdded' }
   | { op: 'replaceSettings'; settings: AppSettings }
