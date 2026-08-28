@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Цвет бумаги светлой темы: иконка и первый кадр приложения совпадают. -->
-    <color name="ic_launcher_background">#F4F4F1</color>
+    <!-- Фон adaptive icon. Не используем цвет бумаги: Pixel превращает его
+         в визуально белый круг вокруг волка. Брендовый красный сохраняет
+         цельный силуэт и хорошо контрастирует с иллюстрацией. -->
+    <color name="ic_launcher_background">#B83A2A</color>
 </resources>

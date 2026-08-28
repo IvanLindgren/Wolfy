@@ -107,7 +107,7 @@ class CompanionAssetCache(private val loadBytes: suspend (String) -> ByteArray) 
         }
         if (!shouldLoad) return deferred.await()
         val parsed = runCatching {
-            parseSvg(loadBytes(file).decodeToString(), assetId)
+            parseSvg(loadBytes("$RESOURCE_ROOT/$file").decodeToString(), assetId)
         }.getOrNull()
         mutex.withLock {
             parsed?.let { assets[assetId] = it }
@@ -118,7 +118,8 @@ class CompanionAssetCache(private val loadBytes: suspend (String) -> ByteArray) 
     }
 
     companion object {
-        private const val MANIFEST = "files/companions/manifest.json"
+        private const val RESOURCE_ROOT = "files/companions"
+        private const val MANIFEST = "$RESOURCE_ROOT/manifest.json"
         private val manifestJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
 
         /** Общий кеш приложения: слои одинаковы на всех экранах. */

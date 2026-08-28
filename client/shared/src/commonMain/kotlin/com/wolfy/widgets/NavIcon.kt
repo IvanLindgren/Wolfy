@@ -14,8 +14,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.unit.dp
 
-/** Значки нижней навигации. */
-enum class NavIcon { Books, Shelves, Discover, Cards, More }
+/** Значки нижней навигации и компактных действий читалки. */
+enum class NavIcon { Books, Shelves, Discover, Cards, More, Star }
 
 /**
  * Значок нижней навигации, нарисованный кодом.
@@ -34,6 +34,7 @@ fun NavGlyph(icon: NavIcon, tint: Color, modifier: Modifier = Modifier) {
             NavIcon.Discover -> drawDiscover(tint)
             NavIcon.Cards -> drawCards(tint)
             NavIcon.More -> drawGear(tint)
+            NavIcon.Star -> drawStar(tint)
         }
     }
 }
@@ -145,4 +146,22 @@ private fun DrawScope.drawGear(tint: Color) {
             )
         }
     }
+}
+
+/** Пятиконечная звезда для действия «Вспомнить сюжет». */
+private fun DrawScope.drawStar(tint: Color) {
+    val path = Path().apply {
+        moveTo(size.width * 0.50f, size.height * 0.10f)
+        lineTo(size.width * 0.60f, size.height * 0.39f)
+        lineTo(size.width * 0.91f, size.height * 0.40f)
+        lineTo(size.width * 0.66f, size.height * 0.58f)
+        lineTo(size.width * 0.75f, size.height * 0.88f)
+        lineTo(size.width * 0.50f, size.height * 0.70f)
+        lineTo(size.width * 0.25f, size.height * 0.88f)
+        lineTo(size.width * 0.34f, size.height * 0.58f)
+        lineTo(size.width * 0.09f, size.height * 0.40f)
+        lineTo(size.width * 0.40f, size.height * 0.39f)
+        close()
+    }
+    drawPath(path, tint, style = Stroke(width = size.minDimension * 0.09f))
 }

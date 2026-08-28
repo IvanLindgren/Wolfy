@@ -31,7 +31,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Text
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipAnchorPosition
+import androidx.compose.material3.TooltipDefaults
+import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -52,6 +58,10 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -72,6 +82,8 @@ import kotlinx.coroutines.delay
 import com.wolfy.theme.WolfyTheme
 import com.wolfy.widgets.ChapterHeading
 import com.wolfy.widgets.DropCapParagraph
+import com.wolfy.widgets.NavGlyph
+import com.wolfy.widgets.NavIcon
 import com.wolfy.widgets.ReaderParagraph
 import com.wolfy.widgets.ReaderQuote
 import com.wolfy.widgets.Rule
@@ -544,9 +556,22 @@ private fun ReaderTopBar(
                     .weight(1f)
                     .pressable(onClick = onOpenContents),
             )
-                Row(horizontalArrangement = Arrangement.spacedBy(spacing.small)) {
-                    // «Текст» не читался как кнопка настроек — явное название честнее.
-                    SectionLabel("Настройки чтения", Modifier.pressable(onClick = onOpenSettings))
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(spacing.small),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    ReaderActionIcon(
+                        label = "Настройки чтения",
+                        icon = NavIcon.More,
+                        tint = colors.inkMuted,
+                        onClick = onOpenSettings,
+                    )
+                    ReaderActionIcon(
+                        label = "Вспомнить сюжет",
+                        icon = NavIcon.Star,
+                        tint = colors.accent,
+                        onClick = onRecap,
+                    )
                     SectionLabel("${(progress * 100).toInt()}%")
                 }
         }
@@ -563,22 +588,50 @@ private fun ReaderTopBar(
                 .background(colors.accent),
             )
         }
-        Row(Modifier.align(Alignment.End).padding(horizontal = spacing.pageMargin, vertical = spacing.small), horizontalArrangement = Arrangement.spacedBy(spacing.medium)) {
-            // Режимы компаньона в компактном меню: без него чтение не меняется.
-            if (companionMode != null) {
+        if (companionMode != null) {
+            Row(Modifier.align(Alignment.End).padding(horizontal = spacing.pageMargin, vertical = spacing.small), horizontalArrangement = Arrangement.spacedBy(spacing.medium)) {
+                // Режимы компаньона в компактном меню: без него чтение не меняется.
                 val modeLabel = when (companionMode) {
                     "quiet" -> "Компаньон: тихо"
                     "active" -> "Компаньон: рядом"
                     else -> "Читать с компаньоном"
                 }
                 Text(
-                    modeLabel,
-                    style = WolfyTheme.typography.caption,
-                    color = if (companionMode == "active") colors.accent else colors.inkMuted,
-                    modifier = Modifier.pressable(onClick = onCompanionMode),
-                )
+                        modeLabel,
+                        style = WolfyTheme.typography.caption,
+                        color = if (companionMode == "active") colors.accent else colors.inkMuted,
+                        modifier = Modifier.pressable(onClick = onCompanionMode),
+                    )
             }
-            Text("Вспомнить сюжет · Beta", style = WolfyTheme.typography.caption, color = colors.accent, modifier = Modifier.pressable(onClick = onRecap))
+        }
+    }
+}
+
+/** Компактное действие: подсказка появляется при наведении или фокусе. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ReaderActionIcon(
+    label: String,
+    icon: NavIcon,
+    tint: androidx.compose.ui.graphics.Color,
+    onClick: () -> Unit,
+) {
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
+        tooltip = { PlainTooltip { Text(label) } },
+        state = rememberTooltipState(),
+    ) {
+        Box(
+            Modifier
+                .size(44.dp)
+                .semantics {
+                    role = Role.Button
+                    contentDescription = label
+                }
+                .pressable(onClick = onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            NavGlyph(icon, tint)
         }
     }
 }

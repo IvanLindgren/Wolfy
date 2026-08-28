@@ -49,20 +49,23 @@
   flex: 1;
 }
 
-.recapButton {
+.modeButton {
   min-height: 2.1rem;
-  padding: 0.35rem 0.6rem;
+  padding: 0.35rem 0.55rem;
   border: 1px solid var(--rule);
-  border-radius: 999px;
-  background: var(--surface);
-  color: var(--accent);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink-muted);
   font: inherit;
-  font-size: 0.78rem;
-  font-weight: 650;
+  font-size: 0.75rem;
   white-space: nowrap;
 }
 
-.recapButton:disabled { opacity: 0.55; }
+.modeButton:hover,
+.modeButton:focus-visible {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
 
 .iconButton {
   display: grid;
@@ -142,6 +145,55 @@
   opacity: 0.35;
 }
 
+/* Основные действия читалки читаются по форме, а не длинной подписью. */
+.readerAction {
+  position: relative;
+  flex: 0 0 2.75rem;
+  width: 2.75rem;
+  height: 2.75rem;
+}
+
+.readerAction[data-tooltip]::after {
+  position: absolute;
+  top: calc(100% + 0.45rem);
+  right: 0;
+  z-index: 60;
+  width: max-content;
+  max-width: 15rem;
+  padding: 0.38rem 0.55rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  color: var(--ink);
+  content: attr(data-tooltip);
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.25;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-0.2rem);
+  transition: opacity var(--quick, 180ms) ease, transform var(--quick, 180ms) ease;
+}
+
+.readerAction[data-tooltip]:hover::after,
+.readerAction[data-tooltip]:focus-visible::after {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.readerAction[data-loading='true'] svg {
+  animation: readerActionPulse 1.2s ease-in-out infinite;
+}
+
+@keyframes readerActionPulse {
+  50% { transform: scale(0.82) rotate(12deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .readerAction[data-loading='true'] svg { animation: none; }
+}
+
 .recap {
   width: min(46rem, calc(100% - 2 * var(--gutter)));
   max-height: min(42dvh, 28rem);
@@ -219,10 +271,6 @@
 .recap__events li[data-kind='turn']::before { background: var(--accent); }
 .recap__events li[data-kind='result']::before { border-radius: 0.15rem; background: var(--accent); }
 .recap__events span { color: var(--ink-muted); font-size: 0.9rem; line-height: 1.4; }
-
-@media (max-width: 42rem) {
-  .recapButton { padding-inline: 0.45rem; font-size: 0.72rem; }
-}
 
 /* --- Полоса прогресса ------------------------------------------------------ */
 

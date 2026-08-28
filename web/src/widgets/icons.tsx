@@ -77,6 +77,10 @@ export const SettingsIcon = icon(
   </>,
 )
 
+export const StarIcon = icon(
+  <path d="m12 3 2.1 6.1 6.4.1-5.1 3.8 1.9 6.2-5.3-3.7-5.3 3.7 1.9-6.2-5.1-3.8 6.4-.1z" />,
+)
+
 export const AccountIcon = icon(
   <>
     <circle cx="12" cy="8.5" r="3.6" />

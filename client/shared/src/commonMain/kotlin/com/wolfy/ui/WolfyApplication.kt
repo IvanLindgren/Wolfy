@@ -549,9 +549,9 @@ private fun Shell(
         parts.reader.setSegmentWords(readingSettings.segmentWords)
     }
 
-    // Состояние библиотеки собирается только пока живёт её маршрут; подписка
-    // ставится ниже, после объявления route.
-    var catalogue by remember { mutableStateOf(com.wolfy.ui.library.LibraryUiState()) }
+    // Библиотека нужна не только маршруту книг: полки тоже должны увидеть
+    // перемещение книги в тот же кадр, в котором ядро его приняло.
+    val catalogue by parts.catalogue.state.collectAsState()
     val readerState by parts.reader.state.collectAsState()
     val readerProgress by parts.reader.withinChapterProgress.collectAsState()
     val readerImages by parts.reader.images.collectAsState()
@@ -678,18 +678,22 @@ private fun Shell(
     val motion = WolfyTheme.motion
 
     // Обмен с сервером: только после входа. Вышедшему из аккаунта незачем
-    // каждую минуту посылать библиотеку без токена; проверка обновления
+    // периодически посылать библиотеку без токена; проверка обновления
     // остаётся независимой и живёт выше, в AppUpdateController.
     //
-    // Минута, а не секунда: синхронизация нужна, чтобы вечером продолжить на
-    // телефоне то, что читал днём за компьютером, и опаздывать на минуту в
-    // этой задаче нечем. Опрос чаще жёг бы батарею ради ничего.
+    // Частый лёгкий JSON-опрос нужен именно для изменений с другого устройства:
+    // отправитель синхронизируется сразу после действия, а получатель не должен
+    // ждать минуту. Файлы по-прежнему передаются отдельными кусками.
     LaunchedEffect(parts, signedIn) {
         if (!signedIn) return@LaunchedEffect
         parts.sync.sync()
         while (true) {
-            delay(60_000)
-            if (parts.sync.hasPending()) parts.sync.sync(waitForRunning = false)
+            delay(5_000)
+            // Проверяем всегда, а не только при своих pending-записях: у этого
+            // устройства могут быть только входящие изменения с телефона.
+            // Без этого «получатель» после стартового sync никогда не узнавал
+            // о новой полке, пока пользователь не менял что-то сам.
+            parts.sync.sync(waitForRunning = false)
         }
     }
 
@@ -716,15 +720,12 @@ private fun Shell(
         }
     }
 
-    // Состояние библиотеки собирается только пока живёт её маршрут.
-    //
-    // Раньше Shell подписывался навсегда: производные списки пересчитывались
-    // в фоне даже тогда, когда читатель сидел в читалке или тренировке.
-    // Последнее собранное значение остаётся в памяти — уходящая анимация
-    // маршрута рисует то, что было видно последним.
-    LaunchedEffect(parts.catalogue, route is Route.Library) {
-        if (route is Route.Library) {
-            parts.catalogue.state.collect { catalogue = it }
+    // Любое изменение полки сразу отражается локальным StateFlow. Отдельный
+    // триггер ниже отправляет его на сервер, не заставляя пользователя ждать
+    // минутный фоновый опрос.
+    val shelfSync = remember(parts.sync) {
+        com.wolfy.ui.library.ShelfSyncTrigger(scope) {
+            if (parts.session.token.value != null) parts.sync.sync()
         }
     }
 
@@ -889,9 +890,18 @@ private fun Shell(
                 Route.Shelves -> ShelvesScreen(
                     state = catalogue,
                     onOpen = open,
-                    onCreateShelf = parts.catalogue::addShelf,
-                    onRemoveShelf = parts.catalogue::removeShelf,
-                    onMove = parts.catalogue::moveToShelf,
+                    onCreateShelf = { name ->
+                        parts.catalogue.addShelf(name)
+                        shelfSync.request()
+                    },
+                    onRemoveShelf = { name ->
+                        parts.catalogue.removeShelf(name)
+                        shelfSync.request()
+                    },
+                    onMove = { bookId, shelf ->
+                        parts.catalogue.moveToShelf(bookId, shelf)
+                        shelfSync.request()
+                    },
                 )
 
                 Route.Discover -> DiscoveryScreen(parts.discovery, parts.newspaper, open)

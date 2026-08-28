@@ -40,7 +40,8 @@ import {
   DecksIcon,
   ForwardIcon,
   ReaderIcon,
-  TuneIcon,
+  SettingsIcon,
+  StarIcon,
 } from '../widgets/icons'
 import { WolfyCompanion } from '../widgets/Wolfy'
 import { ToolDock, lastPencilTone, savePencilTone, type OpenAnnotation, type Tool } from './annotate'
@@ -1118,7 +1119,7 @@ export function ReaderScreen() {
         {companionProfile && (
           <button
             type="button"
-            className={styles.recapButton}
+            className={styles.modeButton}
             onClick={() =>
               saveCompanionProfile({
                 ...companionProfile,
@@ -1142,12 +1143,14 @@ export function ReaderScreen() {
 
         <button
           type="button"
-          className={styles.recapButton}
+          className={`${styles.iconButton} ${styles.readerAction}`}
           onClick={() => void recapStory()}
           disabled={recap.state === 'loading'}
-          title="О чём были последние страницы"
+          aria-label={recap.state === 'loading' ? 'Пересказ готовится' : 'Вспомнить сюжет'}
+          data-tooltip={recap.state === 'loading' ? 'Пересказ готовится' : 'Вспомнить сюжет'}
+          data-loading={recap.state === 'loading'}
         >
-          {recap.state === 'loading' ? 'Вспоминаю…' : 'Сюжет · Beta'}
+          <StarIcon />
         </button>
 
         <button
@@ -1204,10 +1207,10 @@ export function ReaderScreen() {
           className={styles.iconButton}
           data-active={tuner}
           onClick={() => setTuner((open) => !open)}
-          aria-label="Вид страницы"
-          title="Вид страницы"
+          aria-label="Настройки чтения"
+          data-tooltip="Настройки чтения"
         >
-          <TuneIcon />
+          <SettingsIcon />
         </button>
       </div>
 

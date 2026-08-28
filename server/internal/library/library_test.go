@@ -125,6 +125,31 @@ func TestУжеИзвестноеПовторноНеПриходит(t *testing
 	}
 }
 
+func TestПолкаДоезжаетНаДругоеУстройствоСразуПослеСинхронизации(t *testing.T) {
+	s := open(t)
+	svc := library.New(s)
+	user := createUser(t, s)
+	ctx := context.Background()
+
+	phone := book("The Left Hand of Darkness")
+	phone.Shelf = "Фантастика"
+	phone.Position = 2
+	if _, err := svc.Sync(ctx, user, store.Changes{Books: []store.Book{phone}}); err != nil {
+		t.Fatalf("отправка книги на полку: %v", err)
+	}
+
+	computer, err := svc.Sync(ctx, user, store.Changes{Cursor: 0})
+	if err != nil {
+		t.Fatalf("получение на другом устройстве: %v", err)
+	}
+	if len(computer.Books) != 1 {
+		t.Fatalf("книг пришло %d, ожидалась одна", len(computer.Books))
+	}
+	if computer.Books[0].Shelf != "Фантастика" || computer.Books[0].Position != 2 {
+		t.Fatalf("полка не доехала: %+v", computer.Books[0])
+	}
+}
+
 func TestУдалениеДоезжаетПометкой(t *testing.T) {
 	s := open(t)
 	svc := library.New(s)
