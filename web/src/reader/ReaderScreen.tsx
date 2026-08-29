@@ -815,48 +815,6 @@ export function ReaderScreen() {
     [book, chapterIndex],
   )
 
-  const openWord = useCallback(
-    (token: number, element: HTMLElement) => {
-      /*
-       * Карандаш работает и ластиком.
-       *
-       * Провёл — покрасил, нажал по покрашенному — снял. Отдельный
-       * инструмент-ластик тут был бы лишней кнопкой: тем же карандашом
-       * зачёркивают на бумаге.
-       */
-      if (tool === 'pencil') {
-        const existing = annotationAt(token)
-        if (existing) deleteNote(existing)
-        return
-      }
-      const word = chapter.tokens[token]
-      if (!word || !book) return
-      if (tool === 'sticker') {
-        window.getSelection()?.removeAllRanges()
-        void placeSticker(token, token + 1, word.text)
-        return
-      }
-      const sentence = sentenceAt(chapter, token)
-      setPhraseMark(null)
-      setCard({
-        kind: 'word',
-        bookId: book.id,
-        surface: word.text,
-        sentence: sentence?.text ?? word.text,
-        tokens: sentence
-          ? chapter.tokens.slice(sentence.firstToken, sentence.lastToken)
-          : [word],
-        offset: sentence?.firstToken ?? token,
-        selectedToken: token - (sentence?.firstToken ?? token),
-        chapter: chapterIndex,
-        range: { start: token, end: token + 1 },
-        quote: word.text,
-        origin: element,
-      })
-    },
-    [chapter, chapterIndex, book, tool, placeSticker, annotationAt, deleteNote],
-  )
-
   const openPhrase = useCallback(
     (start: number, end: number) => {
       if (!book) return
@@ -901,6 +859,65 @@ export function ReaderScreen() {
       })
     },
     [book, chapterIndex, chapter.tokens, chapter.text, tool, pencilTone, placeSticker],
+  )
+
+  const openWord = useCallback(
+    (token: number, element: HTMLElement) => {
+      /*
+       * Карандаш работает и ластиком.
+       *
+       * Провёл — покрасил, нажал по покрашенному — снял. Отдельный
+       * инструмент-ластик тут был бы лишней кнопкой: тем же карандашом
+       * зачёркивают на бумаге.
+       */
+      if (tool === 'pencil') {
+        const existing = annotationAt(token)
+        if (existing) deleteNote(existing)
+        return
+      }
+      const word = chapter.tokens[token]
+      if (!word || !book) return
+      if (tool === 'sticker') {
+        window.getSelection()?.removeAllRanges()
+        void placeSticker(token, token + 1, word.text)
+        return
+      }
+      /*
+       * Тап по служебному глаголу берёт всю группу сказуемого.
+       *
+       * «is» сам по себе в словаре пуст: ткнувший в него спрашивает не про
+       * связку, а про форму, и ответ на это «is walking», а не «is». Тап по
+       * смысловому глаголу сюда не попадает намеренно - «walking» искать в
+       * словаре осмысленно, и подменять там перевод разбором значило бы
+       * отнимать ровно то, за чем тыкали.
+       */
+      const chain = chapter.chains.find(
+        (item) => token >= item.start && token < item.end && token < item.main,
+      )
+      if (chain) {
+        openPhrase(chain.start, chain.end)
+        return
+      }
+
+      const sentence = sentenceAt(chapter, token)
+      setPhraseMark(null)
+      setCard({
+        kind: 'word',
+        bookId: book.id,
+        surface: word.text,
+        sentence: sentence?.text ?? word.text,
+        tokens: sentence
+          ? chapter.tokens.slice(sentence.firstToken, sentence.lastToken)
+          : [word],
+        offset: sentence?.firstToken ?? token,
+        selectedToken: token - (sentence?.firstToken ?? token),
+        chapter: chapterIndex,
+        range: { start: token, end: token + 1 },
+        quote: word.text,
+        origin: element,
+      })
+    },
+    [chapter, chapterIndex, book, tool, placeSticker, annotationAt, deleteNote, openPhrase],
   )
 
   /*

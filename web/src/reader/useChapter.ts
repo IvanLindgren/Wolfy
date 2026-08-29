@@ -15,7 +15,7 @@
 import { useEffect, useMemo, useState } from 'react'
 
 import * as bridge from '../core/bridge'
-import type { Block, PreparedChapter, Sentence, Token } from '../core/types'
+import type { Block, CompactChain, PreparedChapter, Sentence, Token } from '../core/types'
 
 /** Абзац с уже нарезанными токенами. */
 export interface TokenizedBlock {
@@ -28,12 +28,27 @@ export interface TokenizedBlock {
   offset: number
 }
 
+/**
+ * Цепочка сказуемого в номерах токенов.
+ *
+ * Ядро отдаёт её в символах, а вся читалка живёт в номерах токенов — перевод
+ * делается один раз при загрузке главы, а не на каждое касание.
+ */
+export interface TokenChain {
+  start: number
+  end: number
+  /** Номер токена смыслового глагола. */
+  main: number
+}
+
 export interface LoadedChapter {
   title: string | null
   blocks: TokenizedBlock[]
   /** Все токены главы подряд — по ним считается положение и прогресс. */
   tokens: Token[]
   sentences: Sentence[]
+  /** Группы сказуемого: по ним тап по связке берёт всю цепочку. */
+  chains: TokenChain[]
   /** Текст главы целиком: из него берётся контекст предложения для перевода. */
   text: string
 }
@@ -43,7 +58,33 @@ const EMPTY: LoadedChapter = {
   blocks: [],
   tokens: [],
   sentences: [],
+  chains: [],
   text: '',
+}
+
+/**
+ * Символьные границы цепочки — в номера токенов.
+ *
+ * Токен считается принадлежащим цепочке, если целиком лежит внутри неё:
+ * половинки на границе означали бы, что выделение начинается с середины слова.
+ */
+export function chainsOf(tokens: Token[], raw: CompactChain[] | undefined): TokenChain[] {
+  if (!raw?.length) return []
+  const out: TokenChain[] = []
+  for (const chain of raw) {
+    let start = -1
+    let end = -1
+    let main = -1
+    tokens.forEach((token, index) => {
+      if (token.start < chain.start || token.end > chain.end) return
+      if (start < 0) start = index
+      end = index + 1
+      if (main < 0 && token.start >= chain.mainStart) main = index
+    })
+    if (start < 0 || end <= start) continue
+    out.push({ start, end, main: main < 0 ? end : main })
+  }
+  return out
 }
 
 export interface ChapterLoad {
@@ -140,6 +181,7 @@ export function useChapter(bookId: string, index: number, opened: boolean): Chap
       blocks: assign(data.blocks, texts, tokens),
       tokens,
       sentences,
+      chains: chainsOf(tokens, data.chains),
       text,
     }
     if (alive) {

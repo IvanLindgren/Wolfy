@@ -112,12 +112,26 @@ export interface CompactSentence {
   lastToken: number
 }
 
+/**
+ * Глагольная цепочка главы в смещениях UTF-16.
+ *
+ * Приезжает вместе с главой, чтобы тап по служебному глаголу расширялся без
+ * похода в разбор на каждое касание.
+ */
+export interface CompactChain {
+  start: number
+  end: number
+  /** Начало смыслового глагола: по нему отличают связку от самого глагола. */
+  mainStart: number
+}
+
 /** Глава с компактными токенами — один тяжёлый переход (§15). */
 export interface PreparedChapter {
   title: string | null
   blocks: Block[]
   tokens: CompactToken[]
   sentences: CompactSentence[]
+  chains?: CompactChain[]
 }
 
 /**

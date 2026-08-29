@@ -19,6 +19,7 @@ import com.wolfy.data.dictionary.DictionaryManager
 import com.wolfy.ffi.Chapter
 import com.wolfy.ffi.CoreException
 import com.wolfy.ffi.ParsedText
+import com.wolfy.ffi.VerbChain
 import com.wolfy.ffi.ReadingSegment
 import com.wolfy.ffi.readableText
 import com.wolfy.platform.refreshBookNudge
@@ -1338,9 +1339,31 @@ internal fun PreparedChapter.toReaderBlocks(): List<ReaderBlock> {
                 text = plain.substring(sentence.start, sentence.end),
             )
         }
+        /*
+         * Цепочки сказуемого режутся так же, как предложения.
+         *
+         * Без этого шага они не доезжали до абзаца вовсе, и тап по служебному
+         * глаголу молча вёл себя как раньше: список у блока оставался пустым,
+         * поиск возвращал null, и ни одна проверка этого не показывала -
+         * функция поиска работала правильно, просто искать было не в чем.
+         *
+         * Цепочка, задевшая границу блока, отбрасывается: сказуемое живёт
+         * внутри предложения, а предложение внутри абзаца, так что случай
+         * этот означает рассинхрон разметки, а не длинную фразу.
+         */
+        val localChains = chains.mapNotNull { chain ->
+            if (chain.start < blockStart || chain.end > blockEnd) return@mapNotNull null
+            VerbChain(
+                start = chain.start - blockStart,
+                end = chain.end - blockStart,
+                mainStart = chain.mainStart - blockStart,
+            )
+        }
+
         val parsed = if (localTokens.isEmpty() && localSentences.isEmpty()) null else ParsedText(
             tokens = localTokens,
             sentences = localSentences,
+            chains = localChains,
         )
         out.add(
             ReaderBlock(
