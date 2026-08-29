@@ -181,8 +181,8 @@ private fun TopicChip(title: String, active: Boolean, onClick: () -> Unit) {
         style = WolfyTheme.typography.caption,
         color = if (active) WolfyTheme.colors.paper else WolfyTheme.colors.inkMuted,
         modifier = Modifier
-            .background(if (active) WolfyTheme.colors.ink else WolfyTheme.colors.surface, RoundedCornerShape(spacing.huge))
             .pressable(onClick = onClick)
+            .background(if (active) WolfyTheme.colors.ink else WolfyTheme.colors.surface, RoundedCornerShape(spacing.huge))
             .padding(horizontal = spacing.medium, vertical = spacing.small),
     )
 }

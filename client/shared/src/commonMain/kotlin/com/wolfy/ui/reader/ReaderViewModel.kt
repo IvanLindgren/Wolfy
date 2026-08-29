@@ -7,6 +7,8 @@ import androidx.lifecycle.viewModelScope
 import com.wolfy.data.TranslateResult
 import com.wolfy.data.WolfyApi
 import com.wolfy.data.AiRecap
+import com.wolfy.data.companion.takeLastCodePoints
+import com.wolfy.data.companion.unicodeLength
 import com.wolfy.data.AiRecapResult
 import com.wolfy.data.AiPhraseResult
 import com.wolfy.data.library.Library
@@ -30,6 +32,7 @@ import com.wolfy.ui.card.WordCardState
 import com.wolfy.ui.card.BetaPhraseState
 import com.wolfy.widgets.GraphLink
 import com.wolfy.widgets.GraphWord
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -111,6 +114,41 @@ data class ReaderState(
     val hasPrevious: Boolean get() = chapterIndex > 0
     val hasNext: Boolean get() = chapterIndex + 1 < chapterCount
 }
+
+/**
+ * Склеивает хвост прочитанного, не выходя за бюджет.
+ *
+ * Главы читаются от [fromChapter] назад через [chapterText]. Разделитель между
+ * кусками оплачивается из того же бюджета, что и текст: раньше куски набирались
+ * ровно на потолок, а склейка дописывала сверху по два знака на стык — и
+ * фрагмент выходил за серверный предел ровно тогда, когда прочитанного
+ * набиралось больше одной главы.
+ *
+ * Длина считается в кодовых точках: сервер меряет рунами, и на книге с эмодзи
+ * подсчёт по UTF-16 расходится с ним в опасную сторону.
+ */
+internal fun assembleExcerpt(fromChapter: Int, budget: Int, chapterText: (Int) -> String): String {
+    val pieces = mutableListOf<String>()
+    var left = budget
+    var index = fromChapter
+    while (index >= 0 && left > 0) {
+        val text = chapterText(index)
+        if (text.isNotBlank()) {
+            val separator = if (pieces.isEmpty()) 0 else EXCERPT_SEPARATOR_COST
+            val piece = text.takeLastCodePoints(left - separator)
+            if (piece.isNotEmpty()) {
+                pieces += piece
+                left -= piece.unicodeLength() + separator
+            }
+        }
+        index--
+    }
+    return pieces.asReversed().joinToString(EXCERPT_SEPARATOR)
+}
+
+/** Разделитель кусков и его цена в кодовых точках. */
+internal const val EXCERPT_SEPARATOR = "\n\n"
+internal const val EXCERPT_SEPARATOR_COST = 2
 
 /**
  * Блок главы, готовый к отрисовке.
@@ -846,7 +884,28 @@ class ReaderViewModel(
         }
     }
 
-    /** Beta: до десяти последних экранов, ограниченных 18 тысячами знаков. */
+    /**
+     * Собирает хвост прочитанного: текущая глава и предыдущие, пока хватает бюджета.
+     *
+     * Бюджет учитывает разделители между кусками. Раньше куски набирались ровно
+     * на потолок, а `joinToString` дописывал сверху по два знака на стык — и
+     * фрагмент выходил за серверный предел на считаные символы. Внутри одной
+     * главы это не проявлялось, а как только прочитанное охватывало вторую,
+     * пересказ переставал работать навсегда и выглядел как «работает через раз».
+     *
+     * Считается в кодовых точках, а не в UTF-16: сервер меряет рунами, и на
+     * книге с эмодзи эти две меры расходятся.
+     */
+    private suspend fun readHistory(opened: Long, snapshot: ReaderState, budget: Int): String {
+        return withContext(Dispatchers.Default) {
+            assembleExcerpt(snapshot.chapterIndex, budget) { index ->
+                if (index == snapshot.chapterIndex) snapshot.blocks.joinToString("\n\n") { it.text }
+                else runCatching { core.readChapter(opened, index).plainText() }.getOrDefault("")
+            }
+        }
+    }
+
+    /** Beta: до десяти последних экранов, ограниченных бюджетом фрагмента. */
     fun recapRecentPages() {
         val id = bookId ?: return
         val opened = handle ?: return
@@ -856,19 +915,8 @@ class ReaderViewModel(
         viewModelScope.launch {
             try {
                 val snapshot = _state.value
-                val excerpt = withContext(Dispatchers.Default) {
-                    val pieces = mutableListOf<String>()
-                    var left = RECAP_CHARS
-                    var index = snapshot.chapterIndex
-                    while (index >= 0 && left > 0) {
-                        val text = if (index == snapshot.chapterIndex) snapshot.blocks.joinToString("\n\n") { it.text }
-                        else runCatching { core.readChapter(opened, index).plainText() }.getOrDefault("")
-                        if (text.isNotBlank()) { pieces += text.takeLast(left); left -= text.length }
-                        index--
-                    }
-                    pieces.asReversed().joinToString("\n\n")
-                }
-                if (excerpt.length < 200) {
+                val excerpt = readHistory(opened, snapshot, RECAP_CHARS)
+                if (excerpt.unicodeLength() < RECAP_MIN_CHARS) {
                     _state.update { current ->
                         if (owns(session, id)) current.copy(recap = StoryRecapState.Failed("Пока слишком мало текста для пересказа.")) else current
                     }
@@ -882,12 +930,28 @@ class ReaderViewModel(
                         is AiRecapResult.Failed -> StoryRecapState.Failed(result.message)
                     })
                 }
+            } catch (cancelled: CancellationException) {
+                // Отмена — это уход с экрана, а не отказ сервиса. Показывать по
+                // ней ошибку значит спорить с читателем о том, чего он не делал.
+                throw cancelled
             } catch (_: Throwable) {
                 _state.update { current ->
                     if (owns(session, id)) current.copy(recap = StoryRecapState.Failed("Не удалось собрать сюжет. Попробуйте ещё раз.")) else current
                 }
             }
         }
+    }
+
+    /**
+     * Прочитанное для вопроса компаньону.
+     *
+     * Компаньон спрашивает «что уже случилось в книге», и отвечать на это по
+     * трём видимым абзацам нельзя: модель честно уходила в «не знаю», и
+     * функция выглядела сломанной. Контекст здесь тот же, что у пересказа.
+     */
+    suspend fun companionContext(): String {
+        val opened = handle ?: return ""
+        return runCatching { readHistory(opened, _state.value, QUESTION_CHARS) }.getOrDefault("")
     }
 
     fun dismissRecap() { _state.update { it.copy(recap = StoryRecapState.Idle) } }
@@ -1096,8 +1160,18 @@ class ReaderViewModel(
         definitionJob = null
     }
 
-    private companion object {
-        const val RECAP_CHARS = 18_000
+    companion object {
+        /**
+         * Бюджет фрагмента: на тысячу меньше серверного предела в 18 000.
+         *
+         * Запас намеренный. Клиент и сервер меряют длину по-разному ровно
+         * настолько, чтобы упереться в границу на живой книге, и упираться в
+         * неё нечем: тысяча знаков пересказу ничего не добавляет.
+         */
+        const val RECAP_CHARS = 17_000
+        const val QUESTION_CHARS = 17_000
+        /** Ниже этого сервер считает фрагмент слишком коротким. */
+        const val RECAP_MIN_CHARS = 200
         /** Как редко место в книге доходит до диска. */
         const val WRITE_EVERY = 3_000L
         /** Не больше 32 MiB готовых растров на открытую книгу. */

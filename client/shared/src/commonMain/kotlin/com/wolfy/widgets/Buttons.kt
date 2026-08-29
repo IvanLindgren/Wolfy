@@ -24,8 +24,8 @@ fun PrimaryButton(
     Box(
         modifier
             .fillMaxWidth()
-            .background(if (enabled) colors.inverse else colors.rule, RoundedCornerShape(spacing.huge))
             .pressable(enabled = enabled, onClick = onClick)
+            .background(if (enabled) colors.inverse else colors.rule, RoundedCornerShape(spacing.huge))
             .padding(vertical = spacing.medium),
         contentAlignment = Alignment.Center,
     ) {

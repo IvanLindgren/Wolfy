@@ -195,8 +195,8 @@ fun SignInScreen(
                     color = colors.ink,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.huge))
                         .pressable(onClick = onSkip)
+                        .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.huge))
                         .padding(spacing.medium),
                 )
             }
@@ -231,8 +231,8 @@ private fun SocialButton(mark: String, text: String, enabled: Boolean, onClick: 
     Row(
         Modifier
             .fillMaxWidth()
-            .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.huge))
             .pressable(enabled = enabled, onClick = onClick)
+            .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.huge))
             .padding(horizontal = spacing.medium, vertical = spacing.small),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(spacing.medium),

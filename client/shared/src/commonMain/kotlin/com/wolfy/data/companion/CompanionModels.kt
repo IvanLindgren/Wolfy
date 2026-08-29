@@ -374,6 +374,25 @@ val MBTI_CODES: Set<String> = setOf(
 /** Длина пользовательского текста в кодовых точках, одинаковая на JVM и web. */
 fun String.unicodeLength(): Int = codePointCount(0, length)
 
+/**
+ * Берёт хвост по кодовым точкам.
+ *
+ * Нужен там, где текст режется под серверный предел: сервер меряет рунами, и
+ * обрезка по UTF-16 на книге с эмодзи и считает не то, и умеет оставить
+ * половину суррогатной пары.
+ */
+fun String.takeLastCodePoints(max: Int): String {
+    if (max <= 0) return ""
+    var utf16 = length
+    var points = 0
+    while (utf16 > 0 && points < max) {
+        val last = this[utf16 - 1]
+        utf16 -= if (last.isLowSurrogate() && utf16 - 2 >= 0 && this[utf16 - 2].isHighSurrogate()) 2 else 1
+        points += 1
+    }
+    return substring(utf16)
+}
+
 /** Обрезает по кодовым точкам и никогда не оставляет половину surrogate pair. */
 fun String.takeCodePoints(max: Int): String {
     if (max <= 0) return ""

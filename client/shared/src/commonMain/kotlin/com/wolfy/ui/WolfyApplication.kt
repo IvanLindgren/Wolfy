@@ -864,6 +864,7 @@ private fun Shell(
                     ),
                     companionApi = parts.api,
                     companionBookId = reading?.id.orEmpty(),
+                    companionContext = parts.reader::companionContext,
                     companionOnRecap = parts.reader::recapRecentPages,
                     companionOnEdit = {
                         parts.reader.closeCurrent()

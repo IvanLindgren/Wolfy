@@ -350,11 +350,11 @@ private fun IntensityPicker(selected: Intensity, onSelect: (Intensity) -> Unit) 
             Box(
                 Modifier
                     .weight(1f)
+                    .pressable { onSelect(intensity) }
                     .background(
                         if (active) colors.inverse else colors.rule,
                         RoundedCornerShape(spacing.xlarge),
                     )
-                    .pressable { onSelect(intensity) }
                     .padding(vertical = spacing.small),
                 contentAlignment = Alignment.Center,
             ) {

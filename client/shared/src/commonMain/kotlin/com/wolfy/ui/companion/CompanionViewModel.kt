@@ -107,8 +107,25 @@ class CompanionViewModel(private val repository: CompanionRepository) {
         state = repository.state.value
     }
 
+    /**
+     * Значение шкалы во время перетаскивания.
+     *
+     * На диск не пишет: `Slider` зовёт это на каждом кадре жеста, а запись
+     * черновика — сериализация всего профиля и fsync на потоке интерфейса.
+     * Черновик доходит до диска один раз, из [commitPersonality].
+     */
     fun setPersonality(key: String, value: Int) {
-        updateDraft { it.copy(personality = it.personality.with(key, value)) }
+        val draft = state.editing ?: return
+        val updated = draft.copy(personality = draft.personality.with(key, value))
+        repository.holdDraft(updated)
+        state = repository.state.value
+    }
+
+    /** Палец отпущен: черновик можно сохранять. */
+    fun commitPersonality() {
+        val draft = state.editing ?: return
+        repository.saveDraft(draft)
+        state = repository.state.value
     }
 
     /** Проверка перед сохранением: имя обязано быть, остальное мягко чинится. */
@@ -124,7 +141,10 @@ class CompanionViewModel(private val repository: CompanionRepository) {
 
     fun descriptionLimit(): Int = MAX_DESCRIPTION
 
-    fun mbtiOptions(): List<String> = MBTI_CODES.sorted()
+    /** Порядок кодов постоянный: сортировать его на каждой рекомпозиции незачем. */
+    fun mbtiOptions(): List<String> = mbtiOptions
+
+    private val mbtiOptions: List<String> = MBTI_CODES.sorted()
 
     /**
      * Сохраняет профиль: он впервые уезжает в синхронизацию.

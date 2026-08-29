@@ -378,12 +378,12 @@ private fun UnshelvedBook(
                             color = colors.accent,
                             maxLines = 1,
                             modifier = Modifier
+                                .pressable { onMove(shelf.name) }
                                 .border(
                                     spacing.rule,
                                     colors.rule,
                                     RoundedCornerShape(spacing.huge),
                                 )
-                                .pressable { onMove(shelf.name) }
                                 .padding(horizontal = spacing.small, vertical = spacing.tight),
                         )
                     }
