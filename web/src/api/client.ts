@@ -383,6 +383,7 @@ export interface AiRecap {
   summary: string
   events: AiRecapEvent[]
   remaining: number
+  cached?: boolean
 }
 
 export async function explainPhrase(phrase: string, context: string): Promise<AiPhrase> {
@@ -392,10 +393,10 @@ export async function explainPhrase(phrase: string, context: string): Promise<Ai
   })
 }
 
-export async function recapRecentPages(title: string, excerpt: string): Promise<AiRecap> {
+export async function recapRecentPages(title: string, excerpt: string, memory = ''): Promise<AiRecap> {
   return request<AiRecap>('/v1/ai/recap', {
     method: 'POST',
-    body: { title, excerpt },
+    body: { title, excerpt, memory },
   })
 }
 
@@ -420,6 +421,7 @@ export async function companionOpinion(input: {
   offset: number
   pageText: string
   companion: CompanionPersonaIn
+  memory?: string
   signal?: AbortSignal
 }): Promise<CompanionOpinion> {
   return request<CompanionOpinion>('/v1/ai/companion/opinion', {
@@ -430,6 +432,7 @@ export async function companionOpinion(input: {
       position: { chapter: input.chapter, offset: input.offset },
       pageText: input.pageText,
       companion: input.companion,
+      memory: input.memory ?? '',
     },
     signal: input.signal,
   })
@@ -444,6 +447,7 @@ export async function companionQuestion(input: {
   question: string
   context: string
   companion: CompanionPersonaIn
+  memory?: string
   signal?: AbortSignal
 }): Promise<CompanionQuestion> {
   return request<CompanionQuestion>('/v1/ai/companion/question', {
@@ -455,6 +459,7 @@ export async function companionQuestion(input: {
       question: input.question,
       context: input.context,
       companion: input.companion,
+      memory: input.memory ?? '',
     },
     signal: input.signal,
   })
@@ -481,6 +486,7 @@ export interface CompanionOpinion {
   details?: { label: string; text: string }[]
   uncertainty?: string | null
   remaining: number
+  cached?: boolean
 }
 
 export interface CompanionQuestion {
@@ -488,6 +494,7 @@ export interface CompanionQuestion {
   evidence?: { hint: string; text: string }[]
   uncertainty?: string | null
   remaining: number
+  cached?: boolean
 }
 
 export interface CompanionPackResponse {

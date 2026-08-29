@@ -23,6 +23,7 @@ import { THEMES, applyTheme, motionFor } from '../app/theme'
 import { WordCard, type CardTarget } from '../card/WordCard'
 import * as api from '../api/client'
 import { useCompanion } from '../companion/store'
+import { useCompanionMemory } from '../companion/memory'
 import { ReaderCompanion } from '../companion/ReaderCompanion'
 import { CompanionFigure } from '../companion/figure'
 import { playCompanionSound } from '../companion/sound'
@@ -937,7 +938,12 @@ export function ReaderScreen() {
         setRecap({ state: 'failed', message: 'Пока прочитано слишком мало текста для пересказа.' })
         return
       }
-      const result = await api.recapRecentPages(book.title ?? 'Без названия', excerpt)
+      const memory = useCompanionMemory.getState()
+      const cached = memory.findRecap(book.id, excerpt)
+      const result = cached ?? await api.recapRecentPages(
+        book.title ?? 'Без названия', excerpt, memory.contextFor(book.id),
+      )
+      if (!cached) memory.rememberRecap(book.id, book.title ?? 'Без названия', chapterIndex, excerpt, result)
       setRecap({ state: 'ready', result })
     } catch (problem) {
       setRecap({
@@ -1415,7 +1421,7 @@ function StoryRecap({
               </li>
             ))}
           </ol>
-          <p className={styles.recap__muted}>На сегодня осталось запросов: {state.result.remaining}</p>
+          <p className={styles.recap__muted}>{state.result.cached ? 'Пересказ сохранён в памяти компаньона.' : `На сегодня осталось запросов: ${state.result.remaining}`}</p>
         </>
       )}
     </aside>

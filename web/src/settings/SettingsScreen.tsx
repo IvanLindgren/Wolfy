@@ -13,6 +13,7 @@ import styles from '../screens.module.css'
 import { useAccount, useSignOut } from '../account/useAccount'
 import { syncNow, useSyncState } from '../sync/sync'
 import { enableReviewNotifications, notificationPermission } from '../decks/notifications'
+import { useCompanionMemory, type MemorySize } from '../companion/memory'
 
 const INTENSITIES: { name: IntensityName; title: string }[] = [
   { name: 'Gentle', title: 'Легко' }, { name: 'Normal', title: 'Обычно' },
@@ -73,6 +74,8 @@ export function SettingsScreen() {
   const [download, setDownload] = useState<{ loaded: number; total: number } | null>(null)
   const [message, setMessage] = useState('')
   const [notify, setNotify] = useState(notificationPermission)
+  const memory = useCompanionMemory()
+  const [confirmMemoryClear, setConfirmMemoryClear] = useState(false)
   const [tone, setTone] = useState<AccentName>(accent)
   const darkPaper = onDarkPaper(settings.theme)
   useEffect(() => { void storageUsage().then(setUsage) }, [dictionary])
@@ -103,6 +106,7 @@ export function SettingsScreen() {
     <Setting title="Напоминания" hint={notify === 'granted' ? 'Браузер покажет уведомление по личному графику забывания' : notify === 'denied' ? 'Уведомления запрещены в настройках браузера; Wolfy напомнит внутри приложения' : 'Разрешение спрашивается только по этой кнопке'}><Button disabled={notify === 'granted' || notify === 'unavailable'} onClick={async () => setNotify(await enableReviewNotifications())}>{notify === 'granted' ? 'Разрешены' : notify === 'unavailable' ? 'Не поддерживаются' : 'Разрешить'}</Button></Setting>
     <Setting title="Меньше движения" hint="Отключает перелёты, пружины и плавную прокрутку"><label className={styles.switch}><input type="checkbox" checked={settings.reduceMotion} onChange={(event) => void session.setReduceMotion(event.target.checked)} /> Без анимаций</label></Setting>
     <Setting title="Звуки компаньона" hint="Тихие сигналы при появлении и готовом ответе"><label className={styles.switch}><input type="checkbox" checked={settings.companionSounds} onChange={(event) => void session.setCompanionSounds(event.target.checked)} /> Включены</label></Setting>
+    <Setting title="Память компаньона" hint={`${memory.cache.length} ответов · ${memory.books.length} книг · хранится только в этом браузере`}><div className={styles.choices}><label className={styles.switch}><input type="checkbox" checked={memory.settings.enabled} onChange={(event) => memory.setEnabled(event.target.checked)} /> Включена</label>{memory.settings.enabled && <><label className={styles.switch}><input type="checkbox" checked={memory.settings.shareWithAi} onChange={(event) => memory.setShareWithAi(event.target.checked)} /> Учитывать в новых ответах</label>{(['compact', 'balanced', 'deep'] as MemorySize[]).map((size) => <button key={size} className={styles.choice} data-active={memory.settings.size === size} onClick={() => memory.setSize(size)}>{size === 'compact' ? 'Короткая' : size === 'deep' ? 'Большая' : 'Обычная'}</button>)}{memory.cache.length + memory.books.length + memory.requests.length > 0 && (confirmMemoryClear ? <><Button variant="danger" onClick={() => { memory.clear(); setConfirmMemoryClear(false) }}>Стереть ответы и пересказы</Button><Button variant="quiet" onClick={() => setConfirmMemoryClear(false)}>Отмена</Button></> : <Button variant="quiet" onClick={() => setConfirmMemoryClear(true)}>Очистить память</Button>)}</>}</div></Setting>
     <Setting title="Компаньон" hint="Персонаж, которого вы создаёте и наряжаете. Необязательный"><a href="/companion">Открыть раздел →</a></Setting>
     <Setting title="Офлайн‑словарь" hint={dictionary ? 'Толкования и МФА доступны без сети' : 'Скачивается один раз и хранится в браузере'}><div>{dictionary ? <Button onClick={async () => { await forget(DICTIONARY_URL); useSession.getState().setDictionaryReady(false); setMessage('Офлайн‑словарь удалён.') }}>Удалить словарь</Button> : <Button variant="primary" disabled={!!download} onClick={() => void installDictionary()}>{download ? 'Загружаем…' : 'Установить'}</Button>}{download && <div className={styles.progress}><span style={{ width: download.total ? `${download.loaded / download.total * 100}%` : '30%' }} /></div>}</div></Setting>
     <Setting title="Хранилище" hint={usage ? `${formatBytes(usage.total)} занято · книги ${formatBytes(usage.books)}${usage.persisted ? ' · защищено от автоочистки' : ''}` : 'Считаем…'}><Button variant="danger" onClick={async () => { if (!confirm('Удалить все книги, колоды, настройки и офлайн‑ресурсы из этого браузера?')) return; await clearEverything(); await clearAssets(); location.reload() }}>Очистить данные</Button></Setting>

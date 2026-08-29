@@ -13,6 +13,7 @@ import { CompanionFigure } from './figure'
 import { CompanionReactionEngine, analyzeMood, type Decision } from './engine'
 import { characterLine, type CompanionProfile } from './model'
 import { playCompanionSound } from './sound'
+import { useCompanionMemory } from './memory'
 import motionStyles from './ReaderCompanion.module.css'
 
 export interface ReaderCompanionProps {
@@ -157,11 +158,24 @@ export function ReaderCompanion(props: ReaderCompanionProps) {
     const controller = new AbortController()
     requestRef.current = controller
     engine.noteManualShow()
+    const position = offset()
+    const visibleText = pageText()
+    const memory = useCompanionMemory.getState()
+    const cached = memory.findOpinion(bookId, chapter, visibleText, profile.profileHash)
+    if (cached) {
+      setSheet({ kind: 'opinion', opinion: cached })
+      return
+    }
     setSheet({ kind: 'loading' })
     void api.companionOpinion({
-      bookId, title: bookTitle, chapter, offset: offset(), pageText: pageText(), companion: persona, signal: controller.signal,
+      bookId, title: bookTitle, chapter, offset: position, pageText: visibleText, companion: persona,
+      memory: memory.contextFor(bookId), signal: controller.signal,
     }).then(
-      (value) => { if (requestRef.current === controller) setSheet({ kind: 'opinion', opinion: value }) },
+      (value) => {
+        if (requestRef.current !== controller) return
+        useCompanionMemory.getState().rememberOpinion(bookId, bookTitle, chapter, visibleText, profile.profileHash, value)
+        setSheet({ kind: 'opinion', opinion: value })
+      },
       (error: unknown) => {
         if (error instanceof DOMException && error.name === 'AbortError') return
         if (requestRef.current !== controller) return
@@ -183,11 +197,24 @@ export function ReaderCompanion(props: ReaderCompanionProps) {
     const controller = new AbortController()
     requestRef.current = controller
     engine.noteManualShow()
+    const position = offset()
+    const context = pageText()
+    const memory = useCompanionMemory.getState()
+    const cached = memory.findQuestion(bookId, chapter, text, context, profile.profileHash)
+    if (cached) {
+      setSheet({ kind: 'question', question: cached })
+      return
+    }
     setSheet({ kind: 'loading' })
     void api.companionQuestion({
-      bookId, title: bookTitle, chapter, offset: offset(), question: text, context: pageText(), companion: persona, signal: controller.signal,
+      bookId, title: bookTitle, chapter, offset: position, question: text, context, companion: persona,
+      memory: memory.contextFor(bookId), signal: controller.signal,
     }).then(
-      (value) => { if (requestRef.current === controller) setSheet({ kind: 'question', question: value }) },
+      (value) => {
+        if (requestRef.current !== controller) return
+        useCompanionMemory.getState().rememberQuestion(bookId, bookTitle, chapter, text, context, profile.profileHash, value)
+        setSheet({ kind: 'question', question: value })
+      },
       (error: unknown) => {
         if (error instanceof DOMException && error.name === 'AbortError') return
         if (requestRef.current !== controller) return
@@ -285,7 +312,7 @@ export function ReaderCompanion(props: ReaderCompanionProps) {
                 <small key={detail.label}>{detail.label}: {detail.text}</small>
               ))}
               {sheet.opinion.uncertainty && <small>{sheet.opinion.uncertainty}</small>}
-              <small>Осталось запросов сегодня: {sheet.opinion.remaining}</small>
+              <small>{sheet.opinion.cached ? 'Ответ сохранён в памяти компаньона.' : `Осталось запросов сегодня: ${sheet.opinion.remaining}`}</small>
               <MenuRow label="Закрыть" onClick={() => setSheet(null)} />
             </>
           )}
@@ -297,7 +324,7 @@ export function ReaderCompanion(props: ReaderCompanionProps) {
                 <small key={evidence.hint}>{evidence.hint}: {evidence.text}</small>
               ))}
               {sheet.question.uncertainty && <small>{sheet.question.uncertainty}</small>}
-              <small>Осталось запросов сегодня: {sheet.question.remaining}</small>
+              <small>{sheet.question.cached ? 'Ответ сохранён в памяти компаньона.' : `Осталось запросов сегодня: ${sheet.question.remaining}`}</small>
               <MenuRow label="Закрыть" onClick={() => setSheet(null)} />
             </>
           )}
