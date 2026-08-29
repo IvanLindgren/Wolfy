@@ -71,13 +71,6 @@ func TestValidatePackОтвергаетНарушения(t *testing.T) {
 			out, _ := json.Marshal(p)
 			return out
 		},
-		"длинное тире": func(b []byte) []byte {
-			var p packPayload
-			json.Unmarshal(b, &p)
-			p.Phrases[0].Text = "Привет " + string(rune(0x2014)) + " друг"
-			out, _ := json.Marshal(p)
-			return out
-		},
 		"ссылка": func(b []byte) []byte {
 			var p packPayload
 			json.Unmarshal(b, &p)
@@ -104,6 +97,26 @@ func TestValidatePackОтвергаетНарушения(t *testing.T) {
 		if _, err := validatePack(mutate(packBody()), "abc123", "ru"); err == nil {
 			t.Fatalf("%s: набор прошёл проверку", name)
 		}
+	}
+}
+
+func TestValidatePackЧинитТиреВместоОтказа(t *testing.T) {
+	var payload packPayload
+	if err := json.Unmarshal(packBody(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	payload.Phrases[0].Text = "Привет " + string(rune(0x2014)) + " друг"
+	body, _ := json.Marshal(payload)
+
+	result, err := validatePack(body, "abc123", "ru")
+	if err != nil {
+		t.Fatalf("набор отвергнут из-за одного тире: %v", err)
+	}
+	if strings.ContainsRune(string(result.Pack), 0x2014) {
+		t.Fatal("тире осталось в сохранённом наборе")
+	}
+	if !strings.Contains(string(result.Pack), "Привет - друг") {
+		t.Fatalf("реплика потеряна при чистке: %s", string(result.Pack)[:120])
 	}
 }
 
@@ -138,16 +151,50 @@ func TestSafePhraseTextГраницы(t *testing.T) {
 	}
 }
 
-func TestDecodeStrictОтвергаетНеизвестныеПоляИХвост(t *testing.T) {
+func TestDecodeAnswerТерпитБолтливостьНоНеДваОбъекта(t *testing.T) {
 	var opinion Opinion
-	if err := decodeStrict([]byte(`{"title":"Тема","opinion":"Мысль","details":[],"uncertainty":null}`), &opinion); err != nil {
+	if err := decodeAnswer([]byte(`{"title":"Тема","opinion":"Мысль","details":[],"uncertainty":null}`), &opinion); err != nil {
 		t.Fatalf("корректный контракт отвергнут: %v", err)
 	}
-	if err := decodeStrict([]byte(`{"title":"Тема","opinion":"Мысль","details":[],"uncertainty":null,"extra":1}`), &opinion); err == nil {
-		t.Fatal("неизвестное поле прошло строгий контракт")
+	// Лишнее поле — болтливость модели, а не подмена контракта: нужные поля
+	// от него не портятся, а отказ стоил бы читателю запроса из дневных десяти.
+	if err := decodeAnswer([]byte(`{"title":"Тема","opinion":"Мысль","details":[],"uncertainty":null,"extra":1}`), &opinion); err != nil {
+		t.Fatalf("лишнее поле не должно ронять ответ: %v", err)
 	}
-	if err := decodeStrict([]byte(`{"title":"Тема","opinion":"Мысль","details":[],"uncertainty":null} {}`), &opinion); err == nil {
-		t.Fatal("второй JSON-объект прошёл строгий контракт")
+	if opinion.Title != "Тема" || opinion.Opinion != "Мысль" {
+		t.Fatalf("нужные поля потерялись: %+v", opinion)
+	}
+	if err := decodeAnswer([]byte(`{"title":"Тема","opinion":"Мысль","details":[],"uncertainty":null} {}`), &opinion); err == nil {
+		t.Fatal("второй JSON-объект прошёл контракт")
+	}
+}
+
+func TestНормализацияОтветаНеТеряетГодныйОтвет(t *testing.T) {
+	empty := ""
+	opinion := Opinion{
+		Title:       "Поворот",
+		Opinion:     "Элизабет отказала " + string(rune(0x2014)) + " и как гордо.",
+		Details:     []OpinionDetail{{"Гордость", "Он задет"}, {"Тон", "Сдержанный"}, {"Итог", "Разрыв"}, {"Лишнее", "Четвёртая деталь"}},
+		Uncertainty: &empty,
+	}
+	normalizeOpinion(&opinion)
+	if !validOpinion(&opinion) {
+		t.Fatal("починимый ответ всё ещё отвергается")
+	}
+	if strings.ContainsRune(opinion.Opinion, 0x2014) {
+		t.Fatal("тире не убрано")
+	}
+	if opinion.Uncertainty != nil {
+		t.Fatal("пустая uncertainty обязана означать «сомнений нет», а не поломку")
+	}
+	if len(opinion.Details) != 3 {
+		t.Fatalf("лишняя деталь не обрезана: %d", len(opinion.Details))
+	}
+
+	answer := Question{Answer: "Он уехал утром.", Uncertainty: &empty}
+	normalizeQuestion(&answer)
+	if !validQuestion(&answer) || answer.Uncertainty != nil {
+		t.Fatal("ответ на вопрос не пережил нормализацию")
 	}
 }
 

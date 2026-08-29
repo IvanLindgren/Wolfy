@@ -112,7 +112,7 @@ func run() error {
 	server := &http.Server{
 		Addr: cfg.Addr,
 		Handler: func() http.Handler {
-			readingAI := readingai.New(db, cfg.AIKey, cfg.AIURL, cfg.AIModel, cfg.RequestTimeout).
+			readingAI := readingai.New(db, cfg.AIKey, cfg.AIURL, cfg.AIModel, cfg.AITimeout).
 				WithJSONMode(cfg.AIJSONMode).
 				WithOpenRouter(cfg.OpenRouterKey, cfg.OpenRouterModels)
 			return api.NewServer(
