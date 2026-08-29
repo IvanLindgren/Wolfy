@@ -185,8 +185,8 @@ fun SettingsScreen(
                 style = WolfyTheme.typography.button,
                 color = colors.accent,
                 modifier = Modifier
-                    .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.huge))
                     .pressable(onClick = if (signedIn) onSignOut else onSignIn)
+                    .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.huge))
                     .padding(horizontal = spacing.large, vertical = spacing.small),
             )
             Rule()
@@ -226,8 +226,8 @@ fun SettingsScreen(
                     style = WolfyTheme.typography.button,
                     color = if (downloading) colors.inkMuted else colors.accent,
                     modifier = Modifier
-                        .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.huge))
                         .pressable(enabled = !downloading, onClick = onDownloadDictionary)
+                        .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.huge))
                         .padding(horizontal = spacing.large, vertical = spacing.small),
                 )
             }
@@ -437,8 +437,8 @@ private fun SyncBlock(status: SyncStatus, signedIn: Boolean, onSyncNow: () -> Un
                 style = WolfyTheme.typography.button,
                 color = if (status.running) colors.inkMuted else colors.accent,
                 modifier = Modifier
-                    .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.huge))
                     .pressable(enabled = !status.running, onClick = onSyncNow)
+                    .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.huge))
                     .padding(horizontal = spacing.large, vertical = spacing.small),
             )
         }
@@ -484,8 +484,8 @@ private fun ScaleStep(label: String, enabled: Boolean, onClick: () -> Unit) {
         style = WolfyTheme.typography.button,
         color = if (enabled) colors.ink else colors.rule,
         modifier = Modifier
-            .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.huge))
             .pressable(enabled = enabled, onClick = onClick)
+            .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.huge))
             .padding(horizontal = spacing.large, vertical = spacing.small),
     )
 }

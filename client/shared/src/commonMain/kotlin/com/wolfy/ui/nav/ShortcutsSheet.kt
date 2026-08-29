@@ -23,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.wolfy.theme.WolfyTheme
+import com.wolfy.theme.paced
 import com.wolfy.widgets.SectionLabel
 
 /**
@@ -39,8 +40,13 @@ import com.wolfy.widgets.SectionLabel
 fun ShortcutsSheet(visible: Boolean, onDismiss: () -> Unit) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
+    val motion = WolfyTheme.motion
 
-    AnimatedVisibility(visible = visible, enter = fadeIn(), exit = fadeOut()) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(motion.paced(motion.quick)),
+        exit = fadeOut(motion.paced(motion.instant)),
+    ) {
         Box(
             Modifier
                 .fillMaxSize()

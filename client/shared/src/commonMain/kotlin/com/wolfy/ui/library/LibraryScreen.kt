@@ -182,9 +182,9 @@ private fun ContinueCard(
     Row(
         Modifier
             .fillMaxWidth()
+            .pressable(onClick = onOpen)
             .background(colors.surface, RoundedCornerShape(spacing.small))
             .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.small))
-            .pressable(onClick = onOpen)
             .padding(spacing.large),
         horizontalArrangement = Arrangement.spacedBy(spacing.large),
     ) {
@@ -533,8 +533,8 @@ private fun EmptyLibrary(onImport: () -> Unit) {
         )
         Box(
             Modifier
-                .background(colors.inverse, RoundedCornerShape(spacing.huge))
                 .pressable(onClick = onImport)
+                .background(colors.inverse, RoundedCornerShape(spacing.huge))
                 .padding(horizontal = spacing.xlarge, vertical = spacing.medium),
         ) {
             Text(

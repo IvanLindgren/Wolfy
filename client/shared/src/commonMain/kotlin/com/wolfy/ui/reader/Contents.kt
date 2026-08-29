@@ -115,8 +115,8 @@ fun ContentsSheet(
                         .align(Alignment.CenterHorizontally)
                         .width(36.dp)
                         .height(spacing.tight)
-                        .background(colors.rule, CircleShape)
-                        .pressable(onClick = onDismiss),
+                        .pressable(onClick = onDismiss)
+                        .background(colors.rule, CircleShape),
                 )
                 SectionLabel("Оглавление")
                 Rule()

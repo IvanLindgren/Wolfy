@@ -30,6 +30,8 @@ import androidx.compose.ui.zIndex
 import com.wolfy.platform.AppUpdateController
 import com.wolfy.platform.AppUpdateState
 import com.wolfy.theme.WolfyTheme
+import com.wolfy.theme.settling
+import com.wolfy.theme.paced
 import com.wolfy.widgets.pressable
 
 /** Ненавязчивое предложение загрузить обновление либо перезапустить его. */
@@ -43,16 +45,18 @@ internal fun UpdateReadyButton(
     val ready = state as? AppUpdateState.Ready
     val available = state as? AppUpdateState.Available
     val version = ready?.version ?: available?.version
+    val motion = WolfyTheme.motion
     AnimatedVisibility(
         visible = version != null,
         modifier = modifier.zIndex(20f),
-        enter = fadeIn() + scaleIn(initialScale = 0.8f),
-        exit = fadeOut() + scaleOut(targetScale = 0.8f),
+        enter = fadeIn(motion.paced(motion.quick)) + scaleIn(motion.settling(), initialScale = 0.8f),
+        exit = fadeOut(motion.paced(motion.instant)) + scaleOut(motion.paced(motion.quick), targetScale = 0.8f),
     ) {
         val colors = WolfyTheme.colors
         Box(
             modifier = Modifier
                 .size(48.dp)
+                .pressable(onClick = onRestart)
                 .background(colors.inverse, CircleShape)
                 .border(WolfyTheme.spacing.rule, colors.rule, CircleShape)
                 .semantics {
@@ -62,8 +66,7 @@ internal fun UpdateReadyButton(
                     } else {
                         "Загрузить обновление Wolfy ${available?.version.orEmpty()}"
                     }
-                }
-                .pressable(onClick = onRestart),
+                },
             contentAlignment = Alignment.Center,
         ) {
             Canvas(Modifier.size(25.dp)) {

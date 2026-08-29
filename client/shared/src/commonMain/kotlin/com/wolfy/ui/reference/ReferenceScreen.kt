@@ -140,13 +140,13 @@ private fun ArticleCard(
         Column(
             Modifier
                 .fillMaxWidth()
+                .pressable(onClick = onToggle)
                 .background(colors.surface, RoundedCornerShape(spacing.small))
                 .border(
                     spacing.rule,
                     if (expanded) colors.accent else colors.rule,
                     RoundedCornerShape(spacing.small),
                 )
-                .pressable(onClick = onToggle)
                 .padding(spacing.large),
             verticalArrangement = Arrangement.spacedBy(spacing.small),
         ) {

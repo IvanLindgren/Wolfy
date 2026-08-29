@@ -1,6 +1,8 @@
 package com.wolfy.theme
 
 import androidx.compose.foundation.LocalIndication
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -9,6 +11,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.ProvidableCompositionLocal
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Dp
@@ -65,8 +68,16 @@ data class WolfySpacing(
     val rule: Dp = 1.dp,
 )
 
+/**
+ * Палитра текущей темы.
+ *
+ * `compositionLocalOf`, а не `staticCompositionLocalOf`: палитра перестала
+ * быть постоянной величиной — при смене темы она едет к новой (см.
+ * [rememberAnimatedColors]). Статический вариант на каждом кадре перехода
+ * перерисовывал бы всё поддерево целиком, включая то, что цвета не читает.
+ */
 val LocalWolfyColors: ProvidableCompositionLocal<WolfyColors> =
-    staticCompositionLocalOf { PaperColors }
+    compositionLocalOf { PaperColors }
 
 val LocalWolfyTypography: ProvidableCompositionLocal<WolfyTypography> =
     staticCompositionLocalOf { error("WolfyTypography не задана: оберните экран в WolfyTheme") }
@@ -101,26 +112,40 @@ fun WolfyTheme(
     val typography = remember(base, fontScale, lineScale) {
         if (fontScale == 1f && lineScale == 1f) base else base.scaledForReading(fontScale, lineScale)
     }
+    val motion = if (reduceMotion) NoMotion else WolfyMotion()
+    // Бумага и чернила переходят к новой теме, а не подменяются кадром.
+    val colors = rememberAnimatedColors(theme.colors, motion)
 
-    CompositionLocalProvider(
-        LocalWolfyColors provides theme.colors,
-        LocalWolfyFonts provides fonts,
-        LocalWolfyTypography provides typography,
-        LocalWolfySpacing provides WolfySpacing(),
-        LocalWolfyMotion provides if (reduceMotion) NoMotion else WolfyMotion(),
-        // Ripple убран намеренно: расходящийся круг — жест материальной
-        // поверхности, а страница книги бумажная. Нажатие показывается
-        // деликатным масштабированием, см. widgets/Pressable.
-        LocalIndication provides NoIndication,
+    // MaterialTheme стоит снаружи, а наши локали — внутри: так собственное
+    // отключение ripple и собственный цвет содержимого перекрывают то, что
+    // Material успел объявить, а не наоборот.
+    MaterialTheme(
+        colorScheme = rememberMaterialScheme(colors),
+        typography = rememberMaterialTypography(typography),
     ) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                // Фон задаётся здесь один раз: иначе при смене темы между
-                // экранами мелькает белый прямоугольник по умолчанию.
-                .background(theme.colors.paper),
+        CompositionLocalProvider(
+            LocalWolfyColors provides colors,
+            LocalWolfyFonts provides fonts,
+            LocalWolfyTypography provides typography,
+            LocalWolfySpacing provides WolfySpacing(),
+            LocalWolfyMotion provides motion,
+            // Ripple убран намеренно: расходящийся круг — жест материальной
+            // поверхности, а страница книги бумажная. Нажатие показывается
+            // деликатным масштабированием, см. widgets/Pressable.
+            LocalIndication provides NoIndication,
+            // Text без явного цвета берёт его отсюда. По умолчанию Material
+            // отдаёт чёрный, и такая подпись пропадала на тёмной бумаге.
+            LocalContentColor provides colors.ink,
         ) {
-            content()
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    // Фон задаётся здесь один раз: иначе при смене темы между
+                    // экранами мелькает белый прямоугольник по умолчанию.
+                    .background(colors.paper),
+            ) {
+                content()
+            }
         }
     }
 }

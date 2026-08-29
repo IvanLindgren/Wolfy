@@ -217,11 +217,11 @@ private fun Volume(value: Float, onChange: (Float) -> Unit) {
                     Modifier
                         .weight(1f)
                         .height(spacing.medium)
+                        .pressable { onChange(share) }
                         .background(
                             if (on) colors.accent else colors.rule,
                             RoundedCornerShape(spacing.hair),
-                        )
-                        .pressable { onChange(share) },
+                        ),
                 )
             }
         }

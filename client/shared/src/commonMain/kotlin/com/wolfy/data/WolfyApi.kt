@@ -501,6 +501,11 @@ class WolfyApi(
                     failure?.code.orEmpty(),
                 )
             }
+        } catch (cancelled: CancellationException) {
+            // Отмена приходит, когда читатель ушёл с экрана. Превращать её в
+            // «нет связи» значит показать ошибку за собственное действие
+            // читателя и заодно сломать отмену всей ветки корутин.
+            throw cancelled
         } catch (_: Exception) { AiPhraseResult.Failed("Нет связи с Beta-подсказкой.") }
     }
 
@@ -515,6 +520,8 @@ class WolfyApi(
             }
             if (response.status == HttpStatusCode.OK) AiRecapResult.Ready(response.body())
             else AiRecapResult.Failed(response.authMessage().ifBlank { "Beta-подсказка сейчас недоступна." })
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (_: Exception) { AiRecapResult.Failed("Нет связи с Beta-подсказкой.") }
     }
 

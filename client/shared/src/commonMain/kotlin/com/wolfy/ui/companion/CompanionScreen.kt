@@ -2,7 +2,6 @@ package com.wolfy.ui.companion
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,6 +21,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -145,7 +145,7 @@ private fun Wizard(viewModel: CompanionViewModel) {
         "Характер", "Портрет словами", "Проверка",
     )
     Column(verticalArrangement = Arrangement.spacedBy(spacing.large)) {
-        Text(stepTitles[viewModel.step], style = WolfyTheme.typography.bookTitle, color = colors.ink)
+        Text(stepTitles.getOrElse(viewModel.step) { "" }, style = WolfyTheme.typography.bookTitle, color = colors.ink)
         when (viewModel.step) {
             1 -> StepName(viewModel)
             2 -> StepLook(viewModel, face = true)
@@ -205,9 +205,6 @@ private fun StepName(viewModel: CompanionViewModel) {
                     style = WolfyTheme.typography.caption,
                     color = if (selected) colors.paper else colors.ink,
                     modifier = Modifier
-                        .clip(RoundedCornerShape(spacing.huge))
-                        .background(if (selected) colors.inverse else colors.surface)
-                        .border(1.dp, colors.rule, RoundedCornerShape(spacing.huge))
                         .pressable {
                             viewModel.updateDraft {
                                 it.copy(
@@ -216,6 +213,9 @@ private fun StepName(viewModel: CompanionViewModel) {
                                 )
                             }
                         }
+                        .clip(RoundedCornerShape(spacing.huge))
+                        .background(if (selected) colors.inverse else colors.surface)
+                        .border(1.dp, colors.rule, RoundedCornerShape(spacing.huge))
                         .padding(horizontal = spacing.medium, vertical = 8.dp),
                 )
             }
@@ -243,12 +243,22 @@ private fun StepLook(viewModel: CompanionViewModel, face: Boolean) {
             SectionLabel(CompanionCatalog.slotTitle(slot))
             val options = assetsBySlot[slot].orEmpty().map { it.id }
             LazyRow(horizontalArrangement = Arrangement.spacedBy(spacing.medium)) {
-                items(options) { assetId ->
+                items(options, key = { it }) { assetId ->
                     val selected = draft.appearance.asset(slot) == assetId
+                    // Превью пересобирается только при смене внешности, а не на
+                    // каждой рекомпозиции ряда.
+                    val preview = remember(draft.appearance, slot, assetId) {
+                        draft.appearance.withAsset(slot, assetId)
+                    }
                     Box(
                         Modifier
                             .width(82.dp)
                             .height(92.dp)
+                            .pressable(enabled = true) {
+                                viewModel.updateDraft { draft ->
+                                    draft.copy(appearance = draft.appearance.withAsset(slot, assetId))
+                                }
+                            }
                             .clip(RoundedCornerShape(spacing.medium))
                             .background(colors.surface)
                             .border(
@@ -256,16 +266,11 @@ private fun StepLook(viewModel: CompanionViewModel, face: Boolean) {
                                 color = if (selected) colors.accent else colors.rule,
                                 shape = RoundedCornerShape(spacing.medium),
                             )
-                            .pressable(enabled = true) {
-                                viewModel.updateDraft { draft ->
-                                    draft.copy(appearance = draft.appearance.withAsset(slot, assetId))
-                                }
-                            }
                             .semantics { contentDescription = CompanionCatalog.label(assetId) },
                         contentAlignment = Alignment.Center,
                     ) {
                         CompanionFigure(
-                            appearance = draft.appearance.withAsset(slot, assetId),
+                            appearance = preview,
                             modifier = Modifier.size(76.dp),
                         )
                         if (assetId.endsWith(".none")) {
@@ -317,9 +322,12 @@ private fun PaletteRow(options: List<Pair<String, androidx.compose.ui.graphics.C
     LazyRow(horizontalArrangement = Arrangement.spacedBy(spacing.medium)) {
         items(options) { (name, color) ->
             val isSelected = name == selected
+            // `pressable`, а не `clickable`: у второго остаётся материальный
+            // ripple, отключённый во всём остальном приложении.
             Box(
                 Modifier
-                    .size(44.dp)
+                    .size(48.dp)
+                    .pressable { onSelect(name) }
                     .clip(RoundedCornerShape(spacing.medium))
                     .background(color)
                     .border(
@@ -327,8 +335,7 @@ private fun PaletteRow(options: List<Pair<String, androidx.compose.ui.graphics.C
                         color = if (isSelected) colors.accent else colors.rule,
                         shape = RoundedCornerShape(spacing.medium),
                     )
-                    .semantics { contentDescription = name }
-                    .clickable { onSelect(name) },
+                    .semantics { contentDescription = name },
             )
         }
     }
@@ -340,24 +347,50 @@ private fun StepPersonality(viewModel: CompanionViewModel) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
     val draft = viewModel.state.editing ?: return
-    Column(verticalArrangement = Arrangement.spacedBy(spacing.medium)) {
-        for ((index, key) in CompanionPersonality.KEYS.withIndex()) {
-            val (low, high) = POLAR_LABELS[index]
-            val value = draft.personality.get(key)
-            Column {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(low, style = WolfyTheme.typography.caption, color = colors.inkMuted)
-                    Text(high, style = WolfyTheme.typography.caption, color = colors.inkMuted)
-                }
-                Slider(
-                    value = value.toFloat(),
-                    onValueChange = { viewModel.setPersonality(key, it.toInt()) },
-                    valueRange = 0f..100f,
-                    modifier = Modifier.semantics {
-                        contentDescription = "$low, $high"
-                    },
-                )
-            }
+    Column(verticalArrangement = Arrangement.spacedBy(spacing.large)) {
+        for (key in CompanionPersonality.KEYS) {
+            val scale = SCALES[key] ?: continue
+            PersonalityScale(
+                scale = scale,
+                value = draft.personality.get(key),
+                onValue = { viewModel.setPersonality(key, it) },
+                onCommit = viewModel::commitPersonality,
+            )
+        }
+    }
+}
+
+/**
+ * Одна шкала характера.
+ *
+ * Значение во время перетаскивания живёт здесь и в черновике в памяти, а на
+ * диск уходит один раз по отпусканию пальца. Раньше каждый кадр протяжки
+ * сериализовал профиль целиком (вместе с набором из ста реплик) и делал
+ * fsync на потоке интерфейса: одна шкала стоила примерно шестидесяти
+ * синхронных записей в секунду.
+ */
+@Composable
+private fun PersonalityScale(
+    scale: Scale,
+    value: Int,
+    onValue: (Int) -> Unit,
+    onCommit: () -> Unit,
+) {
+    val colors = WolfyTheme.colors
+    Column {
+        Text(scale.title, style = WolfyTheme.typography.sectionLabel, color = colors.ink)
+        Slider(
+            value = value.toFloat(),
+            onValueChange = { onValue(it.toInt()) },
+            onValueChangeFinished = onCommit,
+            valueRange = 0f..100f,
+            modifier = Modifier.semantics {
+                contentDescription = "${scale.title}: от «${scale.low}» до «${scale.high}»"
+            },
+        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(scale.low, style = WolfyTheme.typography.caption, color = colors.inkMuted)
+            Text(scale.high, style = WolfyTheme.typography.caption, color = colors.inkMuted)
         }
     }
 }
@@ -379,12 +412,12 @@ private fun StepWords(viewModel: CompanionViewModel) {
                         style = WolfyTheme.typography.caption,
                         color = if (selected) colors.paper else colors.ink,
                         modifier = Modifier
-                            .clip(RoundedCornerShape(spacing.huge))
-                            .background(if (selected) colors.inverse else colors.surface)
-                            .border(1.dp, colors.rule, RoundedCornerShape(spacing.huge))
                             .pressable(enabled = true) {
                                 viewModel.updateDraft { it.copy(mbti = if (selected) null else code) }
                             }
+                            .clip(RoundedCornerShape(spacing.huge))
+                            .background(if (selected) colors.inverse else colors.surface)
+                            .border(1.dp, colors.rule, RoundedCornerShape(spacing.huge))
                             .padding(horizontal = spacing.medium, vertical = 8.dp),
                     )
                 }
@@ -579,17 +612,27 @@ private val LandingExample = com.wolfy.data.companion.CompanionAppearance(
     outfitColor = "brick",
 )
 
-private val POLAR_LABELS: List<Pair<String, String>> = listOf(
-    "сдержанный" to "тёплый",
-    "серьёзный" to "игривый",
-    "спокойный" to "энергичный",
-    "тактичный" to "прямой",
-    "скептичный" to "оптимистичный",
-    "рациональный" to "эмоциональный",
-    "поддерживает" to "бросает вызов",
-    "лаконичный" to "разговорчивый",
-    "практичный" to "любопытный",
-    "дружеский" to "формальный",
+/**
+ * Подписи шкал характера.
+ *
+ * Привязаны к ключу, а не к порядковому номеру. Раньше это были два списка
+ * рядом, и одиннадцатая шкала в модели уронила бы экран характера обращением
+ * за границу второго списка. Заодно у шкалы появилось имя: по одним полюсам
+ * «поддерживает / бросает вызов» не понять, что настраивается.
+ */
+private data class Scale(val title: String, val low: String, val high: String)
+
+private val SCALES: Map<String, Scale> = mapOf(
+    "warmth" to Scale("Теплота", "сдержанный", "тёплый"),
+    "playfulness" to Scale("Игривость", "серьёзный", "игривый"),
+    "energy" to Scale("Энергия", "спокойный", "энергичный"),
+    "directness" to Scale("Прямота", "тактичный", "прямой"),
+    "optimism" to Scale("Взгляд", "скептичный", "оптимистичный"),
+    "emotionality" to Scale("Чувства", "рациональный", "эмоциональный"),
+    "supportStyle" to Scale("Поддержка", "поддерживает", "бросает вызов"),
+    "verbosity" to Scale("Многословность", "лаконичный", "разговорчивый"),
+    "curiosity" to Scale("Любопытство", "практичный", "любопытный"),
+    "formality" to Scale("Тон", "дружеский", "формальный"),
 )
 
 private const val PRIVACY_URL = "https://wolfy.citavuk.ru/privacy"

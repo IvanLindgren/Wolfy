@@ -83,7 +83,20 @@ class CompanionRepository(private val store: LibraryStore) {
         _state.value = CompanionState(profile = fixed, draft = null)
     }
 
-    /** Обновляет черновик, не трогая сохранённый профиль. */
+    /**
+     * Черновик только в памяти.
+     *
+     * Нужен для непрерывных жестов — протяжки ползунка характера. Запись на
+     * диск делает [saveDraft] по окончании жеста: она сериализует профиль
+     * целиком и делает fsync, и на каждом кадре это стоит заметного подвисания.
+     * Потерять при внезапном закрытии можно только незавершённое движение
+     * пальца.
+     */
+    fun holdDraft(draft: CompanionProfile) {
+        _state.value = _state.value.copy(draft = draft)
+    }
+
+    /** Обновляет черновик на диске, не трогая сохранённый профиль. */
     fun saveDraft(draft: CompanionProfile?) {
         if (draft == null) {
             store.save(DRAFT_KEY, "")

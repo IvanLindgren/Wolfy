@@ -115,12 +115,12 @@ private fun DiscoverySwitcher(page: DiscoveryPage, onPage: (DiscoveryPage) -> Un
                 style = WolfyTheme.typography.button,
                 color = if (selected) WolfyTheme.colors.paper else WolfyTheme.colors.ink,
                 modifier = Modifier
+                    .pressable { onPage(item) }
                     .background(
                         if (selected) WolfyTheme.colors.ink else WolfyTheme.colors.surface,
                         RoundedCornerShape(spacing.huge),
                     )
                     .border(spacing.rule, WolfyTheme.colors.rule, RoundedCornerShape(spacing.huge))
-                    .pressable { onPage(item) }
                     .padding(horizontal = spacing.large, vertical = spacing.small),
             )
         }
@@ -355,6 +355,7 @@ private fun ChoiceRow(values: List<String>, selected: Set<String>, onSelect: (St
                 style = WolfyTheme.typography.caption,
                 color = if (active) WolfyTheme.colors.onInverse else WolfyTheme.colors.inkMuted,
                 modifier = Modifier
+                    .pressable(onClick = { onSelect(value) })
                     .background(
                         if (active) WolfyTheme.colors.inverse else WolfyTheme.colors.paper,
                         RoundedCornerShape(WolfyTheme.spacing.huge),
@@ -364,7 +365,6 @@ private fun ChoiceRow(values: List<String>, selected: Set<String>, onSelect: (St
                         WolfyTheme.colors.rule,
                         RoundedCornerShape(WolfyTheme.spacing.huge),
                     )
-                    .pressable(onClick = { onSelect(value) })
                     .padding(horizontal = WolfyTheme.spacing.medium, vertical = WolfyTheme.spacing.small),
             )
         }
@@ -384,11 +384,11 @@ private fun ActionButton(
         color = if (enabled) WolfyTheme.colors.onInverse else WolfyTheme.colors.inkMuted,
         textAlign = TextAlign.Center,
         modifier = modifier
+            .pressable(enabled = enabled, onClick = onClick)
             .background(
                 if (enabled) WolfyTheme.colors.inverse else WolfyTheme.colors.rule,
                 RoundedCornerShape(WolfyTheme.spacing.huge),
             )
-            .pressable(enabled = enabled, onClick = onClick)
             .padding(horizontal = WolfyTheme.spacing.large, vertical = WolfyTheme.spacing.medium),
     )
 }

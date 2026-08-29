@@ -966,11 +966,11 @@ private fun GrammarNote(finding: Finding, onOpen: () -> Unit) {
     Column(
         Modifier
             .fillMaxWidth()
+            .pressable(onClick = onOpen)
             .background(
                 colors.ruleFamilies.forFamily(finding.rule).copy(alpha = 0.42f),
                 RoundedCornerShape(spacing.small),
             )
-            .pressable(onClick = onOpen)
             .padding(spacing.small),
         verticalArrangement = Arrangement.spacedBy(spacing.tight),
     ) {
@@ -1035,8 +1035,8 @@ private fun Header(state: WordCardState, onPronounce: () -> Unit, wordModifier: 
                 style = typography.button,
                 color = colors.accent,
                 modifier = Modifier
-                    .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.huge))
                     .pressable(onClick = onPronounce)
+                    .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.huge))
                     .padding(horizontal = spacing.small, vertical = spacing.tight),
             )
         }
@@ -1151,9 +1151,9 @@ private fun SaveButton(saved: Boolean, onSave: () -> Unit) {
     Box(
         Modifier
             .fillMaxWidth()
+            .pressable(onClick = onSave)
             .background(background, RoundedCornerShape(WolfyTheme.spacing.huge))
             .border(WolfyTheme.spacing.rule, border, RoundedCornerShape(WolfyTheme.spacing.huge))
-            .pressable(onClick = onSave)
             .padding(vertical = WolfyTheme.spacing.medium),
     ) {
         Text(
@@ -1190,6 +1190,7 @@ private fun PhraseSaveButton(state: WordCardState, onSave: () -> Unit) {
         Box(
             Modifier
                 .fillMaxWidth()
+                .pressable(enabled = enabled, onClick = onSave)
                 .background(
                     when {
                         state.phraseSaved -> colors.surface
@@ -1203,7 +1204,6 @@ private fun PhraseSaveButton(state: WordCardState, onSave: () -> Unit) {
                     if (state.phraseSaved || waiting) colors.rule else colors.inverse,
                     RoundedCornerShape(spacing.huge),
                 )
-                .pressable(enabled = enabled, onClick = onSave)
                 .padding(vertical = spacing.medium),
         ) {
             Text(

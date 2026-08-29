@@ -285,16 +285,16 @@ private fun ChoiceDrill(drill: Drill, answered: Boolean, onAnswer: (String) -> U
             Box(
                 Modifier
                     .fillMaxWidth()
+                    .pressable(enabled = !answered) {
+                        chosen = option
+                        onAnswer(option)
+                    }
                     .background(colors.surface, RoundedCornerShape(spacing.small))
                     .border(
                         width = if (answered && (right || picked)) 2.dp else spacing.rule,
                         color = border,
                         shape = RoundedCornerShape(spacing.small),
                     )
-                    .pressable(enabled = !answered) {
-                        chosen = option
-                        onAnswer(option)
-                    }
                     .padding(spacing.large),
             ) {
                 Row(
@@ -431,6 +431,7 @@ private fun LetterTile(
     Box(
         Modifier
             .size(width = 40.dp, height = 46.dp)
+            .pressable(onClick = onClick)
             .background(
                 when {
                     faded -> colors.rule
@@ -445,8 +446,7 @@ private fun LetterTile(
                 // хватает, и глаз должен находить его без поиска.
                 color = if (empty) colors.accent else colors.rule,
                 shape = RoundedCornerShape(spacing.tight),
-            )
-            .pressable(onClick = onClick),
+            ),
         contentAlignment = Alignment.Center,
     ) {
         Text(
@@ -574,12 +574,12 @@ private fun Chip(text: String, dark: Boolean, onClick: () -> Unit) {
         style = WolfyTheme.typography.body,
         color = if (dark) colors.onInverse else colors.ink,
         modifier = Modifier
+            .pressable(onClick = onClick)
             .background(
                 if (dark) colors.inverse else colors.surface,
                 RoundedCornerShape(spacing.tight),
             )
             .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.tight))
-            .pressable(onClick = onClick)
             .padding(horizontal = spacing.medium, vertical = spacing.small),
     )
 }
