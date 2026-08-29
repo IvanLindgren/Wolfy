@@ -233,7 +233,14 @@ func applyBookAliases(cards []Card, aliases map[string]string) {
 
 // rebindBookAlias перепривязывает карточки, аннотации и устройства со старого
 // book id к новому canonical id, разрешая конфликты без потери данных.
-// Вызывается внутри транзакции Sync до вставки новой книги.
+//
+// Вызывается внутри транзакции Sync и обязательно после вставки новой книги:
+// `wolfy.cards.book_id` смотрит внешним ключом на `wolfy.books`, и перевод
+// карточек на номер, которого в таблице книг ещё нет, уронил бы транзакцию.
+//
+// Переезжает всё, что привязано к книге, включая её файл. Файл при этом с
+// диска не двигается: путь к нему собирается из `storage_key`, а не из номера
+// книги (см. миграцию 0013), поэтому здесь достаточно переписать book_id.
 func (s *Store) rebindBookAlias(ctx context.Context, tx pgx.Tx, userID string, rev int64, oldID, newID string) error {
 	// Карточки: удалить дубликаты по (kind, lemma) где lemma непуст и not deleted,
 	// чтобы последующий UPDATE не словил unique violation
@@ -268,6 +275,33 @@ func (s *Store) rebindBookAlias(ctx context.Context, tx pgx.Tx, userID string, r
          WHERE user_id = $1 AND book_id = $2`,
 		userID, oldID, newID); err != nil {
 		return fmt.Errorf("перепривязка устройств: %w", err)
+	}
+
+	// Файл книги: переезжает ссылка, а не байты.
+	//
+	// Путь к файлу собирается из storage_key, а не из номера книги, поэтому
+	// перепривязка обходится обычным UPDATE внутри этой же транзакции - и
+	// серверная копия остаётся доступной второму устройству. Раньше строка
+	// оставалась под старым номером, книга теряла копию, а файл висел на
+	// диске мёртвым грузом.
+	//
+	// Если файл залит под обоими номерами, побеждает канонический: он у
+	// читателя открыт сейчас. Строка проигравшего уходит, его файл на диске
+	// остаётся - удалять с диска внутри транзакции нельзя, откат не вернул бы
+	// его обратно.
+	if _, err := tx.Exec(ctx, `
+        DELETE FROM wolfy.book_files AS old
+        USING wolfy.book_files AS nw
+        WHERE old.user_id = $1::uuid AND old.book_id = $2::uuid
+          AND nw.user_id = $1::uuid AND nw.book_id = $3::uuid`,
+		userID, oldID, newID); err != nil {
+		return fmt.Errorf("чистка дублей файлов книги: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+        UPDATE wolfy.book_files SET book_id = $3::uuid, updated_at = now()
+         WHERE user_id = $1::uuid AND book_id = $2::uuid`,
+		userID, oldID, newID); err != nil {
+		return fmt.Errorf("перепривязка файла книги: %w", err)
 	}
 
 	// Аннотации: слить items по правилам annotations.Merge

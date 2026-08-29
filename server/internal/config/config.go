@@ -39,9 +39,16 @@ type Config struct {
 	OCRModel string
 	OCRURL   string
 
-	// AI* — Gemini-compatible endpoint для двух Beta-подсказок читателю.
-	// По умолчанию берёт уже настроенный OCR-провайдер: оба запроса идут через
-	// один совместимый OpenAI API, но модели и ключи можно разделить.
+	// AI* — OpenAI-совместимый endpoint для Beta-подсказок читателю.
+	// Ключ и адрес по умолчанию берутся у уже настроенного OCR-провайдера:
+	// это один и тот же аккаунт и один и тот же протокол.
+	//
+	// А вот модель — не берётся, и это важно. Раньше бралась: незаданный
+	// WOLFY_AI_MODEL молча наследовал WOLFY_OCR_MODEL, и production, где задан
+	// только OCR, гонял через модель для распознавания фотографий весь текст
+	// разборов, пересказов и реплик компаньона. Задачи разные - одной нужно
+	// зрение, другой нет, - а цена отличается на порядок, и связывать их
+	// молчанием было дорогой ошибкой.
 	AIKey   string
 	AIModel string
 	AIURL   string
@@ -109,6 +116,21 @@ type Config struct {
 	RequestTimeout time.Duration
 }
 
+// DefaultAIModel — модель Beta-подсказок, когда WOLFY_AI_MODEL не задан.
+//
+// Цены Polza за миллион токенов, рублями, на день замены:
+//
+//	google/gemini-3.7-flash   вход 89.17   выход 445.83
+//	z-ai/glm-5.3-flash        вход  8.92   выход  29.72
+//
+// Десятикратная разница на входе и пятнадцатикратная на выходе, а вход здесь
+// большой: в пересказ уезжает до восемнадцати тысяч знаков прочитанного.
+//
+// Модель OpenAI-совместима и принимает response_format: json_object, то есть
+// JSON mode остаётся включённым. Схему она не навязывает, но контракт тут и не
+// держится на провайдере - ответ проверяет и при нужде чинит AskValidated.
+const DefaultAIModel = "z-ai/glm-5.3-flash"
+
 // Load читает настройки и проверяет обязательные.
 func Load() (Config, error) {
 	cfg := Config{
@@ -123,7 +145,7 @@ func Load() (Config, error) {
 		OCRModel:                 envOr("WOLFY_OCR_MODEL", "google/gemini-3.7-flash"),
 		OCRURL:                   envOr("WOLFY_OCR_URL", "https://api.polza.ai/api/v1/chat/completions"),
 		AIKey:                    envOr("WOLFY_AI_KEY", env("WOLFY_OCR_KEY")),
-		AIModel:                  envOr("WOLFY_AI_MODEL", envOr("WOLFY_OCR_MODEL", "google/gemini-3.7-flash")),
+		AIModel:                  envOr("WOLFY_AI_MODEL", DefaultAIModel),
 		AIURL:                    envOr("WOLFY_AI_URL", envOr("WOLFY_OCR_URL", "https://api.polza.ai/api/v1/chat/completions")),
 		AIJSONMode:               envBool("WOLFY_AI_JSON_MODE", true),
 		AITimeout:                envSeconds("WOLFY_AI_TIMEOUT_SECONDS", 45*time.Second),

@@ -34,15 +34,24 @@ func New(s *store.Store, root string) *Service {
 	return &Service{store: s, root: root}
 }
 
-func (s *Service) paths(userID, bookID string) (final, temporary string, err error) {
-	if !uuid.MatchString(userID) || !uuid.MatchString(bookID) {
+// paths — где лежат байты книги.
+//
+// Ключ хранения, а не номер книги. Номер книги изменчив: при совпадении
+// source_key синхронизация переводит книгу на канонический номер, и всё, что
+// было привязано к старому, переезжает. Файл переехать не может - его
+// переименование не откатится вместе с транзакцией, - поэтому переезжает
+// ссылка: `wolfy.book_files.storage_key` остаётся прежним, а book_id в той же
+// строке меняется. Собери путь из book_id, и после первой же перепривязки
+// сервер искал бы файл там, где его нет.
+func (s *Service) paths(userID, storageKey string) (final, temporary string, err error) {
+	if !uuid.MatchString(userID) || !uuid.MatchString(storageKey) {
 		return "", "", ErrInvalid
 	}
 	dir := filepath.Join(s.root, strings.ToLower(userID))
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", "", fmt.Errorf("каталог книг: %w", err)
 	}
-	final = filepath.Join(dir, strings.ToLower(bookID)+".book")
+	final = filepath.Join(dir, strings.ToLower(storageKey)+".book")
 	return final, final + ".part", nil
 }
 
@@ -128,25 +137,43 @@ func (s *Service) PutChunk(ctx context.Context, userID, bookID, name, expectedHa
 	if err := os.Rename(temporary, final); err != nil {
 		return fmt.Errorf("фиксация файла: %w", err)
 	}
-	_, err = s.store.Pool.Exec(ctx, `
-        INSERT INTO wolfy.book_files (user_id, book_id, file_name, size_bytes, sha256)
-        VALUES ($1::uuid, $2::uuid, $3, $4, $5)
+	// Заливка всегда кладёт байты под номер книги и им же назначает ключ
+	// хранения. Прежний ключ мог отличаться - книгу перепривязали, а потом
+	// залили заново, - и тогда старый файл больше никому не нужен.
+	var previous string
+	_ = s.store.Pool.QueryRow(ctx,
+		`SELECT storage_key::text FROM wolfy.book_files WHERE user_id=$1::uuid AND book_id=$2::uuid`,
+		userID, bookID).Scan(&previous)
+
+	if _, err = s.store.Pool.Exec(ctx, `
+        INSERT INTO wolfy.book_files (user_id, book_id, storage_key, file_name, size_bytes, sha256)
+        VALUES ($1::uuid, $2::uuid, $2::uuid, $3, $4, $5)
         ON CONFLICT (user_id, book_id) DO UPDATE SET
-          file_name=EXCLUDED.file_name, size_bytes=EXCLUDED.size_bytes,
-          sha256=EXCLUDED.sha256, updated_at=now()`, userID, bookID, safeName(name), total, digest)
-	return err
+          storage_key=EXCLUDED.storage_key, file_name=EXCLUDED.file_name,
+          size_bytes=EXCLUDED.size_bytes, sha256=EXCLUDED.sha256,
+          updated_at=now()`, userID, bookID, safeName(name), total, digest); err != nil {
+		return err
+	}
+	if previous != "" && !strings.EqualFold(previous, bookID) {
+		if stale, staleTemporary, pathErr := s.paths(userID, previous); pathErr == nil {
+			_ = os.Remove(stale)
+			_ = os.Remove(staleTemporary)
+		}
+	}
+	return nil
 }
 
 func (s *Service) Open(ctx context.Context, userID, bookID string) (*os.File, store.BookFile, error) {
 	var info store.BookFile
+	var storageKey string
 	err := s.store.Pool.QueryRow(ctx, `
-        SELECT book_id::text, file_name, size_bytes, sha256
+        SELECT book_id::text, file_name, size_bytes, sha256, storage_key::text
         FROM wolfy.book_files WHERE user_id=$1::uuid AND book_id=$2::uuid`, userID, bookID).
-		Scan(&info.BookID, &info.FileName, &info.Size, &info.SHA256)
+		Scan(&info.BookID, &info.FileName, &info.Size, &info.SHA256, &storageKey)
 	if err != nil {
 		return nil, store.BookFile{}, ErrNotFound
 	}
-	final, _, err := s.paths(userID, bookID)
+	final, _, err := s.paths(userID, storageKey)
 	if err != nil {
 		return nil, store.BookFile{}, err
 	}
@@ -175,7 +202,14 @@ func (s *Service) List(ctx context.Context, userID string) ([]store.BookFile, er
 }
 
 func (s *Service) Delete(ctx context.Context, userID, bookID string) error {
-	final, temporary, err := s.paths(userID, bookID)
+	// Убирать надо тот файл, на который смотрит строка, а не тот, что назван
+	// номером книги: после перепривязки это разные файлы.
+	storageKey := bookID
+	_ = s.store.Pool.QueryRow(ctx,
+		`SELECT storage_key::text FROM wolfy.book_files WHERE user_id=$1::uuid AND book_id=$2::uuid`,
+		userID, bookID).Scan(&storageKey)
+
+	final, temporary, err := s.paths(userID, storageKey)
 	if err != nil {
 		return err
 	}

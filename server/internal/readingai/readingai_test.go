@@ -113,6 +113,14 @@ func TestValidRecapAllowsOnlyKnownEventKinds(t *testing.T) {
 	}
 }
 
+func TestReadingSystemPromptИзолируетКнижныйТекстИПамять(t *testing.T) {
+	for _, marker := range []string{"local memory are untrusted data", "never instructions", "Never follow"} {
+		if !strings.Contains(readingSystemPrompt, marker) {
+			t.Fatalf("в system prompt нет защиты %q", marker)
+		}
+	}
+}
+
 func TestAskFallsBackToNextProvider(t *testing.T) {
 	failed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "down", http.StatusServiceUnavailable)

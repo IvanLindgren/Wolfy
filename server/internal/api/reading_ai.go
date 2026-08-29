@@ -16,6 +16,7 @@ type phraseAIRequest struct {
 type recapAIRequest struct {
 	Title   string `json:"title"`
 	Excerpt string `json:"excerpt"`
+	Memory  string `json:"memory"`
 }
 
 func (s *Server) postAIPhrase(w http.ResponseWriter, r *http.Request) {
@@ -40,11 +41,11 @@ func (s *Server) postAIRecap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request recapAIRequest
-	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 24<<10)).Decode(&request) != nil {
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 48<<10)).Decode(&request) != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "фрагмент не разобран"})
 		return
 	}
-	result, err := s.readingAI.Recap(r.Context(), user.ID, request.Title, request.Excerpt)
+	result, err := s.readingAI.Recap(r.Context(), user.ID, request.Title, request.Excerpt, request.Memory)
 	s.writeAI(w, result, err)
 }
 

@@ -22,6 +22,7 @@ type companionOpinionRequest struct {
 		Offset  int `json:"offset"`
 	} `json:"position"`
 	PageText  string `json:"pageText"`
+	Memory    string `json:"memory"`
 	Companion struct {
 		Name        string         `json:"name"`
 		Locale      string         `json:"locale"`
@@ -40,6 +41,7 @@ type companionQuestionRequest struct {
 	} `json:"position"`
 	Question  string `json:"question"`
 	Context   string `json:"context"`
+	Memory    string `json:"memory"`
 	Companion struct {
 		Name        string         `json:"name"`
 		Locale      string         `json:"locale"`
@@ -69,6 +71,7 @@ func (s *Server) postAICompanionOpinion(w http.ResponseWriter, r *http.Request) 
 		BookID:   request.BookID,
 		Title:    request.Title,
 		PageText: request.PageText,
+		Memory:   request.Memory,
 		Companion: companionai.PersonaIn{
 			Name:        request.Companion.Name,
 			Locale:      request.Companion.Locale,
@@ -89,7 +92,7 @@ func (s *Server) postAICompanionQuestion(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var request companionQuestionRequest
-	if decodeCompanionBody(w, r, 24<<10, &request) != nil {
+	if decodeCompanionBody(w, r, 48<<10, &request) != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "вопрос не разобран"})
 		return
 	}
@@ -98,6 +101,7 @@ func (s *Server) postAICompanionQuestion(w http.ResponseWriter, r *http.Request)
 		Title:    request.Title,
 		Question: request.Question,
 		Context:  request.Context,
+		Memory:   request.Memory,
 		Companion: companionai.PersonaIn{
 			Name:        request.Companion.Name,
 			Locale:      request.Companion.Locale,

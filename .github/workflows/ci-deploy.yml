@@ -82,6 +82,7 @@ jobs:
         run: |
           rustup update stable --no-self-update
           rustup default stable
+          rustup component add clippy
           rustup target add wasm32-unknown-unknown
 
       - name: Install wasm-bindgen CLI
@@ -104,6 +105,16 @@ jobs:
         shell: bash
         run: |
           cargo test --manifest-path core/Cargo.toml --locked
+          # Запрет паник в продакшн-коде ядра объявлен атрибутом deny в
+          # lib.rs и существует только под clippy: cargo test собирает с
+          # cfg(test), где запрет снят, а cargo build про lint'ы clippy не
+          # знает вовсе. Без этой строки правило не проверял никто, и семь
+          # unwrap/expect дожили в нём до разбора - в том числе в парсере
+          # EPUB, который читает недоверенный файл.
+          #
+          # Флага -D warnings тут намеренно нет: ворота ставит сам крейт
+          # своим deny, а прочие подсказки clippy остаются подсказками.
+          cargo clippy --manifest-path core/Cargo.toml --all-targets --locked
           cargo check --manifest-path core/Cargo.toml --lib --target wasm32-unknown-unknown --no-default-features --features wasm
 
       - name: Test Go server
