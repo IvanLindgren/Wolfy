@@ -65,7 +65,7 @@ func (s *Server) postAICompanionOpinion(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "страница не разобрана"})
 		return
 	}
-	result, err := s.companionAI.Opinion(r.Context(), user.ID, companionai.OpinionRequest{
+	opinion := companionai.OpinionRequest{
 		BookID:   request.BookID,
 		Title:    request.Title,
 		PageText: request.PageText,
@@ -76,7 +76,9 @@ func (s *Server) postAICompanionOpinion(w http.ResponseWriter, r *http.Request) 
 			MBTI:        request.Companion.MBTI,
 			Description: request.Companion.Description,
 		},
-	})
+	}
+	opinion.Position.Chapter, opinion.Position.Offset = request.Position.Chapter, request.Position.Offset
+	result, err := s.companionAI.Opinion(r.Context(), user.ID, opinion)
 	s.writeAI(w, result, err)
 }
 
@@ -91,7 +93,7 @@ func (s *Server) postAICompanionQuestion(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "вопрос не разобран"})
 		return
 	}
-	result, err := s.companionAI.Question(r.Context(), user.ID, companionai.QuestionRequest{
+	question := companionai.QuestionRequest{
 		BookID:   request.BookID,
 		Title:    request.Title,
 		Question: request.Question,
@@ -103,7 +105,9 @@ func (s *Server) postAICompanionQuestion(w http.ResponseWriter, r *http.Request)
 			MBTI:        request.Companion.MBTI,
 			Description: request.Companion.Description,
 		},
-	})
+	}
+	question.Position.Chapter, question.Position.Offset = request.Position.Chapter, request.Position.Offset
+	result, err := s.companionAI.Question(r.Context(), user.ID, question)
 	s.writeAI(w, result, err)
 }
 

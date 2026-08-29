@@ -48,6 +48,12 @@ type Config struct {
 	// AIJSONMode включает response_format только для endpoint, у которого
 	// эта возможность подтверждена конфигурацией.
 	AIJSONMode bool
+	// AITimeout — сколько ждать одну модель. Отдельно от RequestTimeout
+	// намеренно: перевод и каталог отвечают за секунды, а пересказ на
+	// восемнадцать тысяч знаков у бесплатной модели в двадцать секунд не
+	// укладывается. Общий таймаут ронял его в резерв, где следующая модель
+	// не успевала тем более, и читатель получал «нет связи» вместо ответа.
+	AITimeout time.Duration
 	// OpenRouter* — резервный OpenAI-совместимый провайдер. Поддерживается
 	// старое имя WOLFY_OPENROUTER, уже использованное в production env.
 	OpenRouterKey    string
@@ -120,6 +126,7 @@ func Load() (Config, error) {
 		AIModel:                  envOr("WOLFY_AI_MODEL", envOr("WOLFY_OCR_MODEL", "google/gemini-3.7-flash")),
 		AIURL:                    envOr("WOLFY_AI_URL", envOr("WOLFY_OCR_URL", "https://api.polza.ai/api/v1/chat/completions")),
 		AIJSONMode:               envBool("WOLFY_AI_JSON_MODE", true),
+		AITimeout:                envSeconds("WOLFY_AI_TIMEOUT_SECONDS", 45*time.Second),
 		OpenRouterKey:            envOr("WOLFY_OPENROUTER_KEY", env("WOLFY_OPENROUTER")),
 		OpenRouterModels:         envOr("WOLFY_OPENROUTER_MODELS", "nvidia/nemotron-3-super-120b-a12b:free,z-ai/glm-5.2:free,openrouter/free"),
 		CitavukLoginURL:          envOr("WOLFY_CITAVUK_LOGIN_URL", "https://api.citavuk.ru/v1/auth/login"),
@@ -249,6 +256,20 @@ func envOr(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+// envSeconds читает таймаут в секундах. Час сверху — не настройка, а защита
+// от опечатки: запрос, висящий дольше, уже никому не нужен.
+func envSeconds(key string, fallback time.Duration) time.Duration {
+	value := env(key)
+	if value == "" {
+		return fallback
+	}
+	seconds, err := strconv.Atoi(value)
+	if err != nil || seconds <= 0 || seconds > 3600 {
+		return fallback
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 func envBool(key string, fallback bool) bool {
