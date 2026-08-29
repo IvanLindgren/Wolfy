@@ -2,6 +2,9 @@ package com.wolfy.widgets
 
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -10,6 +13,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
@@ -22,6 +28,7 @@ import androidx.compose.material3.Text
 import com.wolfy.ffi.ParsedText
 import com.wolfy.ffi.Token
 import com.wolfy.theme.WolfyTheme
+import com.wolfy.theme.HighlightInk
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
@@ -58,6 +65,13 @@ fun ReaderParagraph(
     savedLemmaOf: (Token) -> String = { it.text.lowercase() },
     selected: Token? = null,
     selection: IntRange? = null,
+    /**
+     * Краски отметок читателя в смещениях этого абзаца.
+     *
+     * Список, а не одна пара: в абзаце спокойно живут три выделения разными
+     * красками, и рисовать их по очереди было бы тремя проходами по тексту.
+     */
+    marks: List<TextMark> = emptyList(),
     offsetShift: Int = 0,
     selectViaMouse: Boolean = false,
     /**
@@ -96,7 +110,7 @@ fun ReaderParagraph(
     val dim = colors.ink.copy(alpha = 0.3f)
 
     val text: AnnotatedString =
-        remember(parsed, saved, selected, selection, anchors, dimmed, bright, colors) {
+        remember(parsed, saved, selected, selection, marks, anchors, dimmed, bright, colors) {
         buildAnnotatedString {
             parsed.tokens.forEachIndexed { index, token ->
                 val start = length
@@ -130,12 +144,27 @@ fun ReaderParagraph(
                 val isSaved = savedLemmaOf(token) in saved
                 val inPhrase = selection != null &&
                     token.start >= selection.first && token.end <= selection.last + 1
+                val painted = marks.firstOrNull { mark ->
+                    token.start >= mark.range.first && token.end <= mark.range.last + 1
+                }
 
                 when {
                     // Выделение фразы поверх всего: пока палец ведут по
                     // строке, читатель должен видеть ровно то, что он взял.
                     inPhrase -> addStyle(
                         SpanStyle(background = colors.accent.copy(alpha = 0.18f)),
+                        start,
+                        length,
+                    )
+                    /*
+                     * Краска читателя важнее и сохранённого слова, и разбора:
+                     * её поставили нарочно, а подсветку словаря приложение
+                     * рисует само. Чернила задаются вместе с фоном - заливки
+                     * светлые во всех темах, и на ночной теме светлый текст по
+                     * светлой краске пропал бы ровно там, где его пометили.
+                     */
+                    painted != null -> addStyle(
+                        SpanStyle(background = painted.color, color = HighlightInk),
                         start,
                         length,
                     )
@@ -171,32 +200,152 @@ fun ReaderParagraph(
         }
     }
 
-    Text(
-        text = text,
-        style = style.copy(
-            color = colors.ink,
-            // Выключка по ширине — то, из-за чего страница читается как
-            // газетная полоса, а не как лента сообщений.
-            textAlign = TextAlign.Justify,
-        ),
-        onTextLayout = { layout = it },
-        modifier = modifier
-            .fillMaxWidth()
-            .pointerInput(parsed, selectViaMouse, offsetShift) {
-                // Ссылки на локальные переменные (::layout) Kotlin пока не
-                // берёт — раскладку отдаём лямбдой. Жестовые автоматы живут в
-                // отдельной области ожидания событий указателя.
+    // Ручки лежат поверх текста, поэтому текст живёт в коробке. Коробка
+    // обтягивает абзац и ничего не занимает сверх него.
+    Box(modifier.fillMaxWidth()) {
+        Text(
+            text = text,
+            style = style.copy(
+                color = colors.ink,
+                // Выключка по ширине — то, из-за чего страница читается как
+                // газетная полоса, а не как лента сообщений.
+                textAlign = TextAlign.Justify,
+            ),
+            onTextLayout = { layout = it },
+            modifier = Modifier
+                .fillMaxWidth()
+                .pointerInput(parsed, selectViaMouse, offsetShift) {
+                    // Ссылки на локальные переменные (::layout) Kotlin пока не
+                    // берёт — раскладку отдаём лямбдой. Жестовые автоматы живут
+                    // в отдельной области ожидания событий указателя.
+                    awaitPointerEventScope {
+                        val layoutProvider: () -> TextLayoutResult? = { layout }
+                        if (selectViaMouse) {
+                            mouseGestures(parsed, offsetShift, layoutProvider, onWordTap, onPhrase, onPhraseDone)
+                        } else {
+                            touchGestures(parsed, offsetShift, layoutProvider, viewConfiguration.longPressTimeoutMillis, onWordTap, onPhrase, onPhraseDone)
+                        }
+                    }
+                },
+        )
+        val settled = layout
+        if (selection != null && !selectViaMouse && settled != null) {
+            SelectionHandles(
+                parsed = parsed,
+                selection = selection,
+                shift = offsetShift,
+                layout = settled,
+                onPhrase = onPhrase,
+                onPhraseDone = onPhraseDone,
+            )
+        }
+    }
+}
+
+/**
+ * Две ручки на концах выделения.
+ *
+ * Выделение фразы пальцем было односторонним: долгое нажатие брало предложение
+ * целиком, протягивание вело границу, поднятие пальца всё закрепляло.
+ * Промахнулся на слово - начинай жест заново, потому что поправить готовое
+ * выделение было нечем. А промахивается на телефоне каждый: палец закрывает
+ * ровно то место, куда целятся.
+ *
+ * Ручки убирают повтор жеста и не добавляют ни одного нажатия удачному случаю:
+ * кто выделил верно с первого раза, их просто не трогает.
+ *
+ * Сидят они под строкой, а не на ней: ручка поверх буквы закрывала бы ту самую
+ * границу, ради которой её тянут.
+ *
+ * Мышью не показываются - там граница ведётся точным курсором, и попадать в
+ * слово со второго раза не приходится.
+ */
+@Composable
+private fun BoxScope.SelectionHandles(
+    parsed: ParsedText,
+    selection: IntRange,
+    shift: Int,
+    layout: TextLayoutResult,
+    onPhrase: (IntRange) -> Unit,
+    onPhraseDone: (IntRange) -> Unit,
+) {
+    val colors = WolfyTheme.colors
+    val length = layout.layoutInput.text.length
+    if (length == 0) return
+
+    // Живые снимки для жеста.
+    //
+    // Ключами `pointerInput` они быть не могут, и это не мелочь: ведение ручки
+    // само меняет выделение, смена ключа отменяет корутину жеста, и обработчик
+    // умирал бы сразу после первого движения пальца. Ручка тянулась бы на один
+    // кадр и залипала. Ключи здесь только то, что за время жеста не меняется.
+    val liveSelection = rememberUpdatedState(selection)
+    val liveLayout = rememberUpdatedState(layout)
+
+    val drawnStart = handleCenter(layout, (selection.first - shift).coerceIn(0, length - 1), leading = true)
+    val drawnEnd = handleCenter(layout, (selection.last - shift).coerceIn(0, length - 1), leading = false)
+
+    Canvas(
+        Modifier
+            .matchParentSize()
+            .pointerInput(parsed, shift) {
+                val grab = HANDLE_GRAB.toPx()
                 awaitPointerEventScope {
-                    val layoutProvider: () -> TextLayoutResult? = { layout }
-                    if (selectViaMouse) {
-                        mouseGestures(parsed, offsetShift, layoutProvider, onWordTap, onPhrase, onPhraseDone)
-                    } else {
-                        touchGestures(parsed, offsetShift, layoutProvider, viewConfiguration.longPressTimeoutMillis, onWordTap, onPhrase, onPhraseDone)
+                    while (true) {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        val result = liveLayout.value
+                        val anchor = liveSelection.value
+                        val size = result.layoutInput.text.length
+                        if (size == 0) continue
+                        val from = (anchor.first - shift).coerceIn(0, size - 1)
+                        val to = (anchor.last - shift).coerceIn(from, size - 1)
+
+                        // Ловится касание в широком круге, а не по самому
+                        // кружку: кружок в шесть точек пальцем не поймать.
+                        val toStart = (down.position - handleCenter(result, from, leading = true)).getDistance()
+                        val toEnd = (down.position - handleCenter(result, to, leading = false)).getDistance()
+                        if (minOf(toStart, toEnd) > grab) continue
+                        val movingStart = toStart <= toEnd
+                        down.consume()
+
+                        // Неподвижный конец запоминается один раз, на момент
+                        // захвата: считывать его из живого выделения значило бы
+                        // тянуть обе границы разом, ведь выделение меняется тем
+                        // же жестом.
+                        val fixed = if (movingStart) anchor.last else anchor.first
+                        var range = anchor
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (!change.pressed) break
+                            change.consume()
+                            val at = result.getOffsetForPosition(change.position) + shift
+                            // Какая из двух границ левее, разберётся spanBetween.
+                            range = parsed.spanBetween(at, fixed)
+                            onPhrase(range)
+                        }
+                        onPhraseDone(range)
                     }
                 }
             },
-    )
+    ) {
+        val radius = HANDLE_RADIUS.toPx()
+        drawCircle(colors.accent, radius = radius, center = drawnStart)
+        drawCircle(colors.accent, radius = radius, center = drawnEnd)
+    }
 }
+
+/** Точка под границей выделения, где сидит ручка. */
+private fun handleCenter(layout: TextLayoutResult, offset: Int, leading: Boolean): Offset {
+    val box = layout.getBoundingBox(offset)
+    return Offset(if (leading) box.left else box.right, box.bottom)
+}
+
+/** Кружок ручки: заметный, но не закрывающий строку. */
+private val HANDLE_RADIUS = 6.dp
+
+/** Радиус, в котором касание считается попаданием по ручке. */
+private val HANDLE_GRAB = 28.dp
 
 /**
  * Жесты пальцем: долгое нажатие включает режим выделения, протягивание ведёт
@@ -246,7 +395,9 @@ private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.tou
         val anchor = result.getOffsetForPosition(down.position) + shift
 
         if (lifted && !held && !moved) {
-            // Обычный тап — карточка слова, как раньше.
+            // Обычный тап. Служебный глагол уходит в разбор всей цепочки,
+            // остальное — в карточку слова.
+            if (expandChain(parsed, anchor, onPhrase, onPhraseDone)) continue
             val token = parsed.tokenAt(anchor)
             if (token?.tappable == true) onWordTap(token)
             continue
@@ -302,7 +453,9 @@ private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.mou
         }
         if (nextDown == null) {
             pendingClick?.let { click ->
-                parsed.tokenAt(click.offset)?.takeIf(Token::tappable)?.let(onWordTap)
+                if (!expandChain(parsed, click.offset, onPhrase, onPhraseDone)) {
+                    parsed.tokenAt(click.offset)?.takeIf(Token::tappable)?.let(onWordTap)
+                }
             }
             pendingClick = null
             continue
@@ -316,7 +469,9 @@ private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.mou
             // Клик в другом месте завершает предыдущий одиночный и сам
             // становится новым кандидатом на double click.
             previous?.let { click ->
-                parsed.tokenAt(click.offset)?.takeIf(Token::tappable)?.let(onWordTap)
+                if (!expandChain(parsed, click.offset, onPhrase, onPhraseDone)) {
+                    parsed.tokenAt(click.offset)?.takeIf(Token::tappable)?.let(onWordTap)
+                }
             }
             pendingClick = null
             var dragged = false
@@ -359,6 +514,9 @@ private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.mou
 /** Первый отпущенный клик, пока ещё способный стать двойным. */
 private data class PendingMouseClick(val position: Offset, val offset: Int)
 
+/** Краска отметки на куске абзаца. */
+data class TextMark(val range: IntRange, val color: Color)
+
 /** Кусок текста между двумя точками касания, растянутый до границ слов. */
 private fun ParsedText.spanBetween(from: Int, to: Int): IntRange {
     val left = minOf(from, to)
@@ -366,6 +524,33 @@ private fun ParsedText.spanBetween(from: Int, to: Int): IntRange {
     val start = tokenAt(left)?.start ?: left
     val end = tokenAt(right)?.end ?: right
     return start until maxOf(end, start + 1)
+}
+
+/**
+ * Тап по служебному глаголу: выделяет всю группу сказуемого.
+ *
+ * «is» сам по себе в словаре пуст — читатель, ткнувший в него, спрашивает про
+ * форму, а форма это «is walking» целиком. Поэтому касание по связке
+ * превращается в выделение фразы: тот же путь, что и у долгого нажатия, и тот
+ * же лист разбора на выходе.
+ *
+ * Касание по смысловому глаголу сюда не попадает намеренно: «walking» искать в
+ * словаре осмысленно, и подменять там перевод разбором значило бы отнимать у
+ * читателя ровно то, за чем он тыкал. Отличает их ядро, отдавая вместе с
+ * цепочкой начало смыслового глагола.
+ *
+ * @return `true`, если касание израсходовано на цепочку.
+ */
+private fun expandChain(
+    parsed: ParsedText,
+    anchor: Int,
+    onPhrase: (IntRange) -> Unit,
+    onPhraseDone: (IntRange) -> Unit,
+): Boolean {
+    val chain = parsed.chainToExpand(anchor) ?: return false
+    onPhrase(chain.range)
+    onPhraseDone(chain.range)
+    return true
 }
 
 /**

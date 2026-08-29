@@ -186,6 +186,8 @@ fun WolfyApplication(
             )
             val dictionary = DictionaryManager(coreSession, store, api)
             val companionRepo = com.wolfy.data.companion.CompanionRepository(store)
+            val companionMemory = com.wolfy.data.companion.CompanionMemoryRepository(store).also { it.restore() }
+            val annotations = com.wolfy.data.annotations.AnnotationRepository(store, session::deviceId)
             Parts(
                 core = core,
                 coreSession = coreSession,
@@ -197,6 +199,7 @@ fun WolfyApplication(
                     api = api,
                     library = library,
                     dictionary = dictionary,
+                    companionMemory = companionMemory,
                 ),
                 catalogue = LibraryViewModel(library, core, api, store),
                 store = store,
@@ -207,6 +210,8 @@ fun WolfyApplication(
                 dictionary = dictionary,
                 api = api,
                 companion = companionRepo,
+                companionMemory = companionMemory,
+                annotations = annotations,
             )
             }
         }
@@ -434,6 +439,10 @@ private class Parts(
     val api: WolfyApi,
     /** Локальный профиль компаньона: синхронизация забирает его отсюда. */
     val companion: com.wolfy.data.companion.CompanionRepository,
+    /** Приватные локальные ответы, пересказы и история запросов. */
+    val companionMemory: com.wolfy.data.companion.CompanionMemoryRepository,
+    /** Краски и заметки читателя: файл на книгу плюс обмен с сервером. */
+    val annotations: com.wolfy.data.annotations.AnnotationRepository,
 ) {
     /**
      * Ресурсы, не принадлежащие Compose: файл открытой книги, нативная
@@ -572,6 +581,45 @@ private fun Shell(
     var companionOpen by remember { mutableStateOf(false) }
     val companionViewModel = remember { com.wolfy.ui.companion.CompanionViewModel(parts.companion).also { it.restore() } }
     val companionState by parts.companion.state.collectAsState()
+    val companionMemory by parts.companionMemory.state.collectAsState()
+    val annotationState by parts.annotations.state.collectAsState()
+
+    /*
+     * Отметки книги: файл с диска сразу, сервер следом.
+     *
+     * Сначала местный файл, потом сеть - и никогда наоборот. Читатель,
+     * открывший книгу в метро, обязан увидеть свои краски мгновенно и без
+     * связи; серверный список только дополнит их, когда доедет.
+     */
+    LaunchedEffect(reading?.id) {
+        val id = reading?.id.orEmpty()
+        parts.annotations.open(id)
+        if (id.isEmpty()) return@LaunchedEffect
+        val answer = parts.api.bookAnnotations(id, parts.session.deviceId(), parts.annotations.state.value.seen)
+        if (answer is com.wolfy.data.AnnotationSyncResult.Ready) {
+            parts.annotations.accept(answer.value.items, answer.value.generation)
+        }
+    }
+
+    /*
+     * Отправка наверх с задержкой.
+     *
+     * Перекрасить пять выделений подряд - это пять правок за десять секунд, и
+     * пять запросов подряд из них делать незачем: список уезжает целиком, и
+     * последний из пяти содержит все предыдущие. Задержка сбрасывается каждой
+     * новой правкой, поэтому уходит ровно один запрос, когда читатель закончил.
+     */
+    LaunchedEffect(annotationState.bookId, annotationState.lamport) {
+        val id = annotationState.bookId
+        if (id.isEmpty() || annotationState.lamport == 0L) return@LaunchedEffect
+        delay(ANNOTATION_PUSH_DELAY)
+        val answer = parts.api.saveBookAnnotations(
+            id, parts.session.deviceId(), annotationState.seen, parts.annotations.outgoing(),
+        )
+        if (answer is com.wolfy.data.AnnotationSyncResult.Ready) {
+            parts.annotations.accept(answer.value.items, answer.value.generation)
+        }
+    }
     LaunchedEffect(companionState) { companionViewModel.refreshFromRepository() }
 
     // Генерация набора реплик: один запрос на сто реплик, результат атомарно
@@ -863,6 +911,14 @@ private fun Shell(
                         description = companionState.profile?.description.orEmpty(),
                     ),
                     companionApi = parts.api,
+                    companionMemory = parts.companionMemory,
+                    annotations = annotationState.items,
+                    onAnnotationAdd = { chapter, start, end, tone, quote ->
+                        parts.annotations.add(chapter, start, end, tone, quote)
+                    },
+                    onAnnotationNote = { id, note -> parts.annotations.update(id, note = note) },
+                    onAnnotationTone = { id, tone -> parts.annotations.update(id, tone = tone) },
+                    onAnnotationRemove = parts.annotations::remove,
                     companionBookId = reading?.id.orEmpty(),
                     companionContext = parts.reader::companionContext,
                     companionOnRecap = parts.reader::recapRecentPages,
@@ -950,6 +1006,12 @@ private fun Shell(
                     onReduceMotion = onReduceMotion,
                     companionSounds = companionSounds,
                     onCompanionSounds = onCompanionSounds,
+                    companionMemory = companionMemory,
+                    companionMemoryStats = parts.companionMemory.stats,
+                    onCompanionMemoryEnabled = parts.companionMemory::setEnabled,
+                    onCompanionMemoryShared = parts.companionMemory::setShareWithAi,
+                    onCompanionMemorySize = parts.companionMemory::setSize,
+                    onClearCompanionMemory = parts.companionMemory::clear,
                     emphasizeStems = readingSettings.emphasizeStems,
                     onEmphasizeStems = parts.settings::setEmphasizeStems,
                     focusMode = readingSettings.focus,
@@ -1237,3 +1299,6 @@ private fun CoreUnavailable(message: String) {
         )
     }
 }
+
+/** Сколько ждать перед отправкой отметок: правки идут пачками. */
+private const val ANNOTATION_PUSH_DELAY = 1_500L

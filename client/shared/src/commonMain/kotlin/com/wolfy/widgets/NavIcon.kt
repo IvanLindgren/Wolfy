@@ -6,7 +6,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -189,39 +188,33 @@ private fun DrawScope.drawReadingSettings(tint: Color) {
 }
 
 /**
- * «Вспомнить сюжет»: дуга назад.
+ * «Вспомнить сюжет»: циферблат со стрелками, отведёнными назад.
  *
- * Была раскрытая книга с корешком, стрелкой внутри и отдельной линией под
- * ней — четыре элемента тоньше основного веса в поле двадцать два на
- * двадцать два. Рядом со значком книги в той же шапке она к тому же читалась
- * как второй значок книги.
+ * Была круговая стрелка почти на полный оборот. Читалась она безошибочно - и
+ * не то: круговая стрелка везде означает «сделать заново», обновить, повторить
+ * запрос. Действие же не повторяет ничего, оно рассказывает, что случилось
+ * раньше, и обещание «сейчас пересоберу» тут просто неверное.
  *
- * Осталось одно движение: почти полный круг против часовой и наконечник.
- * Здесь круговая стрелка уместна ровно потому, из-за чего её убрали с
- * «Карточек», — вернуться к прочитанному и есть то, что делает действие.
+ * Циферблат говорит именно «что было до этого». Идиома чужая и всем знакомая,
+ * и это её достоинство: значок в двадцать две точки не место для метафор,
+ * которые надо разгадывать. Пробовались и нить с узлом, и лист с выжимкой, и
+ * вехи на линии - на настоящем размере лист рассыпался в кашу, а нить и вехи
+ * читались гантелью.
+ *
+ * Стрелки стоят на двенадцати и на восьми: обе левее вертикали, и ход от одной
+ * к другой читается против часовой. Симметричные «десять минут одиннадцатого»
+ * дали бы просто часы, без направления.
  */
 private fun DrawScope.drawRecap(tint: Color) {
-    val inset = line * 1.6f
-    val box = Rect(
-        offset = Offset(inset, inset),
-        size = Size(size.width - inset * 2, size.height - inset * 2),
+    val radius = size.minDimension * 0.40f
+    val middle = Offset(size.width / 2, size.height / 2)
+    drawCircle(tint, radius = radius, center = middle, style = hairline)
+    // Часовая вверх, минутная назад и вниз. Длины разные - иначе это крест.
+    drawLine(tint, middle, Offset(middle.x, middle.y - radius * 0.60f), strokeWidth = line)
+    drawLine(
+        tint,
+        middle,
+        Offset(middle.x - radius * 0.50f, middle.y + radius * 0.25f),
+        strokeWidth = line,
     )
-    // Разрыв сверху слева — там, где встаёт наконечник.
-    drawArc(
-        color = tint,
-        startAngle = 200f,
-        sweepAngle = 300f,
-        useCenter = false,
-        topLeft = box.topLeft,
-        size = box.size,
-        style = hairline,
-    )
-    val tip = Offset(box.left + box.width * 0.5f, box.top)
-    val head = Path().apply {
-        moveTo(tip.x, tip.y - line * 1.5f)
-        lineTo(tip.x - line * 2.1f, tip.y)
-        lineTo(tip.x, tip.y + line * 1.5f)
-        close()
-    }
-    drawPath(head, tint)
 }

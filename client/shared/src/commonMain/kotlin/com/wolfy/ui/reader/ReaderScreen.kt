@@ -147,7 +147,14 @@ fun ReaderScreen(
     companionProfile: com.wolfy.data.companion.CompanionProfile? = null,
     companionOnProfileChange: (com.wolfy.data.companion.CompanionProfile) -> Unit = {},
     companionPersona: com.wolfy.data.CompanionPersonaIn = com.wolfy.data.CompanionPersonaIn(),
+    /** Отметки читателя во всей книге: краски и заметки. */
+    annotations: List<com.wolfy.data.annotations.Annotation> = emptyList(),
+    onAnnotationAdd: (chapter: Int, start: Int, end: Int, tone: Int?, quote: String) -> Unit = { _, _, _, _, _ -> },
+    onAnnotationNote: (id: String, note: String) -> Unit = { _, _ -> },
+    onAnnotationTone: (id: String, tone: Int) -> Unit = { _, _ -> },
+    onAnnotationRemove: (id: String) -> Unit = {},
     companionApi: com.wolfy.data.WolfyApi? = null,
+    companionMemory: com.wolfy.data.companion.CompanionMemoryRepository? = null,
     companionBookId: String = "",
     /**
      * Прочитанное для вопроса компаньону.
@@ -193,6 +200,11 @@ fun ReaderScreen(
     val motion = WolfyTheme.motion
     var contentsOpen by remember { mutableStateOf(false) }
     var readingSettingsOpen by remember { mutableStateOf(false) }
+    // Чем сейчас водят по странице. На телефоне нет контекстного меню поверх
+    // выделения, поэтому инструмент выбирают заранее, а не после.
+    var tool by remember { mutableStateOf(ReaderTool.Read) }
+    var pencilTone by remember { mutableStateOf(1) }
+    var openNote by remember { mutableStateOf<String?>(null) }
 
     // Живое выделение фразы: блок и диапазон, подсвечиваемый по ходу жеста.
     val phraseSelection = remember { mutableStateOf<PhraseSelection?>(null) }
@@ -403,6 +415,7 @@ fun ReaderScreen(
                     onImageVisible = onImageVisible,
                     phraseSelectionBlock = phraseSelection.value?.block ?: -1,
                     phraseSelectionRange = phraseSelection.value?.range,
+                    painted = annotations.filter { it.paints && it.chapter == state.chapterIndex },
                     selectViaMouse = selectViaMouse,
                     onPhraseSelect = { block, range ->
                         if (phraseSelection.value?.block != block || phraseSelection.value?.range != range) {
@@ -412,8 +425,29 @@ fun ReaderScreen(
                     onPhraseCommit = { block, range ->
                         val selectedBlock = state.blocks.getOrNull(block)
                         val parsedForBlock = selectedBlock?.parsed
-                        if (parsedForBlock != null && range.first <= range.last) {
-                            onPhraseSelected(block, range, selectedBlock.text, parsedForBlock)
+                        val span = selectedBlock?.let { chapterTokensOf(it, range) }
+                        when {
+                            // Маркер: выделение сразу становится краской, без
+                            // карточки и без подтверждения. Так же ведёт себя
+                            // настоящий маркер на бумаге.
+                            tool == ReaderTool.Pencil && span != null -> {
+                                onAnnotationAdd(
+                                    state.chapterIndex, span.first, span.last + 1, pencilTone,
+                                    quoteOfRange(selectedBlock, range),
+                                )
+                                phraseSelection.value = null
+                            }
+                            // Заметка: та же запись, но без краски и с
+                            // открытым полем — писать её будут прямо сейчас.
+                            tool == ReaderTool.Note && span != null -> {
+                                onAnnotationAdd(
+                                    state.chapterIndex, span.first, span.last + 1, null,
+                                    quoteOfRange(selectedBlock, range),
+                                )
+                                phraseSelection.value = null
+                            }
+                            parsedForBlock != null && range.first <= range.last ->
+                                onPhraseSelected(block, range, selectedBlock.text, parsedForBlock)
                         }
                         // Подсветка остаётся до закрытия карточки: снять её
                         // раньше — значит спрятать то, что читатель взял.
@@ -439,6 +473,52 @@ fun ReaderScreen(
                         }
                     },
             )
+        }
+
+        /*
+         * Полоса инструментов стоит под шапкой, а не внизу экрана.
+         *
+         * Внизу уже живут компаньон справа и его панель слева, и третий житель
+         * там оказался бы поверх одного из них ровно в тот момент, когда нужен.
+         * А наверху это ещё и честно по смыслу: инструмент - такая же настройка
+         * чтения, как размер шрифта, и лежит там же, где остальная оснастка.
+         *
+         * Прячется, когда открыто что-то своё - оглавление или настройки:
+         * две полосы органов управления одна поверх другой не помогают
+         * выбирать, а мешают.
+         */
+        AnimatedVisibility(
+            visible = !readingSettingsOpen && !contentsOpen,
+            enter = fadeIn(motion.paced(motion.quick)),
+            exit = fadeOut(motion.paced(motion.instant)),
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .offset { IntOffset(0, headerHeightPx.intValue) }
+                .padding(horizontal = WolfyTheme.spacing.medium)
+                .zIndex(Z_OVERLAY),
+        ) {
+            AnnotateDock(
+                tool = tool,
+                tone = pencilTone,
+                onTool = { tool = it },
+                onTone = { pencilTone = it },
+            )
+        }
+
+        // Лист заметки: снизу, как остальные листы читалки.
+        annotations.firstOrNull { it.id == openNote && !it.deleted }?.let { item ->
+            Box(Modifier.fillMaxWidth().align(Alignment.BottomCenter).zIndex(Z_SHEET)) {
+                NoteSheet(
+                    item = item,
+                    onNote = { onAnnotationNote(item.id, it) },
+                    onTone = { onAnnotationTone(item.id, it) },
+                    onRemove = {
+                        onAnnotationRemove(item.id)
+                        openNote = null
+                    },
+                    onClose = { openNote = null },
+                )
+            }
         }
 
         AnimatedVisibility(
@@ -505,6 +585,7 @@ fun ReaderScreen(
                 onProfileChange = companionOnProfileChange,
                 persona = companionPersona,
                 api = companionApi,
+                memory = companionMemory,
                 bookId = companionBookId,
                 bookTitle = state.bookTitle,
                 chapter = state.chapterIndex,
@@ -1029,7 +1110,7 @@ private fun StoryRecapSheet(
                         }
                     }
                     Text(
-                        "Осталось сегодня: ${state.value.remaining}",
+                        if (state.value.cached) "Пересказ сохранён в памяти компаньона." else "Осталось сегодня: ${state.value.remaining}",
                         style = WolfyTheme.typography.caption,
                         color = colors.inkMuted,
                     )
@@ -1109,6 +1190,8 @@ private fun ChapterBody(
     onImageVisible: (String) -> Unit,
     phraseSelectionBlock: Int,
     phraseSelectionRange: IntRange?,
+    /** Отметки читателя в этой главе: краски и заметки. */
+    painted: List<com.wolfy.data.annotations.Annotation>,
     selectViaMouse: Boolean,
     onPhraseSelect: (Int, IntRange) -> Unit,
     onPhraseCommit: (Int, IntRange) -> Unit,
@@ -1216,6 +1299,7 @@ private fun ChapterBody(
                 selected = state.card?.token?.takeIf { index == state.selectedBlock },
                 phraseSelection = phraseSelectionRange?.takeIf { index == phraseSelectionBlock },
                 selectViaMouse = selectViaMouse,
+                painted = painted,
                 onPhrase = { range -> onPhraseSelect(index, range) },
                 onPhraseDone = { range -> onPhraseCommit(index, range) },
                 image = block.imagePath?.let(images::get),
@@ -1246,6 +1330,8 @@ private fun BlockView(
     selected: com.wolfy.ffi.Token?,
     phraseSelection: IntRange?,
     selectViaMouse: Boolean,
+    /** Отметки главы; свою часть каждый абзац отрезает сам. */
+    painted: List<com.wolfy.data.annotations.Annotation>,
     onPhrase: (IntRange) -> Unit,
     onPhraseDone: (IntRange) -> Unit,
     image: ImageBitmap?,
@@ -1253,6 +1339,7 @@ private fun BlockView(
     onWordTap: (Int, com.wolfy.ffi.Token, com.wolfy.ffi.ParsedText) -> Unit,
 ) {
     val parsed = block.parsed
+    val marks = remember(block, painted) { marksFor(block, painted) }
 
     when (block.kind) {
         "heading" -> ChapterHeading(block.text)
@@ -1265,6 +1352,7 @@ private fun BlockView(
                     savedLemmaOf = { it.text.lowercase() },
                     selected = selected,
                     selection = phraseSelection,
+                    marks = marks,
                     selectViaMouse = selectViaMouse,
                     anchors = block.anchors,
                     dimmed = dimmed,
@@ -1279,6 +1367,7 @@ private fun BlockView(
                     savedLemmaOf = { it.text.lowercase() },
                     selected = selected,
                     selection = phraseSelection,
+                    marks = marks,
                     selectViaMouse = selectViaMouse,
                     anchors = block.anchors,
                     dimmed = dimmed,
@@ -1300,6 +1389,7 @@ private fun BlockView(
                     saved = savedLemmas,
                     selected = selected,
                     selection = phraseSelection,
+                    marks = marks,
                     selectViaMouse = selectViaMouse,
                     anchors = block.anchors,
                     dimmed = dimmed,

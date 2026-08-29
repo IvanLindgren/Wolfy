@@ -118,6 +118,32 @@ class CompanionReactionEngine(
         return Decision(chosen, now)
     }
 
+    /**
+     * Реплика по прямой просьбе читателя.
+     *
+     * Кулдауны здесь не действуют, и это не оплошность. Кулдаун защищает от
+     * навязчивости: компаньон не должен заговаривать сам чаще, чем раз в семь
+     * минут. Но здесь заговаривает не он, а читатель нажал кнопку - и молчание
+     * в ответ на нажатие читается сломанной кнопкой, а не тактичностью.
+     *
+     * Что остаётся - защита от повторов: подряд одно и то же обесценивает весь
+     * набор. Если не повторявшихся реплик в сценарии не осталось, берётся
+     * любая: сказать бывшее лучше, чем не сказать ничего.
+     *
+     * Тишину держим и отсюда: сразу после ответа компаньон не должен
+     * встревать со своей репликой.
+     */
+    fun offer(scenario: String): CompanionPhrase? {
+        val all = pack.phrases.filter { it.scenario == scenario }
+        if (all.isEmpty()) return null
+        val fresh = all.filter { it.id !in recentIds && it.text !in recentTexts }
+        val pool = fresh.ifEmpty { all }
+        val chosen = pool[pickIndex(pool.size)]
+        nextAllowedAt = clock() + UNPROMPTED_GAP_MS
+        remember(chosen.id, chosen.text)
+        return chosen
+    }
+
     /** Отметка показа снаружи: ручные действия тоже держат тишину. */
     fun noteManualShow() {
         nextAllowedAt = clock() + UNPROMPTED_GAP_MS

@@ -25,6 +25,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.coroutines.CancellationException
 import com.wolfy.platform.PickedPhoto
 import com.wolfy.platform.BrowserAuthLauncher
+import com.wolfy.data.annotations.Annotation
 import com.wolfy.platform.deviceName
 import com.wolfy.platform.devicePlatform
 import com.wolfy.ffi.DictionaryEntry
@@ -509,13 +510,74 @@ class WolfyApi(
         } catch (_: Exception) { AiPhraseResult.Failed("Нет связи с Beta-подсказкой.") }
     }
 
-    suspend fun recap(title: String, excerpt: String): AiRecapResult {
+    /**
+     * Отметки книги: забрать серверный список и подтвердить сохранённое.
+     *
+     * `seen` - поколение снимка, которое устройство долговечно записало на
+     * диск. По нему сервер собирает пометки удаления, поэтому число обязано
+     * быть честным: заявить непрочитанное значит разрешить стереть пометку,
+     * которой это устройство не видело, и удалённая заметка вернётся отсюда
+     * при следующей отправке.
+     */
+    suspend fun bookAnnotations(bookId: String, device: String, seen: Long): AnnotationSyncResult {
+        val token = tokenProvider() ?: return AnnotationSyncResult.Failed("Войдите, чтобы синхронизировать заметки.")
+        return try {
+            val response = client.get("$baseUrl/v1/books/$bookId/annotations") {
+                header("Authorization", "Bearer $token")
+                parameter("device", device)
+                parameter("seen", seen)
+            }
+            if (response.status == HttpStatusCode.OK) AnnotationSyncResult.Ready(response.body())
+            else AnnotationSyncResult.Failed("Заметки сейчас недоступны.")
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            AnnotationSyncResult.Failed("Нет связи с заметками.")
+        }
+    }
+
+    /**
+     * Отправляет список целиком и получает слитый.
+     *
+     * Целиком, а не разницу: отметок у книги десятки, а не тысячи, и полный
+     * список избавляет от вопроса «что именно клиент уже отправил» - вопроса,
+     * на который после потери сети честного ответа нет.
+     */
+    suspend fun saveBookAnnotations(
+        bookId: String,
+        device: String,
+        seen: Long,
+        items: List<Annotation>,
+    ): AnnotationSyncResult {
+        val token = tokenProvider() ?: return AnnotationSyncResult.Failed("Войдите, чтобы синхронизировать заметки.")
+        return try {
+            val response = client.put("$baseUrl/v1/books/$bookId/annotations") {
+                header("Authorization", "Bearer $token")
+                parameter("device", device)
+                parameter("seen", seen)
+                contentType(ContentType.Application.Json)
+                setBody(AnnotationsBody(items))
+            }
+            when (response.status) {
+                HttpStatusCode.OK -> AnnotationSyncResult.Ready(response.body())
+                HttpStatusCode.PayloadTooLarge ->
+                    AnnotationSyncResult.Failed("Заметок к этой книге слишком много.")
+                else -> AnnotationSyncResult.Failed("Заметки сейчас не сохраняются.")
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            AnnotationSyncResult.Failed("Нет связи с заметками.")
+        }
+    }
+
+    suspend fun recap(title: String, excerpt: String, memory: String = ""): AiRecapResult {
         val token = tokenProvider() ?: return AiRecapResult.Failed("Войдите, чтобы использовать Beta.")
         return try {
             val response = client.post("$baseUrl/v1/ai/recap") {
                 header("Authorization", "Bearer $token")
                 contentType(ContentType.Application.Json)
-                setBody(AiRecapRequest(title, excerpt))
+                setBody(AiRecapRequest(title, excerpt, memory))
                 timeout { requestTimeoutMillis = 60_000 }
             }
             if (response.status == HttpStatusCode.OK) AiRecapResult.Ready(response.body())
@@ -533,11 +595,12 @@ class WolfyApi(
         offset: Int,
         pageText: String,
         persona: CompanionPersonaIn,
+        memory: String = "",
     ): CompanionAiResult<CompanionOpinion> {
         val token = tokenProvider() ?: return CompanionAiResult.Failed("Войдите, чтобы использовать Beta.")
         return companionCall(
             "$baseUrl/v1/ai/companion/opinion",
-            CompanionOpinionRequest(bookId, title, CompanionPosition(chapter, offset), pageText, persona),
+            CompanionOpinionRequest(bookId, title, CompanionPosition(chapter, offset), pageText, persona, memory),
         )
     }
 
@@ -550,11 +613,12 @@ class WolfyApi(
         question: String,
         context: String,
         persona: CompanionPersonaIn,
+        memory: String = "",
     ): CompanionAiResult<CompanionQuestion> {
         val token = tokenProvider() ?: return CompanionAiResult.Failed("Войдите, чтобы использовать Beta.")
         return companionCall(
             "$baseUrl/v1/ai/companion/question",
-            CompanionQuestionRequest(bookId, title, CompanionPosition(chapter, offset), question, context, persona),
+            CompanionQuestionRequest(bookId, title, CompanionPosition(chapter, offset), question, context, persona, memory),
         )
     }
 
@@ -1065,14 +1129,29 @@ private data class ApiErrorBody(val error: String = "", val message: String = ""
 private data class AiPhraseRequest(val phrase: String, val context: String)
 
 @Serializable
-private data class AiRecapRequest(val title: String, val excerpt: String)
+data class AnnotationsPayload(
+    val items: List<Annotation> = emptyList(),
+    val generation: Long = 0,
+)
+
+@Serializable
+private data class AnnotationsBody(val items: List<Annotation>)
+
+/** Ответ обмена отметками: слитый список либо причина отказа. */
+sealed interface AnnotationSyncResult {
+    data class Ready(val value: AnnotationsPayload) : AnnotationSyncResult
+    data class Failed(val message: String) : AnnotationSyncResult
+}
+
+@Serializable
+private data class AiRecapRequest(val title: String, val excerpt: String, val memory: String = "")
 
 @Serializable
 data class AiPhrase(val title: String, val explanation: String, val pattern: String, val steps: List<AiPhraseStep>, val remaining: Int)
 @Serializable
 data class AiPhraseStep(val label: String, val text: String)
 @Serializable
-data class AiRecap(val summary: String, val events: List<AiEvent>, val remaining: Int)
+data class AiRecap(val summary: String, val events: List<AiEvent>, val remaining: Int, val cached: Boolean = false)
 @Serializable
 data class AiEvent(val title: String, val text: String, val kind: String)
 
@@ -1106,6 +1185,7 @@ private data class CompanionOpinionRequest(
     val position: CompanionPosition,
     val pageText: String,
     val companion: CompanionPersonaIn,
+    val memory: String = "",
 )
 
 @Serializable
@@ -1116,6 +1196,7 @@ private data class CompanionQuestionRequest(
     val question: String,
     val context: String,
     val companion: CompanionPersonaIn,
+    val memory: String = "",
 )
 
 @Serializable
@@ -1128,6 +1209,7 @@ data class CompanionOpinion(
     val details: List<CompanionOpinionDetail> = emptyList(),
     val uncertainty: String? = null,
     val remaining: Int = 0,
+    val cached: Boolean = false,
 )
 
 @Serializable
@@ -1139,6 +1221,7 @@ data class CompanionQuestion(
     val evidence: List<CompanionEvidence> = emptyList(),
     val uncertainty: String? = null,
     val remaining: Int = 0,
+    val cached: Boolean = false,
 )
 
 @Serializable

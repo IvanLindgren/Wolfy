@@ -142,12 +142,34 @@ pub fn chains(words: &[Word]) -> Vec<Chain> {
     out
 }
 
+/// Сколько наречий может стоять между «to» и глаголом расщеплённого
+/// инфинитива. Предел взят из языка, а не из осторожности: «to really quickly
+/// finish» — уже редкость, а неограниченный проход назад стоил бы квадрата.
+const MAX_SPLIT_ADVERBS: usize = 3;
+
 /// Собирает цепочку, начинающуюся с этого слова, если она там есть.
 fn chain_at(words: &[Word], start: usize) -> Option<Chain> {
     // После частицы «to» стоит инфинитив, а не сказуемое: «a way to spend an
     // evening» это не настоящее простое время. Разбирает инфинитив свой
     // детектор, и цепочке здесь делать нечего.
-    if start > 0 && words[start - 1].aux == Some(Aux::To) {
+    //
+    // Частица не обязана стоять вплотную: «a way to quickly spend an evening».
+    // Расщеплённый инфинитив остаётся инфинитивом, а цепочка на нём начиналась
+    // заново и объявляла present simple посреди именной группы — ровно то
+    // ложное срабатывание, которое хуже пропуска.
+    //
+    // Наречий пропускается не больше трёх: между «to» и глаголом их столько и
+    // бывает, а неограниченный проход назад сделал бы поиск цепочек
+    // квадратичным по длине предложения, что правилам слоя запрещено.
+    let mut particle = start;
+    for _ in 0..MAX_SPLIT_ADVERBS {
+        if particle > 0 && words[particle - 1].pos == crate::lexicon::Pos::Adverb {
+            particle -= 1;
+        } else {
+            break;
+        }
+    }
+    if particle > 0 && words[particle - 1].aux == Some(Aux::To) {
         return None;
     }
 
@@ -354,6 +376,18 @@ mod tests {
     #[test]
     fn инфинитив_сказуемым_не_становится() {
         assert_eq!(shape("A good way to spend an evening."), "");
+    }
+
+    #[test]
+    fn расщеплённый_инфинитив_сказуемым_тоже_не_становится() {
+        // Наречие между «to» и глаголом инфинитив не отменяет. Раньше цепочка
+        // начиналась с глагола и объявляла present simple посреди именной
+        // группы: ложное срабатывание там, где верного разбора нет вовсе.
+        assert_eq!(shape("A good way to quickly spend an evening."), "");
+        assert_eq!(shape("A good way to really quickly spend an evening."), "");
+        // А вот повелительное наклонение с наречием цепочкой быть обязано:
+        // «to» перед ним нет, и пропускать его нечему.
+        assert_eq!(shape("Quickly read the book."), "Main(read)");
     }
 
     #[test]

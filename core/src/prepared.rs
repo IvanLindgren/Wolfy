@@ -4,9 +4,14 @@
 //! в единицах UTF-16. Так на главу в шестьдесят абзацев уходит один вызов
 //! через границу, а не шестьдесят.
 
-use crate::ffi::dto::{BlockDto, CompactSentenceDto, CompactTokenDto, PreparedChapterDto};
+use crate::ffi::dto::{
+    BlockDto, CompactChainDto, CompactSentenceDto, CompactTokenDto, PreparedChapterDto,
+};
+use crate::grammar::chains;
+use crate::lexicon::Lexicon;
 use crate::parser::Chapter;
-use crate::tokenizer::{split, tokenize};
+use crate::tagger::tag;
+use crate::tokenizer::{split, tokenize, Sentence, Token};
 
 /// Собирает подготовленную главу из обычной.
 ///
@@ -23,13 +28,127 @@ pub fn prepare(chapter: &Chapter) -> PreparedChapterDto {
         blocks: chapter.blocks.iter().map(BlockDto::from).collect(),
         tokens: tokens.iter().map(CompactTokenDto::from).collect(),
         sentences: sentences.iter().map(CompactSentenceDto::from).collect(),
+        chains: verb_chains(&tokens, &sentences),
     }
+}
+
+/// Глагольные цепочки главы в смещениях UTF-16.
+///
+/// Считается здесь, вместе с токенами, а не по касанию: разметка стоит дороже
+/// самого поиска, и платить за неё на каждый тап значило бы платить за одно и
+/// то же по многу раз. Глава готовится один раз, и цепочки едут вместе с ней.
+///
+/// Разбор идёт по предложениям, а не по главе целиком. `chains` шагает по
+/// словам подряд и границ предложения не знает: на общем списке сказуемое
+/// одной фразы склеилось бы со следующей через точку.
+fn verb_chains(tokens: &[Token], sentences: &[Sentence]) -> Vec<CompactChainDto> {
+    let lexicon = Lexicon::embedded();
+    let mut out = Vec::new();
+    for sentence in sentences {
+        let Some(slice) = tokens.get(sentence.tokens.clone()) else {
+            continue;
+        };
+        let words = tag(lexicon, slice);
+        let offset = sentence.tokens.start;
+        for chain in chains(&words) {
+            // Цепочка из одного слова расширять нечего: тап по ней и так
+            // открывает карточку этого слова.
+            if chain.words.len() < 2 {
+                continue;
+            }
+            let Some(first) = words.get(chain.words.start) else {
+                continue;
+            };
+            let Some(last) = chain.words.end.checked_sub(1).and_then(|i| words.get(i)) else {
+                continue;
+            };
+            let (Some(head), Some(tail)) = (
+                tokens.get(offset + first.token),
+                tokens.get(offset + last.token),
+            ) else {
+                continue;
+            };
+            let end = tail.range.end;
+            let main_start = chain
+                .main()
+                .and_then(|part| words.get(part.word))
+                .and_then(|word| tokens.get(offset + word.token))
+                .map(|token| token.range.start)
+                .unwrap_or(end);
+            out.push(CompactChainDto {
+                start: head.range.start,
+                end,
+                main_start,
+            });
+        }
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::parser::{Block, Chapter};
+
+    /// Тап по служебному глаголу обязан захватывать всю цепочку.
+    ///
+    /// «is» в словаре бесполезен: спрашивают не про связку, а про форму. При
+    /// этом «walking» искать в словаре как раз осмысленно, поэтому цепочка
+    /// несёт начало смыслового глагола — по нему клиент и отличает касание,
+    /// которое надо расширить, от касания, которое надо оставить как есть.
+    #[test]
+    fn цепочка_сказуемого_доезжает_до_клиента() {
+        let chapter = Chapter {
+            title: None,
+            blocks: vec![Block::Paragraph(
+                "She is walking. He has a book.".to_string(),
+            )],
+        };
+        let prepared = prepare(&chapter);
+        let text = "She is walking. He has a book.";
+
+        let chain = prepared
+            .chains
+            .iter()
+            .find(|c| text[c.start..c.end].starts_with("is"))
+            .expect("цепочка «is walking» не найдена");
+        assert_eq!(&text[chain.start..chain.end], "is walking");
+        assert_eq!(&text[chain.main_start..chain.end], "walking");
+
+        // «has a book» — сказуемое из одного слова: расширять нечего, и
+        // цепочка сюда попадать не должна, иначе тап по «has» утащил бы за
+        // собой то, что цепочкой не является.
+        assert!(
+            prepared
+                .chains
+                .iter()
+                .all(|c| !text[c.start..c.end].starts_with("has")),
+            "цепочка из одного слова не должна ехать клиенту: {:?}",
+            prepared
+                .chains
+                .iter()
+                .map(|c| &text[c.start..c.end])
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// Цепочка не имеет права перешагнуть точку.
+    #[test]
+    fn цепочка_не_склеивает_соседние_предложения() {
+        let chapter = Chapter {
+            title: None,
+            blocks: vec![Block::Paragraph("He was late. Reading helps.".to_string())],
+        };
+        let prepared = prepare(&chapter);
+        let text = "He was late. Reading helps.";
+        for chain in &prepared.chains {
+            assert!(
+                !text[chain.start..chain.end].contains('.'),
+                "цепочка перешагнула границу предложения: {:?}",
+                &text[chain.start..chain.end]
+            );
+        }
+    }
 
     #[test]
     fn подготовленная_глава_не_дублирует_текст_токена() {

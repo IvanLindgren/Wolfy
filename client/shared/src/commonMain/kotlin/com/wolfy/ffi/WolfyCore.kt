@@ -401,6 +401,7 @@ data class Fact(
 data class ParsedText(
     val tokens: List<Token> = emptyList(),
     val sentences: List<Sentence> = emptyList(),
+    val chains: List<VerbChain> = emptyList(),
 ) {
     /**
      * Предложение, внутри которого стоит символ с этой позицией.
@@ -414,6 +415,20 @@ data class ParsedText(
     /** Токен под позицией касания. */
     fun tokenAt(offset: Int): Token? =
         tokens.firstOrNull { offset >= it.start && offset < it.end }
+
+    /**
+     * Цепочка сказуемого, которую стоит захватить целиком вместо одного слова.
+     *
+     * Возвращается только для касания по служебному глаголу. «is» в словаре
+     * бесполезен: читатель, ткнувший в него, спрашивает не про связку, а про
+     * форму — и ответ на этот вопрос «is walking», а не «is». А вот «walking»
+     * в словаре искать осмысленно, поэтому касание по смысловому глаголу
+     * остаётся касанием по слову: подменять там перевод разбором значило бы
+     * отнимать у читателя то, за чем он и тыкал.
+     */
+    fun chainToExpand(offset: Int): VerbChain? = chains.firstOrNull { chain ->
+        offset >= chain.start && offset < chain.end && offset < chain.mainStart
+    }
 }
 
 /**
@@ -453,6 +468,23 @@ data class CompactToken(
     val end: Int,
 )
 
+/**
+ * Глагольная цепочка в смещениях UTF-16.
+ *
+ * Ядро отдаёт её вместе с главой, чтобы тап по служебному глаголу можно было
+ * расширить без похода в разбор на каждое касание.
+ */
+@Serializable
+data class VerbChain(
+    val start: Int,
+    val end: Int,
+    /** Начало смыслового глагола; по нему тап отличают от тапа по связке. */
+    @SerialName("mainStart") val mainStart: Int,
+) {
+    /** Отрезок в тех же смещениях, что и выделение фразы. */
+    val range: IntRange get() = start until end
+}
+
 @Serializable
 data class CompactSentence(
     val start: Int,
@@ -481,6 +513,7 @@ data class PreparedChapter(
     val blocks: List<Block> = emptyList(),
     val tokens: List<CompactToken> = emptyList(),
     val sentences: List<CompactSentence> = emptyList(),
+    val chains: List<VerbChain> = emptyList(),
 ) {
     /**
      * Текст главы для нарезки токенов компактного формата.
@@ -512,7 +545,8 @@ data class PreparedChapter(
             )
         }
 
-    fun toParsedText(): ParsedText = ParsedText(tokens = toTokens(), sentences = toSentences())
+    fun toParsedText(): ParsedText =
+        ParsedText(tokens = toTokens(), sentences = toSentences(), chains = chains)
 }
 
 /** Слово графа. */

@@ -47,7 +47,7 @@ mod tense;
 mod verbal;
 mod wish;
 
-pub use chain::{Chain, Link, Part};
+pub use chain::{chains, Chain, Link, Part};
 pub use exercise::{exercises, exercises_for, Exercise, Task, GAP};
 pub use reference::{articles, Article, Topic};
 pub use roles::{chunks, markers, Chunk, Marker, MarkerKind, Role};

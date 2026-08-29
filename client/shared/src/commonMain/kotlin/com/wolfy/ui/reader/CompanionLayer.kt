@@ -65,6 +65,7 @@ import com.wolfy.data.WolfyApi
 import com.wolfy.data.companion.CompanionAppearance
 import com.wolfy.data.companion.CompanionPhrasePack
 import com.wolfy.data.companion.CompanionProfile
+import com.wolfy.data.companion.CompanionMemoryRepository
 import com.wolfy.data.companion.CompanionReactionEngine
 import com.wolfy.data.companion.CompanionRepository
 import com.wolfy.data.companion.FallbackPhrases
@@ -81,6 +82,8 @@ import com.wolfy.theme.still
 import com.wolfy.ui.companion.CompanionFigure
 import com.wolfy.widgets.PrimaryButton
 import com.wolfy.widgets.Rule
+import com.wolfy.widgets.CompanionSpark
+import com.wolfy.widgets.SparkKind
 import com.wolfy.widgets.TypesettingLine
 import com.wolfy.widgets.pressable
 import kotlinx.coroutines.delay
@@ -102,6 +105,7 @@ fun CompanionLayer(
     onProfileChange: (CompanionProfile) -> Unit,
     persona: CompanionPersonaIn,
     api: WolfyApi,
+    memory: CompanionMemoryRepository? = null,
     bookId: String,
     bookTitle: String,
     chapter: Int,
@@ -144,6 +148,11 @@ fun CompanionLayer(
     var questionDraft by remember { mutableStateOf("") }
     var aiJob by remember { mutableStateOf<Job?>(null) }
     var pendingAiAction by remember { mutableStateOf<PendingAiAction?>(null) }
+    // Вспышка над компаньоном: лампочка на готовый ответ, звёздочки на
+    // заготовленную реплику. Счётчик, а не флаг: две подряд одинаковые
+    // вспышки обязаны сыграть дважды.
+    var sparkTrigger by remember { mutableStateOf(0) }
+    var sparkKind by remember { mutableStateOf(SparkKind.Cheer) }
     // Намёк про протяжку показывается один раз за сессию чтения.
     var hintShown by remember(profile.id) { mutableStateOf(false) }
     // Начало сессии чтения: по нему считаются настоящие минуты для реплик.
@@ -284,9 +293,20 @@ fun CompanionLayer(
         }
         aiJob?.cancel()
         engine.noteManualShow()
+        val position = offset()
+        val visibleText = pageText()
+        memory?.findOpinion(bookId, chapter, visibleText, profile.profileHash)?.let {
+            aiSheet = AiSheetState.OpinionReady(it)
+            return
+        }
         aiSheet = AiSheetState.Loading
         aiJob = scope.launch {
-            val result = api.companionOpinion(bookId, bookTitle, chapter, offset(), pageText(), persona)
+            val result = api.companionOpinion(
+                bookId, bookTitle, chapter, position, visibleText, persona, memory?.contextFor(bookId).orEmpty(),
+            )
+            if (result is CompanionAiResult.Ready) {
+                memory?.rememberOpinion(bookId, bookTitle, chapter, visibleText, profile.profileHash, result.value)
+            }
             aiSheet = when (result) {
                 is CompanionAiResult.Ready -> AiSheetState.OpinionReady(result.value)
                 is CompanionAiResult.Failed ->
@@ -311,7 +331,20 @@ fun CompanionLayer(
             // странице: «что уже случилось» в трёх абзацах перед глазами
             // не написано, и раньше компаньон честно уходил в «не знаю».
             val history = readContext().ifBlank { pageText() }
-            val result = api.companionQuestion(bookId, bookTitle, chapter, offset(), question, history, persona)
+            val position = offset()
+            val cached = memory?.findQuestion(bookId, chapter, question, history, profile.profileHash)
+            val result = if (cached != null) {
+                CompanionAiResult.Ready(cached)
+            } else {
+                api.companionQuestion(
+                    bookId, bookTitle, chapter, position, question, history, persona, memory?.contextFor(bookId).orEmpty(),
+                )
+            }
+            if (result is CompanionAiResult.Ready && !result.value.cached) {
+                memory?.rememberQuestion(
+                    bookId, bookTitle, chapter, question, history, profile.profileHash, result.value,
+                )
+            }
             aiSheet = when (result) {
                 is CompanionAiResult.Ready -> AiSheetState.QuestionReady(result.value)
                 is CompanionAiResult.Failed ->
@@ -328,6 +361,25 @@ fun CompanionLayer(
         }
         engine.noteManualShow()
         onRecap()
+    }
+
+    /**
+     * Реплика из готового набора, без сети и без квоты.
+     *
+     * До сих пор у читателя был единственный способ обратиться к компаньону -
+     * потратить один из десяти дневных запросов к модели. Это делало обычное
+     * «скажи что-нибудь» дорогим и потому неуместным: с персонажем нельзя было
+     * просто поговорить. Набор из ста реплик лежит на устройстве и на такие
+     * просьбы отвечает сам.
+     */
+    fun saySomething(scenario: String, kind: SparkKind) {
+        menuOpen = false
+        aiSheet = null
+        revealed = true
+        bubble = engine.offer(scenario)?.text ?: return
+        sparkKind = kind
+        sparkTrigger += 1
+        if (soundsEnabled) playCompanionSound(CompanionSound.Reaction)
     }
 
     val ribbonEnter = fadeIn(motion.paced(motion.quick)) +
@@ -388,17 +440,30 @@ fun CompanionLayer(
                 scaleIn(motion.settling(), initialScale = 0.94f, transformOrigin = PanelOrigin),
             exit = fadeOut(motion.paced(motion.instant)) +
                 scaleOut(motion.paced(motion.quick), targetScale = 0.94f, transformOrigin = PanelOrigin),
-            modifier = Modifier.align(Alignment.BottomEnd),
+            modifier = Modifier.align(Alignment.BottomStart),
         ) {
-            // Потолок в три четверти экрана и прокрутка целиком — тот же
+            // Панель стоит в левом нижнем углу, а компаньон - в правом.
+            //
+            // Раньше она открывалась поверх него: собеседник исчезал ровно в
+            // тот момент, когда с ним заговаривали, и панель упиралась в его
+            // же ширину. Теперь они делят низ экрана - фигура остаётся видна,
+            // а панели достаётся вся ширина, кроме отведённой ему полосы.
+            //
+            // Потолок в три четверти экрана и прокрутка целиком - тот же
             // приём, что у листа сюжета и панели настроек. Мнение на три
             // абзаца с деталями иначе уезжало за экран вместе с «Закрыть»,
             // а закрыть лист больше нечем: тап мимо он не ловит.
             BoxWithConstraints {
                 val cap = maxHeight * 0.75f
+                // Ширина берётся от экрана, а не назначается числом: на
+                // телефоне это почти вся полоса, на планшете - предел, за
+                // которым строка становится слишком длинной для чтения.
+                val reserved = if (compact) FIGURE_LANE_COMPACT else FIGURE_LANE_WIDE
+                val room = (maxWidth - reserved).coerceAtLeast(MIN_PANEL_WIDTH)
+                val width = minOf(room, MAX_PANEL_WIDTH)
                 Column(
                     Modifier
-                        .widthIn(max = if (compact) 300.dp else 340.dp)
+                        .widthIn(min = minOf(width, room), max = width)
                         .heightIn(max = cap)
                         .clip(RoundedCornerShape(spacing.medium))
                         .background(colors.paper)
@@ -427,6 +492,9 @@ fun CompanionLayer(
                                         aiSheet = AiSheetState.Asking
                                     },
                                     onRecap = { menuOpen = false; runRecap() },
+                                    onCheerUp = { saySomething("difficult_page", SparkKind.Cheer) },
+                                    onHowIsItGoing = { saySomething("steady_reading", SparkKind.Cheer) },
+                                    onSaySomething = { saySomething(CHATTER.random(), SparkKind.Cheer) },
                                     onToggleReactions = {
                                         onProfileChange(profile.copy(reactionsEnabled = !profile.reactionsEnabled))
                                         menuOpen = false
@@ -548,6 +616,23 @@ fun CompanionLayer(
             }
         }
 
+        // Лампочка загорается, когда ответ готов. Она стоит над фигурой и
+        // живёт своей жизнью: пропустивший её ничего не теряет, а заметивший
+        // понимает, что панель уже можно открывать.
+        LaunchedEffect(aiSheet) {
+            if (aiSheet is AiSheetState.OpinionReady || aiSheet is AiSheetState.QuestionReady) {
+                sparkKind = SparkKind.Idea
+                sparkTrigger += 1
+            }
+        }
+        Box(
+            Modifier
+                .align(Alignment.BottomEnd)
+                .padding(bottom = if (compact) 46.dp else 84.dp, end = if (compact) 30.dp else 54.dp),
+        ) {
+            CompanionSpark(trigger = sparkTrigger, kind = sparkKind)
+        }
+
         // Полная фигура появляется только после осознанного действия. Тап по
         // ней открывает меню, а прокрутка или отдельная команда снова прячут.
         AnimatedVisibility(
@@ -595,7 +680,7 @@ private fun <T : Any> rememberLastNotNull(value: T?): T? {
 private enum class CompanionPanel { None, Menu, Sheet }
 
 /** Панель растёт из угла, где живёт персонаж, а не из своего центра. */
-private val PanelOrigin = TransformOrigin(1f, 1f)
+private val PanelOrigin = TransformOrigin(0f, 1f)
 
 /**
  * Меню действий.
@@ -608,6 +693,9 @@ private fun CompanionMenu(
     onOpinion: () -> Unit,
     onAsk: () -> Unit,
     onRecap: () -> Unit,
+    onCheerUp: () -> Unit,
+    onHowIsItGoing: () -> Unit,
+    onSaySomething: () -> Unit,
     onToggleReactions: () -> Unit,
     onEdit: () -> Unit,
     onHide: () -> Unit,
@@ -617,6 +705,14 @@ private fun CompanionMenu(
         ActionRow("Что думаешь об этой странице? · Beta", onOpinion)
         ActionRow("Задать вопрос о книге · Beta", onAsk)
         ActionRow("Вспомнить сюжет · Beta", onRecap)
+        Rule()
+        // Ниже черты - то, что не ходит в сеть и не тратит дневные запросы.
+        // Черта здесь не украшение: она и есть обещание, что за этими тремя
+        // строками ничего не спишется.
+        ActionRow("Подбодри меня", onCheerUp)
+        ActionRow("Как я читаю?", onHowIsItGoing)
+        ActionRow("Скажи что-нибудь", onSaySomething)
+        Rule()
         ActionRow(if (reactionsEnabled) "Помолчи пока" else "Включить реплики", onToggleReactions)
         ActionRow("Изменить компаньона", onEdit)
         ActionRow("Спрятать компаньона", onHide)
@@ -674,7 +770,7 @@ private fun CompanionSheet(
                     )
                 }
                 sheet.value.uncertainty?.let { Text(it, style = WolfyTheme.typography.caption, color = colors.inkMuted) }
-                RemainingLine(sheet.value.remaining)
+                RemainingLine(sheet.value.remaining, sheet.value.cached)
                 SheetAction("Закрыть", onClose)
             }
 
@@ -689,7 +785,7 @@ private fun CompanionSheet(
                     )
                 }
                 sheet.value.uncertainty?.let { Text(it, style = WolfyTheme.typography.caption, color = colors.inkMuted) }
-                RemainingLine(sheet.value.remaining)
+                RemainingLine(sheet.value.remaining, sheet.value.cached)
                 SheetAction("Закрыть", onClose)
             }
 
@@ -747,9 +843,9 @@ private fun CompanionSheet(
 
 /** Остаток дневной квоты — служебная строка, а не действие. */
 @Composable
-private fun RemainingLine(remaining: Int) {
+private fun RemainingLine(remaining: Int, cached: Boolean = false) {
     Text(
-        "Осталось запросов сегодня: $remaining",
+        if (cached) "Ответ сохранён в памяти компаньона." else "Осталось запросов сегодня: $remaining",
         style = WolfyTheme.typography.caption,
         color = WolfyTheme.colors.inkMuted,
     )
@@ -842,6 +938,40 @@ private sealed interface AiSheetState {
 }
 
 internal enum class PendingAiAction { Opinion, Question, Recap }
+
+/**
+ * Из чего берётся «Скажи что-нибудь».
+ *
+ * Сценарии настроения и течения сессии, но не начало и не конец: «ну что,
+ * почитаем?» посреди главы звучит так, будто компаньон не заметил, что её уже
+ * читают.
+ */
+private val CHATTER = listOf(
+    "steady_reading",
+    "long_session",
+    "mood_joy",
+    "mood_mystery",
+    "mood_tension",
+    "page_completed",
+)
+
+/**
+ * Полоса, отведённая фигуре компаньона у правого края.
+ *
+ * Панель раскрывается от левого края и упирается в эту полосу, а не в
+ * собеседника: разговаривать с тем, кого закрыло окно разговора, странно.
+ */
+private val FIGURE_LANE_COMPACT = 96.dp
+private val FIGURE_LANE_WIDE = 132.dp
+
+/** Уже этого панель не имеет смысла: строка станет в два слова. */
+private val MIN_PANEL_WIDTH = 240.dp
+
+/**
+ * Шире этого - тоже. Длинная строка читается хуже короткой, и на планшете
+ * панель во всю ширину была бы не щедростью, а неудобством.
+ */
+private val MAX_PANEL_WIDTH = 460.dp
 
 /** Сколько ждём, прежде чем показать, как открывается компаньон. */
 private const val HINT_DELAY_MILLIS = 4_000L

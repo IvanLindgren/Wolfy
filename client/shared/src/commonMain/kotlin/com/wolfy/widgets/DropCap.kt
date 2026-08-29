@@ -48,6 +48,8 @@ fun DropCapParagraph(
     savedLemmaOf: (Token) -> String = { it.text.lowercase() },
     selected: Token? = null,
     selection: IntRange? = null,
+    /** Краски отметок; передаются так же, как выделение фразы. */
+    marks: List<TextMark> = emptyList(),
     selectViaMouse: Boolean = false,
     /** Докуда набирать каждое слово полужирным — по числу на токен абзаца. */
     anchors: List<Int> = emptyList(),
@@ -79,6 +81,7 @@ fun DropCapParagraph(
             savedLemmaOf = savedLemmaOf,
             selected = selected,
             selection = selection,
+            marks = marks,
             selectViaMouse = selectViaMouse,
             anchors = anchors,
             dimmed = dimmed,
@@ -155,6 +158,7 @@ fun DropCapParagraph(
                             savedLemmaOf = savedLemmaOf,
                             selected = selected,
                             selection = selection,
+                            marks = marks,
                             // Локальные смещения этой раскладки начинаются с
                             // нуля, а токены — с единицы (буквицы): без
                             // сдвига попадание уехало бы на один знак.
@@ -176,6 +180,7 @@ fun DropCapParagraph(
                         savedLemmaOf = savedLemmaOf,
                         selected = selected,
                         selection = selection,
+                        marks = marks,
                         offsetShift = splitAt + 1,
                         selectViaMouse = selectViaMouse,
                         anchors = below.anchors,

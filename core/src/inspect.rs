@@ -133,11 +133,14 @@ fn build_graph(
         let covered: Vec<usize> = (finding.tokens.start..finding.tokens.end)
             .filter_map(|orig| orig_to_vis.get(&orig).copied())
             .collect();
-        if covered.is_empty() {
+        // Пустой набор пропускается: разбор, ни одно слово которого не попало
+        // в видимый текст, подсвечивать не на чем. min и max возвращают None
+        // ровно в этом случае, поэтому отдельной проверки на пустоту не нужно.
+        let (Some(&first), Some(&last)) = (covered.iter().min(), covered.iter().max()) else {
             continue;
-        }
-        let from = *covered.iter().min().unwrap();
-        let to = *covered.iter().max().unwrap() + 1;
+        };
+        let from = first;
+        let to = last + 1;
         links.push(GraphLinkDto {
             from,
             to,

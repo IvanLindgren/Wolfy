@@ -525,6 +525,23 @@ impl From<&Sentence> for CompactSentenceDto {
     }
 }
 
+/// Глагольная цепочка главы в смещениях UTF-16.
+///
+/// Нужна тапу по служебному глаголу. «is» сам по себе в словаре бесполезен, а
+/// «is walking» — уже разбор: читатель, ткнувший в «is», хотел спросить не про
+/// глагол-связку, а про форму. Клиент по этим отрезкам расширяет касание до
+/// всей цепочки, но только если ткнули не в смысловой глагол: «walking» в
+/// словаре искать как раз осмысленно, и подменять там карточку слова разбором
+/// значило бы отнимать у читателя перевод.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompactChainDto {
+    pub start: usize,
+    pub end: usize,
+    /// Начало смыслового глагола или `end`, если его в цепочке нет.
+    pub main_start: usize,
+}
+
 /// Подготовленная глава — один тяжёлый переход.
 ///
 /// Содержит блоки и компактные токены/предложения над `plain_text` главы.
@@ -536,6 +553,7 @@ pub struct PreparedChapterDto {
     pub blocks: Vec<BlockDto>,
     pub tokens: Vec<CompactTokenDto>,
     pub sentences: Vec<CompactSentenceDto>,
+    pub chains: Vec<CompactChainDto>,
 }
 
 /// Отрезок чтения: докуда читать за один подход.

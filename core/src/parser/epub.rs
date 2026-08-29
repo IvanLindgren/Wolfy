@@ -418,7 +418,9 @@ fn parse_package(opf: &str, base: &str) -> Result<Package> {
                 if !closing {
                     continue;
                 }
-                let (field, buffer) = collecting.take().expect("только что проверили");
+                let Some((field, buffer)) = collecting.take() else {
+                    continue;
+                };
                 let value = buffer.trim().to_string();
                 if value.is_empty() {
                     continue;
@@ -933,8 +935,9 @@ fn parse_xhtml(xhtml: &str, base: &str) -> Result<(Vec<Block>, HashMap<String, u
                 } else if name.as_slice() == b"math"
                     && math.as_ref().is_some_and(|state| depth == state.open_depth)
                 {
-                    let state = math.take().expect("только что проверили");
-                    emit_math(state, &mut blocks);
+                    if let Some(state) = math.take() {
+                        emit_math(state, &mut blocks);
+                    }
                 } else if math.is_some() {
                     // Внутренние теги формулы (mrow, mi, mo…) балансируют
                     // захваченную разметку и больше ничего не делают.
@@ -942,11 +945,14 @@ fn parse_xhtml(xhtml: &str, base: &str) -> Result<(Vec<Block>, HashMap<String, u
                         state.close_element(&name);
                     }
                 } else if table.is_some() && name.as_slice() == b"table" {
-                    let state = table.as_mut().expect("только что проверили");
-                    if state.nested > 0 {
-                        state.nested -= 1;
-                    } else {
-                        let mut state = table.take().expect("только что проверили");
+                    // Вложенная таблица только уменьшает счётчик: закрывается
+                    // и превращается в блок лишь самая внешняя.
+                    let outermost = table.as_ref().is_some_and(|state| state.nested == 0);
+                    if !outermost {
+                        if let Some(state) = table.as_mut() {
+                            state.nested -= 1;
+                        }
+                    } else if let Some(mut state) = table.take() {
                         state.close_row();
                         let rows = state.into_rows();
                         if !rows.is_empty() {
@@ -1384,8 +1390,8 @@ fn handle_image(
             alt: attribute(element, b"alt"),
         });
     }
-    if continuing.is_some() {
-        *current = Some((continuing.expect("проверили выше"), depth));
+    if let Some(kind) = continuing {
+        *current = Some((kind, depth));
     }
 }
 

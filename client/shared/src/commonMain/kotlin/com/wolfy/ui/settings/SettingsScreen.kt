@@ -13,6 +13,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -20,6 +24,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.wolfy.data.SyncStatus
 import com.wolfy.data.dictionary.DictionaryStatus
+import com.wolfy.data.companion.CompanionMemory
+import com.wolfy.data.companion.CompanionMemoryStats
 import com.wolfy.theme.ReadingTheme
 import com.wolfy.theme.WolfyTheme
 import com.wolfy.widgets.PrimaryButton
@@ -56,6 +62,12 @@ fun SettingsScreen(
     onReduceMotion: (Boolean) -> Unit,
     companionSounds: Boolean,
     onCompanionSounds: (Boolean) -> Unit,
+    companionMemory: CompanionMemory,
+    companionMemoryStats: CompanionMemoryStats,
+    onCompanionMemoryEnabled: (Boolean) -> Unit,
+    onCompanionMemoryShared: (Boolean) -> Unit,
+    onCompanionMemorySize: (String) -> Unit,
+    onClearCompanionMemory: () -> Unit,
     /*
      * Помощь вниманию: якорь слова, окно чтения, ведущая строка, отрезок.
      * Всё выключено по умолчанию — навязанная помощь мешает тем, кому она не
@@ -91,6 +103,7 @@ fun SettingsScreen(
 ) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
+    var confirmMemoryClear by remember { mutableStateOf(false) }
 
     Column(
         modifier
@@ -130,6 +143,60 @@ fun SettingsScreen(
                 on = companionSounds,
                 onChange = onCompanionSounds,
             )
+            Rule()
+            SwitchRow(
+                title = "Память компаньона",
+                hint = "Хранит на этом устройстве ответы, вопросы и краткие пересказы.",
+                on = companionMemory.settings.enabled,
+                onChange = onCompanionMemoryEnabled,
+            )
+            if (companionMemory.settings.enabled) {
+                SwitchRow(
+                    title = "Учитывать память в новых ответах",
+                    hint = "ИИ получает только короткую выжимку, без полного текста книги.",
+                    on = companionMemory.settings.shareWithAi,
+                    onChange = onCompanionMemoryShared,
+                )
+                val sizes = listOf("compact", "balanced", "deep")
+                ChoiceRow(
+                    title = "Объём памяти",
+                    hint = "Сейчас: ${companionMemoryStats.answers} ответов, ${companionMemoryStats.books} книг.",
+                    options = listOf("короткая", "обычная", "большая"),
+                    selected = sizes.indexOf(companionMemory.settings.size).coerceAtLeast(1),
+                    onSelect = { onCompanionMemorySize(sizes[it]) },
+                )
+                if (confirmMemoryClear) {
+                    Text(
+                        "Стереть все сохранённые ответы и пересказы? Книги и компаньон останутся.",
+                        style = WolfyTheme.typography.caption,
+                        color = colors.accent,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(spacing.medium)) {
+                        Text(
+                            "стереть",
+                            style = WolfyTheme.typography.button,
+                            color = colors.accent,
+                            modifier = Modifier.pressable {
+                                onClearCompanionMemory()
+                                confirmMemoryClear = false
+                            },
+                        )
+                        Text(
+                            "отмена",
+                            style = WolfyTheme.typography.button,
+                            color = colors.inkMuted,
+                            modifier = Modifier.pressable { confirmMemoryClear = false },
+                        )
+                    }
+                } else if (companionMemoryStats.answers + companionMemoryStats.books + companionMemoryStats.requests > 0) {
+                    Text(
+                        "Очистить память",
+                        style = WolfyTheme.typography.button,
+                        color = colors.accent,
+                        modifier = Modifier.pressable { confirmMemoryClear = true },
+                    )
+                }
+            }
             PrimaryButton("Открыть раздел", onOpenCompanion)
         }
 

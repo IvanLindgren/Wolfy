@@ -10,6 +10,7 @@ import com.wolfy.data.AiRecap
 import com.wolfy.data.companion.takeLastCodePoints
 import com.wolfy.data.companion.unicodeLength
 import com.wolfy.data.AiRecapResult
+import com.wolfy.data.companion.CompanionMemoryRepository
 import com.wolfy.data.AiPhraseResult
 import com.wolfy.data.library.Library
 import com.wolfy.data.library.LibraryBook
@@ -203,6 +204,7 @@ class ReaderViewModel(
     private val api: WolfyApi,
     private val library: Library,
     private val dictionary: DictionaryManager,
+    private val companionMemory: CompanionMemoryRepository? = null,
     private val clock: () -> Long = { currentTimeMillis() },
 ) : ViewModel() {
 
@@ -922,7 +924,21 @@ class ReaderViewModel(
                     }
                     return@launch
                 }
-                val result = api.recap(snapshot.bookTitle, excerpt)
+                val cached = companionMemory?.findRecap(id, excerpt)
+                val result = if (cached != null) {
+                    AiRecapResult.Ready(cached)
+                } else {
+                    api.recap(snapshot.bookTitle, excerpt, companionMemory?.contextFor(id).orEmpty())
+                }
+                if (result is AiRecapResult.Ready && !result.value.cached) {
+                    companionMemory?.rememberRecap(
+                        bookId = id,
+                        title = snapshot.bookTitle,
+                        chapter = snapshot.chapterIndex,
+                        excerpt = excerpt,
+                        value = result.value,
+                    )
+                }
                 _state.update { current ->
                     if (!owns(session, id)) current
                     else current.copy(recap = when (result) {
