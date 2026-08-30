@@ -214,10 +214,22 @@ export function ChapterView({
   )
 }
 
-/** Номер первого абзаца — на нём и стоит буквица. */
+/**
+ * Номер абзаца, открывающего главу буквицей.
+ *
+ * Первый настоящий, а не просто первый. Первым текстовым блоком главы часто
+ * оказывается строка вроде названия книги или пометки переводчика, и литера в
+ * три строки рядом с одной строкой текста выглядит поломкой вёрстки, а не
+ * открытием главы. Порог тот же, что у клиента на Compose.
+ */
 function firstParagraph(blocks: TokenizedBlock[]): number {
-  return blocks.findIndex((item) => item.block.kind === 'paragraph')
+  return blocks.findIndex(
+    (item) => item.block.kind === 'paragraph' && (item.block.text?.length ?? 0) >= DROP_CAP_MIN_CHARS,
+  )
 }
+
+/** Примерно четыре строки набора: меньше буквица не открывает. */
+const DROP_CAP_MIN_CHARS = 180
 
 /** Абзац после заголовка или отбивки начинается без красной строки. */
 function isOpening(blocks: TokenizedBlock[], position: number): boolean {

@@ -32,7 +32,6 @@ import com.wolfy.widgets.PrimaryButton
 import com.wolfy.widgets.Rule
 import com.wolfy.widgets.SectionLabel
 import com.wolfy.widgets.Sticker
-import com.wolfy.widgets.ThemePicker
 import com.wolfy.widgets.WolfySticker
 import com.wolfy.data.FocusMode
 import com.wolfy.platform.RadioState
@@ -53,6 +52,15 @@ fun SettingsScreen(
     onThemeChange: (ReadingTheme) -> Unit,
     fontScale: Float,
     onFontScaleChange: (Float) -> Unit,
+    /**
+     * Интервал строк.
+     *
+     * Раньше его здесь не было вовсе: настройка жила только в панели читалки.
+     * Читатель, открывший «Настройки» и не нашедший её, делал единственный
+     * разумный вывод — что настроек две системы и они не совпадают.
+     */
+    lineScale: Float,
+    onLineScaleChange: (Float) -> Unit,
     sync: SyncStatus,
     onSyncNow: () -> Unit,
     appVersion: String,
@@ -119,14 +127,28 @@ fun SettingsScreen(
             color = colors.ink,
         )
 
-        SettingsCard("Вид и текст") {
-            SectionLabel("Тема")
-            ThemePicker(selected = theme, onSelect = onThemeChange)
+        SettingsCard("Чтение") {
+            // То же определение, что и в панели читалки: см.
+            // ReadingSettingsPanel. Раздельные копии расходились составом и
+            // подписями, и обе выглядели неполными.
+            ReadingSettingsPanel(
+                theme = theme,
+                onThemeChange = onThemeChange,
+                fontScale = fontScale,
+                onFontScaleChange = onFontScaleChange,
+                lineScale = lineScale,
+                onLineScaleChange = onLineScaleChange,
+                emphasizeStems = emphasizeStems,
+                onEmphasizeStems = onEmphasizeStems,
+                focusMode = focusMode,
+                onFocusModeChange = onFocusMode,
+                pacerWpm = pacerWpm,
+                onPacerChange = onPacer,
+                segmentWords = segmentWords,
+                onSegmentWordsChange = onSegmentWords,
+            )
             Rule()
-            SectionLabel("Размер текста книги")
-            FontScale(scale = fontScale, onChange = onFontScaleChange)
             MotionToggle(reduceMotion, onReduceMotion)
-            ReaderPreview(fontScale, focusMode)
         }
 
         // Компаньон живёт рядом с настройками чтения, но не внутри длинного
@@ -188,7 +210,7 @@ fun SettingsScreen(
                             modifier = Modifier.pressable { confirmMemoryClear = false },
                         )
                     }
-                } else if (companionMemoryStats.answers + companionMemoryStats.books + companionMemoryStats.requests > 0) {
+                } else if (companionMemoryStats.answers + companionMemoryStats.books + companionMemoryStats.questions > 0) {
                     Text(
                         "Очистить память",
                         style = WolfyTheme.typography.button,
@@ -200,36 +222,6 @@ fun SettingsScreen(
             PrimaryButton("Открыть раздел", onOpenCompanion)
         }
 
-
-        SettingsCard("Чтение") {
-            SwitchRow(
-                title = "Выделять основу слова",
-                hint = "Начало слов будет заметнее.",
-                on = emphasizeStems,
-                onChange = onEmphasizeStems,
-            )
-            ChoiceRow(
-                title = "Фокус",
-                hint = "Приглушает текст вокруг текущей строки.",
-                options = FOCUS_TITLES.map { it.second },
-                selected = FOCUS_TITLES.indexOfFirst { it.first == focusMode }.coerceAtLeast(0),
-                onSelect = { onFocusMode(FOCUS_TITLES[it].first) },
-            )
-            ChoiceRow(
-                title = "Ведущая строка",
-                hint = "Помогает держать темп чтения.",
-                options = PACES.map { it.second },
-                selected = PACES.indexOfFirst { it.first == pacerWpm }.coerceAtLeast(0),
-                onSelect = { onPacer(PACES[it].first) },
-            )
-            ChoiceRow(
-                title = "Размер отрезка",
-                hint = "Отмечает удобную паузу в тексте.",
-                options = SEGMENTS.map { it.second },
-                selected = SEGMENTS.indexOfFirst { it.first == segmentWords }.coerceAtLeast(0),
-                onSelect = { onSegmentWords(SEGMENTS[it].first) },
-            )
-        }
 
         SettingsCard("Радио") {
             RadioPanel(
@@ -321,26 +313,6 @@ fun SettingsScreen(
     }
 }
 
-/** Живой пример вместо терминов: изменения видны до выхода к книге. */
-@Composable
-private fun ReaderPreview(fontScale: Float, focus: FocusMode) {
-    val colors = WolfyTheme.colors
-    val spacing = WolfyTheme.spacing
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .background(colors.paper, RoundedCornerShape(spacing.small))
-            .padding(spacing.medium),
-        verticalArrangement = Arrangement.spacedBy(spacing.tight),
-    ) {
-        SectionLabel("Так будет выглядеть читалка")
-        Text("The fox found a quiet place to read.", style = WolfyTheme.typography.body.copy(fontSize = WolfyTheme.typography.body.fontSize * fontScale), color = colors.ink)
-        if (focus != FocusMode.Off) {
-            Text("Соседний текст станет тише.", style = WolfyTheme.typography.caption, color = colors.inkMuted)
-        }
-    }
-}
-
 @Composable
 private fun SettingsCard(title: String, content: @Composable () -> Unit) {
     val colors = WolfyTheme.colors
@@ -357,26 +329,6 @@ private fun SettingsCard(title: String, content: @Composable () -> Unit) {
         content()
     }
 }
-
-/*
- * Подписи к режимам чтения.
- *
- * Числа темпа не круглые и не произвольные: 160 — спокойное чтение вслух,
- * 220 — обычное про себя на неродном языке, 300 — быстро, но ещё с
- * пониманием. Отрезок задан в словах, а не в минутах: минуты пришлось бы
- * переводить в слова по скорости, которой мы не знаем, и обещание «пять
- * минут» оказалось бы неверным ровно для того, кто читает медленнее.
- */
-private val FOCUS_TITLES = listOf(
-    FocusMode.Off to "выкл.",
-    FocusMode.Sentence to "предложение",
-    FocusMode.Paragraph to "абзац",
-)
-
-private val PACES = listOf(0 to "выкл.", 160 to "спокойно", 220 to "обычно", 300 to "быстро")
-
-private val SEGMENTS =
-    listOf(0 to "выкл.", 150 to "короткий", 400 to "средний", 900 to "длинный")
 
 /** Переключатель «включено/выключено» той же пластики, что и убавленное движение. */
 @Composable
@@ -512,50 +464,6 @@ private fun SyncBlock(status: SyncStatus, signedIn: Boolean, onSyncNow: () -> Un
     }
 }
 
-/**
- * Кегль читалки — тремя кнопками, а не ползунком.
- *
- * Ползунок даёт бесконечно много промежуточных значений, из которых читателю
- * нужно одно из пяти. Шаг в десять процентов заметен глазом и попадается с
- * первого раза, а «чуть-чуть больше» ползунком приходится ловить.
- */
-@Composable
-private fun FontScale(scale: Float, onChange: (Float) -> Unit) {
-    val colors = WolfyTheme.colors
-    val spacing = WolfyTheme.spacing
-
-    Row(
-        Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(spacing.medium),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        ScaleStep(label = "Aa −", enabled = scale > 0.8f) { onChange(scale - 0.1f) }
-        Text(
-            text = "${(scale * 100).toInt()}%",
-            style = WolfyTheme.typography.body,
-            color = colors.ink,
-            modifier = Modifier.weight(1f),
-            textAlign = TextAlign.Center,
-        )
-        ScaleStep(label = "Aa +", enabled = scale < 1.6f) { onChange(scale + 0.1f) }
-    }
-}
-
-@Composable
-private fun ScaleStep(label: String, enabled: Boolean, onClick: () -> Unit) {
-    val colors = WolfyTheme.colors
-    val spacing = WolfyTheme.spacing
-
-    Text(
-        text = label,
-        style = WolfyTheme.typography.button,
-        color = if (enabled) colors.ink else colors.rule,
-        modifier = Modifier
-            .pressable(enabled = enabled, onClick = onClick)
-            .border(spacing.rule, colors.rule, RoundedCornerShape(spacing.huge))
-            .padding(horizontal = spacing.large, vertical = spacing.small),
-    )
-}
 
 @Composable
 private fun Fact(label: String, value: String) {

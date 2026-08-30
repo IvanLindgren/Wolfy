@@ -56,7 +56,7 @@ func (s *Server) writeAI(w http.ResponseWriter, result any, err error) {
 		writeJSON(w, http.StatusOK, result)
 	case errors.Is(err, readingai.ErrLimit):
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{
-			"error": "Лимит Beta: до 10 запросов в день.",
+			"error": readingai.LimitMessage(),
 			"code":  "quota",
 		})
 	case errors.Is(err, readingai.ErrInvalid):

@@ -925,7 +925,12 @@ class ReaderViewModel(
                     }
                     return@launch
                 }
-                val cached = companionMemory?.findRecap(id, excerpt)
+                // Пересказ узнаётся по месту, а не по фрагменту: фрагмент —
+                // скользящее окно последних экранов, оно меняется от каждой
+                // прочитанной строки, и «вспомнить сюжет» дважды за вечер
+                // стоило двух самых дорогих запросов приложения.
+                val place = (_withinChapterProgress.value.coerceIn(0f, 1f) * 10_000).toInt()
+                val cached = companionMemory?.findRecap(id, snapshot.chapterIndex, place)
                 val result = if (cached != null) {
                     AiRecapResult.Ready(cached)
                 } else {
@@ -936,7 +941,7 @@ class ReaderViewModel(
                         bookId = id,
                         title = snapshot.bookTitle,
                         chapter = snapshot.chapterIndex,
-                        excerpt = excerpt,
+                        position = place,
                         value = result.value,
                     )
                 }

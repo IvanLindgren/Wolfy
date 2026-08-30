@@ -789,7 +789,7 @@ function BetaPhraseExplanation({
       <div className={styles.beta__head}>
         <div>
           <h3 className={styles.section__title}>Почему фраза построена так · Beta</h3>
-          <p className={styles.beta__notice}>ИИ может ошибаться. До 10 запросов в день.</p>
+          <p className={styles.beta__notice}>ИИ может ошибаться.</p>
         </div>
         <Button variant="secondary" small onClick={onAsk} disabled={state.state === 'loading'}>
           {state.state === 'loading' ? 'Разбираю…' : state.state === 'ready' ? 'Спросить ещё' : 'Спросить Gemini'}

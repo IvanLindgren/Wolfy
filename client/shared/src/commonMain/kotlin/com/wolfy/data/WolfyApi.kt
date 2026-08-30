@@ -2,6 +2,7 @@ package com.wolfy.data
 
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
+import io.ktor.client.plugins.HttpRequestTimeoutException
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.onDownload
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
@@ -47,6 +48,29 @@ import kotlinx.serialization.json.put
  * @param token сессионный токен Читавука: аккаунт общий, свой вход у Wolfy
  *   отсутствует.
  */
+/**
+ * Сколько читалка ждёт ответа ИИ.
+ *
+ * Число не выдумано, а взято от сервера: он ограничивает всю цепочку моделей
+ * собственным бюджетом (`readingai.DefaultBudget`, 45 секунд) и после него
+ * честно отвечает отказом. Клиент обязан быть терпеливее этого предела, иначе
+ * он рвёт соединение раньше, чем сервер успевает объяснить причину, и читатель
+ * вместо «модель не успела» видит «сервер не ответил».
+ *
+ * Раньше здесь стояли 45 и 60 секунд при цепочке, способной работать шесть
+ * минут: любой ответ, потребовавший второй попытки, гарантированно не доезжал.
+ */
+private const val AI_WAIT_MILLIS = 75_000L
+
+/**
+ * Сколько ждать набор из ста реплик.
+ *
+ * Отдельно от подсказки: у набора свой, более длинный серверный бюджет
+ * (`companionai.DefaultPackBudget`, 150 секунд), и ждёт его не читатель у
+ * страницы, а редактор компаньона.
+ */
+private const val AI_PACK_WAIT_MILLIS = 180_000L
+
 class WolfyApi(
     private val baseUrl: String,
     private val tokenProvider: () -> String?,
@@ -488,7 +512,7 @@ class WolfyApi(
                 header("Authorization", "Bearer $token")
                 contentType(ContentType.Application.Json)
                 setBody(AiPhraseRequest(phrase, context))
-                timeout { requestTimeoutMillis = 45_000 }
+                timeout { requestTimeoutMillis = AI_WAIT_MILLIS }
             }
             if (response.status == HttpStatusCode.OK) {
                 AiPhraseResult.Ready(response.body())
@@ -507,6 +531,8 @@ class WolfyApi(
             // «нет связи» значит показать ошибку за собственное действие
             // читателя и заодно сломать отмену всей ветки корутин.
             throw cancelled
+        } catch (_: HttpRequestTimeoutException) {
+            AiPhraseResult.Failed("ИИ не успел ответить. Попробуйте ещё раз.", "timeout")
         } catch (_: Exception) { AiPhraseResult.Failed("Нет связи с Beta-подсказкой.") }
     }
 
@@ -578,12 +604,14 @@ class WolfyApi(
                 header("Authorization", "Bearer $token")
                 contentType(ContentType.Application.Json)
                 setBody(AiRecapRequest(title, excerpt, memory))
-                timeout { requestTimeoutMillis = 60_000 }
+                timeout { requestTimeoutMillis = AI_WAIT_MILLIS }
             }
             if (response.status == HttpStatusCode.OK) AiRecapResult.Ready(response.body())
             else AiRecapResult.Failed(response.authMessage().ifBlank { "Beta-подсказка сейчас недоступна." })
         } catch (cancelled: CancellationException) {
             throw cancelled
+        } catch (_: HttpRequestTimeoutException) {
+            AiRecapResult.Failed("ИИ не успел ответить. Попробуйте ещё раз.")
         } catch (_: Exception) { AiRecapResult.Failed("Нет связи с Beta-подсказкой.") }
     }
 
@@ -632,7 +660,7 @@ class WolfyApi(
                 header("Authorization", "Bearer $token")
                 contentType(ContentType.Application.Json)
                 setBody(CompanionPackRequest(profileJson(profile), profile.locale))
-                timeout { requestTimeoutMillis = 120_000 }
+                timeout { requestTimeoutMillis = AI_PACK_WAIT_MILLIS }
             }
             if (response.status == HttpStatusCode.OK) CompanionPackResult.Ready(response.body())
             else {
@@ -659,7 +687,7 @@ class WolfyApi(
                 header("Authorization", "Bearer ${tokenProvider()}")
                 contentType(ContentType.Application.Json)
                 setBody(body)
-                timeout { requestTimeoutMillis = 60_000 }
+                timeout { requestTimeoutMillis = AI_WAIT_MILLIS }
             }
             if (response.status == HttpStatusCode.OK) {
                 CompanionAiResult.Ready(response.body<T>())
@@ -672,8 +700,13 @@ class WolfyApi(
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
+        } catch (_: HttpRequestTimeoutException) {
+            // Отдельно от прочей сети, потому что причина другая и совет
+            // другой. «Сервер не ответил» отправляло читателя проверять
+            // связь, хотя связь была: не успевала модель.
+            CompanionAiResult.Failed("ИИ не успел ответить. Попробуйте ещё раз.", "timeout")
         } catch (_: Exception) {
-            CompanionAiResult.Failed("Сервер Wolfy не ответил или вернул повреждённый ответ.", "network")
+            CompanionAiResult.Failed("Нет связи с сервером Wolfy.", "network")
         }
     }
 

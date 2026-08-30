@@ -14,11 +14,6 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -74,12 +69,13 @@ import com.wolfy.data.companion.PHRASE_COUNT
 import com.wolfy.data.library.currentTimeMillis
 import com.wolfy.platform.CompanionSound
 import com.wolfy.platform.playCompanionSound
-import com.wolfy.theme.Curves
 import com.wolfy.theme.WolfyTheme
 import com.wolfy.theme.paced
 import com.wolfy.theme.settling
 import com.wolfy.theme.still
 import com.wolfy.ui.companion.CompanionFigure
+import com.wolfy.ui.companion.CompanionMotion
+import com.wolfy.ui.companion.rememberCompanionPose
 import com.wolfy.widgets.PrimaryButton
 import com.wolfy.widgets.Rule
 import com.wolfy.widgets.CompanionSpark
@@ -160,26 +156,16 @@ fun CompanionLayer(
     val uriHandler = LocalUriHandler.current
     val motion = WolfyTheme.motion
 
-    // Покачивание заводится только если движение вообще разрешено. Раньше при
-    // выключенном движении обе анимации шли из нуля в ноль: персонаж стоял на
-    // вид, а бесконечный переход продолжал считать кадры до закрытия книги.
-    // Читатель просил тишины, а получал её только глазами, но не батареей.
-    var bob = 0f
-    var tilt = 0f
-    if (!motion.still) {
-        val idleMotion = rememberInfiniteTransition(label = "companion-idle")
-        bob = idleMotion.animateFloat(
-            initialValue = 0f,
-            targetValue = -3f,
-            animationSpec = infiniteRepeatable(tween(motion.flight * 2, easing = Curves.Paper), RepeatMode.Reverse),
-            label = "companion-bob",
-        ).value
-        tilt = idleMotion.animateFloat(
-            initialValue = -0.7f,
-            targetValue = 0.7f,
-            animationSpec = infiniteRepeatable(tween(motion.flight * 3, easing = Curves.Paper), RepeatMode.Reverse),
-            label = "companion-tilt",
-        ).value
+    // Жест текущей реплики. Набор реплик носит его в поле motion у каждой
+    // фразы: сервер это поле проверяет, клиент разбирал и клал в модель, а
+    // персонаж всё равно стоял столбом. Счётчик рядом с жестом обязателен —
+    // две одинаковые реплики подряд должны сыграть его дважды.
+    var gesture by remember { mutableStateOf(CompanionMotion.None) }
+    var gestureTrigger by remember { mutableStateOf(0) }
+
+    fun play(motionCode: String?) {
+        gesture = CompanionMotion.of(motionCode)
+        gestureTrigger += 1
     }
 
     fun revealCompanion() {
@@ -228,7 +214,7 @@ fun CompanionLayer(
         engine.decide(
             CompanionReactionEngine.Event.SessionStart,
             CompanionReactionEngine.Context(0, overlayOpen = false, scrolling = false, reactionsEnabled = reactionsAllowed),
-        ).phrase?.let { bubble = it.text }
+        ).phrase?.let { bubble = it.text; play(it.motion) }
     }
 
     // Завершение главы: событие только при реальном переходе вперёд. При
@@ -239,7 +225,7 @@ fun CompanionLayer(
             engine.decide(
                 CompanionReactionEngine.Event.ChapterCompleted,
                 CompanionReactionEngine.Context(0, overlayOpen = false, scrolling = false, reactionsEnabled = reactionsAllowed),
-            ).phrase?.let { bubble = it.text }
+            ).phrase?.let { bubble = it.text; play(it.motion) }
         }
         previousChapter = chapterKey
     }
@@ -268,11 +254,11 @@ fun CompanionLayer(
             scrolling = false,
             reactionsEnabled = reactionsAllowed,
         )
-        engine.decide(CompanionReactionEngine.Event.PageCompleted, context).phrase?.let { bubble = it.text }
+        engine.decide(CompanionReactionEngine.Event.PageCompleted, context).phrase?.let { bubble = it.text; play(it.motion) }
         if (rests % 8 == 0 && bubble == null) {
             val mood = MoodScorer.analyze(pageText())
             if (mood.mood != MoodScorer.NEUTRAL) {
-                engine.decide(CompanionReactionEngine.Event.Mood(mood.mood), context).phrase?.let { bubble = it.text }
+                engine.decide(CompanionReactionEngine.Event.Mood(mood.mood), context).phrase?.let { bubble = it.text; play(it.motion) }
             }
         }
     }
@@ -305,7 +291,7 @@ fun CompanionLayer(
                 bookId, bookTitle, chapter, position, visibleText, persona, memory?.contextFor(bookId).orEmpty(),
             )
             if (result is CompanionAiResult.Ready) {
-                memory?.rememberOpinion(bookId, bookTitle, chapter, visibleText, profile.profileHash, result.value)
+                memory?.rememberOpinion(bookId, chapter, visibleText, profile.profileHash, result.value)
             }
             aiSheet = when (result) {
                 is CompanionAiResult.Ready -> AiSheetState.OpinionReady(result.value)
@@ -332,7 +318,11 @@ fun CompanionLayer(
             // не написано, и раньше компаньон честно уходил в «не знаю».
             val history = readContext().ifBlank { pageText() }
             val position = offset()
-            val cached = memory?.findQuestion(bookId, chapter, question, history, profile.profileHash)
+            // В ключ памяти уходит место, а не прочитанное: прочитанное растёт
+            // каждой строкой, и один и тот же вопрос за вечер был бы для
+            // памяти двумя разными. На сервер прочитанное едет по-прежнему —
+            // ответ считается по нему, а узнаётся вопрос по месту.
+            val cached = memory?.findQuestion(bookId, chapter, question, position, profile.profileHash)
             val result = if (cached != null) {
                 CompanionAiResult.Ready(cached)
             } else {
@@ -342,7 +332,7 @@ fun CompanionLayer(
             }
             if (result is CompanionAiResult.Ready && !result.value.cached) {
                 memory?.rememberQuestion(
-                    bookId, bookTitle, chapter, question, history, profile.profileHash, result.value,
+                    bookId, bookTitle, chapter, question, position, profile.profileHash, result.value,
                 )
             }
             aiSheet = when (result) {
@@ -376,7 +366,12 @@ fun CompanionLayer(
         menuOpen = false
         aiSheet = null
         revealed = true
-        bubble = engine.offer(scenario)?.text ?: return
+        val phrase = engine.offer(scenario) ?: return
+        bubble = phrase.text
+        // На просьбу «скажи что-нибудь» персонаж отвечает вслух, поэтому речь
+        // важнее приписанного фразе жеста: молча раскрытый пузырь читается
+        // как чужая реплика, а не как его собственная.
+        play(if (phrase.motion == "none") CompanionMotion.Speak.code else phrase.motion)
         sparkKind = kind
         sparkTrigger += 1
         if (soundsEnabled) playCompanionSound(CompanionSound.Reaction)
@@ -403,7 +398,7 @@ fun CompanionLayer(
                 slideOutVertically(motion.paced(motion.quick)) { it / 2 },
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(bottom = if (compact) 62.dp else 106.dp),
+                .padding(bottom = (if (compact) FIGURE_COMPACT else FIGURE_WIDE) + 8.dp),
         ) {
             Text(
                 lastBubble.orEmpty(),
@@ -619,16 +614,26 @@ fun CompanionLayer(
         // Лампочка загорается, когда ответ готов. Она стоит над фигурой и
         // живёт своей жизнью: пропустивший её ничего не теряет, а заметивший
         // понимает, что панель уже можно открывать.
+        //
+        // Тем же переходом персонаж показывает, чем занят: пока ответ едет, он
+        // думает, а получив — говорит. Крутящийся индикатор об этом сообщает
+        // не хуже, но он сообщает о сервере, а разговаривают тут не с сервером.
         LaunchedEffect(aiSheet) {
-            if (aiSheet is AiSheetState.OpinionReady || aiSheet is AiSheetState.QuestionReady) {
-                sparkKind = SparkKind.Idea
-                sparkTrigger += 1
+            when (aiSheet) {
+                is AiSheetState.Loading -> play(CompanionMotion.Think.code)
+                is AiSheetState.OpinionReady, is AiSheetState.QuestionReady -> {
+                    sparkKind = SparkKind.Idea
+                    sparkTrigger += 1
+                    play(CompanionMotion.Speak.code)
+                }
+                else -> Unit
             }
         }
+        val figureSize = if (compact) FIGURE_COMPACT else FIGURE_WIDE
         Box(
             Modifier
                 .align(Alignment.BottomEnd)
-                .padding(bottom = if (compact) 46.dp else 84.dp, end = if (compact) 30.dp else 54.dp),
+                .padding(bottom = figureSize * 0.82f, end = figureSize * 0.5f),
         ) {
             CompanionSpark(trigger = sparkTrigger, kind = sparkKind)
         }
@@ -642,15 +647,20 @@ fun CompanionLayer(
             enter = fadeIn(motion.paced(motion.quick)),
             exit = fadeOut(motion.paced(motion.instant)),
         ) {
+            // Появление — тоже реплика: персонаж не возникает готовым, а
+            // выглядывает из-за края, откуда его вытянули за ярлычок.
+            LaunchedEffect(Unit) { play(CompanionMotion.Peek.code) }
             CompanionFigure(
                 appearance = profile.appearance,
+                pose = rememberCompanionPose(
+                    gesture = gesture,
+                    trigger = gestureTrigger,
+                    // Зерно от профиля: два компаньона на одном экране не
+                    // должны моргать в такт.
+                    seed = profile.id.hashCode(),
+                ),
                 modifier = Modifier
-                    .size(if (compact) 54.dp else 96.dp)
-                    .graphicsLayer {
-                        translationY = bob
-                        rotationZ = tilt
-                        clip = false
-                    }
+                    .size(figureSize)
                     .semantics { contentDescription = "Компаньон ${profile.name}. Нажмите, чтобы открыть действия" }
                     .pressable(enabled = true) {
                         menuOpen = true
@@ -718,7 +728,7 @@ private fun CompanionMenu(
         ActionRow("Спрятать компаньона", onHide)
         Rule()
         Text(
-            "ИИ может ошибаться. До 10 запросов в день.",
+            "ИИ может ошибаться.",
             style = WolfyTheme.typography.caption,
             color = WolfyTheme.colors.inkMuted,
         )
@@ -956,13 +966,28 @@ private val CHATTER = listOf(
 )
 
 /**
+ * Рост компаньона в читалке.
+ *
+ * Прежние 54 точки на телефоне — это размер значка, а не собеседника. Лицо в
+ * такой фигуре занимало около двадцати точек: мимики на нём не видно, глаз не
+ * видно, и любая анимация пропадала вместе с ними. Персонаж, ради которого
+ * заведён отдельный редактор с характером и внешностью, обязан быть по крайней
+ * мере узнаваем.
+ *
+ * Больше делать нельзя: фигура стоит поверх страницы, и её место в углу
+ * ограничено снизу нижней навигацией, а слева — панелью разговора.
+ */
+private val FIGURE_COMPACT = 108.dp
+private val FIGURE_WIDE = 144.dp
+
+/**
  * Полоса, отведённая фигуре компаньона у правого края.
  *
  * Панель раскрывается от левого края и упирается в эту полосу, а не в
  * собеседника: разговаривать с тем, кого закрыло окно разговора, странно.
  */
-private val FIGURE_LANE_COMPACT = 96.dp
-private val FIGURE_LANE_WIDE = 132.dp
+private val FIGURE_LANE_COMPACT = FIGURE_COMPACT + 12.dp
+private val FIGURE_LANE_WIDE = FIGURE_WIDE + 24.dp
 
 /** Уже этого панель не имеет смысла: строка станет в два слова. */
 private val MIN_PANEL_WIDTH = 240.dp

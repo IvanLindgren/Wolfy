@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/wolfy/server/internal/companionai"
+	"github.com/wolfy/server/internal/config"
 	"github.com/wolfy/server/internal/readingai"
 	"github.com/wolfy/server/internal/store"
 )
@@ -58,11 +59,18 @@ func TestЖиваяМодельДержитКонтракт(t *testing.T) {
 		t.Fatalf("сброс квоты: %v", err)
 	}
 
-	service := readingai.New(db, key, url, model, 60*time.Second).WithJSONMode(true)
+	// Проверка обязана повторять production-обвязку, а не собственную: без
+	// уровня рассуждения и потолка времени она мерила бы скорость той сборки,
+	// которой у читателя нет.
+	effort := firstNonEmpty(os.Getenv("WOLFY_AI_REASONING_EFFORT"), config.DefaultAIReasoningEffort)
+	service := readingai.New(db, key, url, model, 60*time.Second).
+		WithJSONMode(true).
+		WithReasoningEffort(effort).
+		WithBudget(config.DefaultAIBudget)
 	if !service.Configured() {
 		t.Fatal("провайдер не собрался")
 	}
-	t.Logf("модель: %s", model)
+	t.Logf("модель: %s, рассуждение: %q, бюджет: %s", model, effort, config.DefaultAIBudget)
 
 	t.Run("пересказ", func(t *testing.T) {
 		started := time.Now()

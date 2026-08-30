@@ -55,7 +55,14 @@ actual fun rememberBookPicker(onPicked: (PickedBook) -> Unit): () -> Unit {
 }
 
 private fun copyToCache(context: Context, uri: Uri): PickedBook? {
-    val name = displayName(context, uri) ?: "book"
+    // Три источника имени по убыванию доверия. Провайдер имя отдавать не
+    // обязан, и Telegram, почта и часть облаков его не отдают: раньше все
+    // присланные книги приезжали в библиотеку под одним словом «book».
+    val name = bookFileName(
+        displayName = displayName(context, uri),
+        uriTail = uri.lastPathSegment,
+        mimeType = context.contentResolver.getType(uri),
+    )
     val target = File(context.cacheDir, "import-$name")
 
     return try {
@@ -71,10 +78,17 @@ private fun copyToCache(context: Context, uri: Uri): PickedBook? {
     }
 }
 
-/** Имя файла, как его показывает система. */
-private fun displayName(context: Context, uri: Uri): String? =
+/**
+ * Имя файла, как его показывает система.
+ *
+ * Провайдер вправе не иметь такой колонки вовсе — тогда запрос падает, а не
+ * возвращает пустой курсор. Отсутствие имени не повод не добавить книгу:
+ * запасные источники разберутся, а исключение отсюда убило бы весь импорт.
+ */
+private fun displayName(context: Context, uri: Uri): String? = runCatching {
     context.contentResolver
         .query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
         ?.use { cursor ->
             if (cursor.moveToFirst()) cursor.getString(0) else null
         }
+}.getOrNull()

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -18,13 +19,32 @@ import (
 	"github.com/wolfy/server/internal/store"
 )
 
-const DailyLimit = 10
+// DailyLimit — сколько Beta-обращений к ИИ доступно аккаунту за сутки.
+//
+// Число было десять и охраняло не тот ресурс. Обращение к модели по умолчанию
+// стоит сотые доли рубля: разбор фразы и мнение о странице — около 0,008 ₽,
+// самый тяжёлый пересказ с восемнадцатью тысячами знаков на входе — около
+// 0,05 ₽. Сорок обращений в день — это порядка рубля на читателя в самый
+// деятельный день, и такой потолок незачем ставить так низко, чтобы его задевали.
+//
+// А задевали его именно те, кому продукт нужнее всего: десять запросов — это
+// один вечер с непонятной главой. Лимит здесь защищает от разогнавшегося
+// скрипта, а не от читателя, и сорок отделяет одно от другого лучше десяти.
+const DailyLimit = 40
 
 var (
 	ErrUnavailable = errors.New("Beta-подсказка сейчас недоступна")
-	ErrLimit       = errors.New("на сегодня доступно 10 Beta-подсказок")
-	ErrInvalid     = errors.New("ответ ИИ не прошёл проверку")
+	// Текст собирается из константы: разошедшиеся число в лимите и число в
+	// сообщении о лимите — ошибка, которую никто не заметит до жалобы.
+	ErrLimit   = fmt.Errorf("на сегодня доступно %d Beta-подсказок", DailyLimit)
+	ErrInvalid = errors.New("ответ ИИ не прошёл проверку")
 )
+
+// LimitMessage — то же самое словами клиенту. Живёт рядом с лимитом, а не в
+// восьми местах интерфейса, как жило раньше.
+func LimitMessage() string {
+	return fmt.Sprintf("Лимит Beta: до %d запросов в день.", DailyLimit)
+}
 
 // Виды отказа провайдера. Код едет клиенту в поле code, чтобы тот показывал
 // честную фразу вместо общей «недоступно», и пишется в лог вместе со статусом.
@@ -54,6 +74,13 @@ type Service struct {
 	client    *http.Client
 	log       *slog.Logger
 	providers []provider
+	// budget — потолок времени на всю цепочку моделей, а не на одну.
+	// Клиент ждёт ответа ограниченное время; всё, что цепочка тратит сверх
+	// этого, уходит в разорванное соединение.
+	budget time.Duration
+	// reasoningEffort — уровень рассуждения модели, если endpoint его
+	// принимает. Пустая строка означает «не просить ничего».
+	reasoningEffort string
 }
 
 type provider struct {
@@ -62,11 +89,53 @@ type provider struct {
 }
 
 func New(s *store.Store, key, url, model string, timeout time.Duration) *Service {
-	service := &Service{store: s, log: slog.Default(), client: &http.Client{Timeout: timeout}}
+	service := &Service{
+		store:  s,
+		log:    slog.Default(),
+		client: &http.Client{Timeout: timeout},
+		budget: DefaultBudget,
+	}
 	// Поддержка response_format является возможностью endpoint, а не свойством
 	// строки с именем модели. Её включает конфигурация через WithJSONMode.
 	service.addProvider(provider{name: "primary", key: key, url: url, model: model})
 	return service
+}
+
+// DefaultBudget — потолок времени на всю цепочку моделей для обычной подсказки.
+//
+// Число выбрано от клиента, а не от модели: читалка ждёт ответа 75 секунд и
+// после этого показывает отказ. Цепочка из четырёх моделей по две попытки
+// каждая при сорока пяти секундах на попытку укладывается в шесть минут, и
+// пять с половиной из них она разговаривает сама с собой в уже закрытое
+// соединение. Ответ, которого никто не увидит, не стоит ни секунды.
+const DefaultBudget = 45 * time.Second
+
+// minAttempt — сколько времени нужно, чтобы попытка имела смысл.
+//
+// Быстрый ответ с минимальным рассуждением приходит за семь-десять секунд.
+// Начинать пятую попытку, когда бюджета осталось на три, значит гарантированно
+// потратить их впустую и отобрать у ответа последний шанс уложиться.
+const minAttempt = 10 * time.Second
+
+// WithBudget задаёт потолок времени цепочки. Ноль снимает его.
+func (s *Service) WithBudget(budget time.Duration) *Service {
+	s.budget = budget
+	return s
+}
+
+// WithReasoningEffort просит модель думать ровно столько, сколько нужно.
+//
+// Рассуждающая модель на промпте мнения тратила шестьсот токенов на
+// размышление и тридцать секунд времени; на «minimal» тот же промпт с тем же
+// контрактом отвечает за семь секунд и вчетверо дешевле. Подсказка читателю не
+// доказательство теоремы: ей нужен характер и точность цитаты, а не цепочка
+// рассуждений о них.
+//
+// Поле необязательное: endpoint, который его не принимает, отвечает 400, и
+// запрос повторяется без него — см. askProvider.
+func (s *Service) WithReasoningEffort(effort string) *Service {
+	s.reasoningEffort = strings.TrimSpace(effort)
+	return s
 }
 
 // WithJSONMode явно сообщает о поддержке response_format основным
@@ -76,6 +145,51 @@ func (s *Service) WithJSONMode(enabled bool) *Service {
 	if len(s.providers) > 0 {
 		s.providers[0].structured = enabled
 	}
+	return s
+}
+
+// WithFallbackModels добавляет запасные модели того же провайдера.
+//
+// До этого за основной моделью сразу шли бесплатные модели OpenRouter, и
+// падение основной роняло качество ответа со ступеньки на ступеньку: с
+// платной модели, выбранной под задачу, на бесплатную, выбранную по цене.
+// Между ними не хватало ровно одной ступени — второй платной модели у того же
+// провайдера, с тем же ключом и тем же протоколом.
+//
+// Ключ и адрес берутся у основной модели намеренно: запасная — это соседняя
+// строка в каталоге того же аккаунта, а не второй провайдер, и заводить ей
+// собственные учётные данные значит завести вторую вещь, которую забудут
+// настроить.
+//
+// Поддержка response_format наследуется у основной по той же причине, по
+// которой она у неё есть: это возможность endpoint, а не модели. Если
+// запасная её всё-таки не примет, askProvider повторит запрос без неё — цепочка
+// ослабляет запрос, а не выбрасывает модель.
+func (s *Service) WithFallbackModels(modelList string) *Service {
+	if len(s.providers) == 0 {
+		return s
+	}
+	primary := s.providers[0]
+	extra := make([]provider, 0, 2)
+	for _, model := range strings.Split(modelList, ",") {
+		model = strings.TrimSpace(model)
+		// Повтор основной модели — не запасной вариант, а вторая попытка той
+		// же попытки: она уже сделана внутри AskValidated.
+		if model == "" || model == primary.model {
+			continue
+		}
+		extra = append(extra, provider{
+			name: "fallback", key: primary.key, url: primary.url,
+			model: model, structured: primary.structured,
+		})
+	}
+	if len(extra) == 0 {
+		return s
+	}
+	// Вставка сразу за основной, а не в конец. Иначе порядок цепочки зависел
+	// бы от порядка вызовов With* в main, и перестановка двух строк молча
+	// уводила бы читателя на бесплатную модель раньше платной.
+	s.providers = append(s.providers[:1:1], append(extra, s.providers[1:]...)...)
 	return s
 }
 
@@ -289,10 +403,28 @@ func (s *Service) AskValidated(
 	temperature float32,
 	accept func([]byte) error,
 ) error {
+	return s.AskValidatedWithin(ctx, s.budget, system, prompt, repairHint, temperature, accept)
+}
+
+// AskValidatedWithin — то же самое со своим потолком времени.
+//
+// Нужен там, где ответ заведомо длиннее подсказки: набор из ста реплик модель
+// пишет минуты, и общий потолок обрезал бы его на середине. Отдельный метод, а
+// не поле сервиса: потолок принадлежит запросу, а не транспорту.
+func (s *Service) AskValidatedWithin(
+	ctx context.Context,
+	budget time.Duration,
+	system, prompt, repairHint string,
+	temperature float32,
+	accept func([]byte) error,
+) error {
 	if !s.Configured() {
 		return ErrUnavailable
 	}
+	ctx, done := s.withBudget(ctx, budget)
+	defer done()
 	var last error = ErrUnavailable
+	tried := 0
 	for _, current := range s.providers {
 		for attempt := 0; attempt < 2; attempt++ {
 			ask := prompt
@@ -302,6 +434,17 @@ func (s *Service) AskValidated(
 				}
 				ask = prompt + repairHint
 			}
+			// Повторная попытка, на которую не осталось времени, не
+			// начинается: она упрётся в отменённый контекст и добавит к
+			// отказу только задержку. Первая начинается всегда — запрос
+			// читателя обязан хотя бы дойти до модели, а короткий бюджет
+			// означает «успей сколько успеешь», а не «не пробуй».
+			if tried > 0 && !s.roomForAttempt(ctx) {
+				s.log.Warn("бюджет запроса исчерпан, следующая попытка не начата",
+					"provider", current.name, "model", current.model)
+				return last
+			}
+			tried++
 			raw, err := s.askProvider(ctx, current, system, ask, temperature)
 			if err != nil {
 				last = err
@@ -324,9 +467,44 @@ func (s *Service) AskValidated(
 	return last
 }
 
+// withBudget ограничивает всю цепочку моделей, а не одну попытку.
+//
+// Более близкий срок вызывающего не отодвигается: если читалка уже назначила
+// свой потолок, сервер обязан уложиться в него, а не в свой.
+func (s *Service) withBudget(ctx context.Context, budget time.Duration) (context.Context, context.CancelFunc) {
+	if budget <= 0 {
+		return ctx, func() {}
+	}
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= budget {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, budget)
+}
+
+// roomForAttempt отвечает, успеет ли ещё одна попытка до конца бюджета.
+//
+// Спрашивается только про повторные: первая делается в любом случае.
+func (s *Service) roomForAttempt(ctx context.Context) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return true
+	}
+	return time.Until(deadline) >= minAttempt
+}
+
 func (s *Service) askMessages(ctx context.Context, system, prompt string, temperature float32) (string, error) {
+	ctx, done := s.withBudget(ctx, s.budget)
+	defer done()
 	var last error = ErrUnavailable
+	tried := 0
 	for _, current := range s.providers {
+		if tried > 0 && !s.roomForAttempt(ctx) {
+			break
+		}
+		tried++
 		answer, err := s.askProvider(ctx, current, system, prompt, temperature)
 		if err == nil {
 			return answer, nil
@@ -339,22 +517,64 @@ func (s *Service) askMessages(ctx context.Context, system, prompt string, temper
 	return "", last
 }
 
+// askShape — набор необязательных расширений запроса.
+//
+// Расширения не свойство модели, а свойство конкретного маршрута до неё, и
+// узнать о поддержке можно только спросив. Поэтому запрос при 400 не отменяет
+// модель, а ослабляется: сначала снимается рассуждение, затем JSON mode.
+type askShape struct {
+	structured bool
+	reasoning  string
+}
+
+func (a askShape) plain() bool { return !a.structured && a.reasoning == "" }
+
 func (s *Service) askProvider(ctx context.Context, current provider, system, prompt string, temperature float32) (string, error) {
-	answer, err := s.askProviderWithMode(ctx, current, system, prompt, temperature, current.structured)
-	var failure *ProviderError
-	if current.structured && errors.As(err, &failure) && failure.Status == http.StatusBadRequest && ctx.Err() == nil {
+	full := askShape{structured: current.structured, reasoning: s.reasoningEffort}
+	// Порядок ослабления: рассуждение дешевле потерять, чем JSON mode. Без
+	// него модель отвечает медленнее и дороже, без JSON mode — заметно чаще
+	// оборачивает ответ в markdown, и тогда отбраковка съедает саму подсказку.
+	shapes := []askShape{full}
+	if full.reasoning != "" {
+		shapes = append(shapes, askShape{structured: full.structured})
+	}
+	if !full.plain() {
+		shapes = append(shapes, askShape{})
+	}
+
+	var answer string
+	var err error
+	for index, shape := range shapes {
+		answer, err = s.askProviderWithShape(ctx, current, system, prompt, temperature, shape)
+		var failure *ProviderError
+		refused := errors.As(err, &failure) && failure.Status == http.StatusBadRequest
+		if !refused || ctx.Err() != nil || index == len(shapes)-1 {
+			return answer, err
+		}
 		// OpenRouter маршрутизирует одно имя через разные реализации. Часть
-		// бесплатных маршрутов принимает JSON mode, часть отвечает 400 на
-		// response_format, хотя сама модель способна вернуть JSON по промпту.
-		// Повтор без расширения сохраняет эту модель в цепочке fallback и не
-		// заставляет все следующие модели падать по той же причине.
-		s.log.Info("ии-провайдер не принял JSON mode, повторяем без него", "provider", current.name, "model", current.model)
-		return s.askProviderWithMode(ctx, current, system, prompt, temperature, false)
+		// маршрутов принимает расширение, часть отвечает 400, хотя сама модель
+		// способна ответить и без него. Повтор сохраняет эту модель в цепочке
+		// fallback и не заставляет все следующие падать по той же причине.
+		s.log.Info("ии-провайдер не принял расширение запроса, повторяем без него",
+			"provider", current.name, "model", current.model,
+			"dropped", droppedExtension(shape, shapes[index+1]))
 	}
 	return answer, err
 }
 
-func (s *Service) askProviderWithMode(ctx context.Context, current provider, system, prompt string, temperature float32, structured bool) (string, error) {
+// droppedExtension называет то, что сняли, — для лога, а не для логики.
+func droppedExtension(from, to askShape) string {
+	switch {
+	case from.reasoning != "" && to.reasoning == "":
+		return "reasoning"
+	case from.structured && !to.structured:
+		return "json_mode"
+	default:
+		return "none"
+	}
+}
+
+func (s *Service) askProviderWithShape(ctx context.Context, current provider, system, prompt string, temperature float32, shape askShape) (string, error) {
 	messages := make([]map[string]string, 0, 2)
 	if strings.TrimSpace(system) != "" {
 		messages = append(messages, map[string]string{"role": "system", "content": system})
@@ -364,10 +584,16 @@ func (s *Service) askProviderWithMode(ctx context.Context, current provider, sys
 		"model": current.model, "temperature": temperature,
 		"messages": messages,
 	}
-	if structured {
+	if shape.structured {
 		// Все резервные модели в дефолтном списке заявляют structured output.
 		// JSON mode резко сокращает долю ответов с markdown-обёрткой.
 		payload["response_format"] = map[string]string{"type": "json_object"}
+	}
+	if shape.reasoning != "" {
+		// Форма OpenAI-совместимых посредников. Провайдер, который поле не
+		// знает, либо молча его игнорирует, либо отвечает 400 — и тогда
+		// запрос повторяется без него.
+		payload["reasoning"] = map[string]string{"effort": shape.reasoning}
 	}
 	body, _ := json.Marshal(payload)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, current.url, bytes.NewReader(body))

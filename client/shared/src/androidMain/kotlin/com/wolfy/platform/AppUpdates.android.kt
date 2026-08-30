@@ -55,7 +55,11 @@ actual fun rememberAppUpdateController(
                             Uri.parse("package:${context.packageName}"),
                         ),
                     )
-                    false
+                    // Экран разрешения открыт, но установка не началась, и
+                    // раньше об этом не говорилось ничего: читатель уходил в
+                    // системные настройки, возвращался и видел ту же кнопку,
+                    // как будто ничего не нажимал.
+                    InstallOutcome.Refused("разрешите установку из этого источника и нажмите ещё раз")
                 } else {
                     val uri = FileProvider.getUriForFile(
                         context,
@@ -68,7 +72,7 @@ actual fun rememberAppUpdateController(
                             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                         },
                     )
-                    true
+                    InstallOutcome.Restarting
                 }
             },
         )

@@ -901,6 +901,10 @@ export function ReaderScreen() {
 
       const sentence = sentenceAt(chapter, token)
       setPhraseMark(null)
+      // Умение засчитывается на человеке, а не на устройстве: тот, кто
+      // разобрался с касанием в браузере, не должен получать объяснение про
+      // него на телефоне.
+      void session.seenWordTap()
       setCard({
         kind: 'word',
         bookId: book.id,
@@ -956,11 +960,15 @@ export function ReaderScreen() {
         return
       }
       const memory = useCompanionMemory.getState()
-      const cached = memory.findRecap(book.id, excerpt)
+      // Пересказ узнаётся по месту, а не по фрагменту: фрагмент — скользящее
+      // окно последних экранов, оно меняется от каждой прочитанной строки, и
+      // «вспомнить сюжет» дважды за вечер стоило двух самых дорогих запросов.
+      const place = Math.round((page.page / Math.max(1, page.pages)) * 10000)
+      const cached = memory.findRecap(book.id, chapterIndex, place)
       const result = cached ?? await api.recapRecentPages(
         book.title ?? 'Без названия', excerpt, memory.contextFor(book.id),
       )
-      if (!cached) memory.rememberRecap(book.id, book.title ?? 'Без названия', chapterIndex, excerpt, result)
+      if (!cached) memory.rememberRecap(book.id, book.title ?? 'Без названия', chapterIndex, place, result)
       setRecap({ state: 'ready', result })
     } catch (problem) {
       setRecap({
@@ -1238,7 +1246,19 @@ export function ReaderScreen() {
         </button>
       </div>
 
-      <div className={styles.progress}>
+      {/*
+        Линейка называет себя: без имени полоска у края экрана ничего не
+        сообщает тому, кто её не видит, а видящему не говорит, книгу она мерит
+        или главу.
+      */}
+      <div
+        className={styles.progress}
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(progress)}
+        aria-label={`Прочитано ${Math.round(progress)}% книги, глава ${chapterIndex + 1} из ${chapters}`}
+      >
         <div className={styles.progress__bar} style={{ width: `${progress}%` }} />
       </div>
 
@@ -1414,7 +1434,7 @@ function StoryRecap({
           <div className={styles.recap__copy}>
           <strong>О чём были последние страницы · Beta</strong>
           {companion && <p>{companion.name} вспоминает прочитанное</p>}
-          <p>ИИ может ошибаться. До 10 запросов в день.</p>
+          <p>ИИ может ошибаться.</p>
           </div>
         <button type="button" className={styles.iconButton} onClick={onClose} aria-label="Закрыть пересказ">
           <CloseIcon />

@@ -665,7 +665,7 @@ private fun BetaPhraseExplanation(state: BetaPhraseState, onAsk: () -> Unit) {
     val spacing = WolfyTheme.spacing
     PrimaryCard(title = "Почему фраза построена так · Beta") {
         Text(
-            "ИИ может ошибаться. До 10 запросов в день.",
+            "ИИ может ошибаться.",
             style = WolfyTheme.typography.caption,
             color = colors.inkMuted,
         )

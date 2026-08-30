@@ -114,6 +114,9 @@ func run() error {
 		Handler: func() http.Handler {
 			readingAI := readingai.New(db, cfg.AIKey, cfg.AIURL, cfg.AIModel, cfg.AITimeout).
 				WithJSONMode(cfg.AIJSONMode).
+				WithReasoningEffort(cfg.AIReasoningEffort).
+				WithBudget(cfg.AIBudget).
+				WithFallbackModels(cfg.AIFallbackModels).
 				WithOpenRouter(cfg.OpenRouterKey, cfg.OpenRouterModels)
 			return api.NewServer(
 				db,
@@ -128,7 +131,7 @@ func run() error {
 				updates.New(cfg.ReleasesPath),
 				bookfiles.New(db, cfg.BookFilesPath),
 				readingAI,
-				companionai.New(db, readingAI),
+				companionai.New(db, readingAI).WithPackBudget(cfg.AIPackBudget),
 				log,
 			).WithWebOrigin(cfg.WebOrigin).
 				WithGoogleWebClientID(cfg.GoogleWebClientID).

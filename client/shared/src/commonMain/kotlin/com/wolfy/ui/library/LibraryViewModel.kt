@@ -16,6 +16,7 @@ import com.wolfy.ffi.CoreException
 import com.wolfy.ffi.WolfyCore
 import com.wolfy.data.OcrResult
 import com.wolfy.platform.PickedBook
+import com.wolfy.platform.bookTitle
 import com.wolfy.platform.PickedCover
 import com.wolfy.platform.PickedPhoto
 import com.wolfy.platform.decodeImage
@@ -108,6 +109,17 @@ class LibraryViewModel(
     private val _recognized = MutableSharedFlow<LibraryBook>(extraBufferCapacity = 1)
     val recognized: SharedFlow<LibraryBook> = _recognized
 
+    /**
+     * Книга, только что добавленная файлом: оболочка её откроет.
+     *
+     * Распознанный снимок и книга из каталога открывались сразу, а выбранный
+     * файл — нет: он появлялся плиткой в списке и ждал ещё одного нажатия.
+     * Разницы между этими тремя случаями нет никакой — во всех трёх читатель
+     * только что добыл книгу и добыл её ради чтения.
+     */
+    private val _imported = MutableSharedFlow<LibraryBook>(extraBufferCapacity = 1)
+    val imported: SharedFlow<LibraryBook> = _imported
+
     /** Книга, только что скачанная из каталога: оболочка её откроет. */
     private val _addedFromCatalog = MutableSharedFlow<LibraryBook>(extraBufferCapacity = 1)
     val addedFromCatalog: SharedFlow<LibraryBook> = _addedFromCatalog
@@ -188,8 +200,13 @@ class LibraryViewModel(
      *
      * Разбор нужен не только ради названия: заодно выясняется, читается ли файл
      * вообще, и сказать об этом лучше сейчас, чем при попытке начать чтение.
+     *
+     * @param chosenByReader книгу выбрал человек, и её нужно открыть. Демо-глава
+     *   первого запуска приходит тем же путём, но её никто не выбирал: открывать
+     *   во весь экран текст, о котором не просили, — не то знакомство с
+     *   приложением, которого хочется.
      */
-    fun import(picked: PickedBook) {
+    fun import(picked: PickedBook, chosenByReader: Boolean = true) {
         viewModelScope.launch {
             message.value = null
             // Отпечаток и копирование — это SHA-256 по всему файлу и байт в
@@ -200,7 +217,7 @@ class LibraryViewModel(
                     library.add(
                         sourcePath = picked.path,
                         fileName = picked.name,
-                        title = picked.name.substringBeforeLast('.'),
+                        title = bookTitle(picked.name),
                         author = null,
                     )
                 }
@@ -217,6 +234,10 @@ class LibraryViewModel(
                     author = described.author,
                     chapters = described.chapters,
                 )
+                // Открываем только после разбора: до него неизвестно ни
+                // сколько в книге глав, ни открывается ли она вообще, а
+                // читалка, севшая на нечитаемый файл, — худший ответ на импорт.
+                if (chosenByReader) library.book(book.id)?.let { _imported.tryEmit(it) }
             } catch (e: CoreException) {
                 // Книга уже в библиотеке, но не открывается. Убираем её обратно:
                 // плитка, которая не открывается, хуже, чем её отсутствие.

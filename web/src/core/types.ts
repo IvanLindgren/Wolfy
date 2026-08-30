@@ -413,6 +413,14 @@ export interface AppSettings {
   fontScale: number
   lineScale: number
   onboardingSeen: boolean
+  /**
+   * Открывал ли читатель разбор слова хоть раз.
+   *
+   * Касание слова — главное действие продукта, и узнать о нём неоткуда.
+   * Читалка подсказывает это один раз и навсегда замолкает, как только
+   * подсказкой воспользовались.
+   */
+  wordTapSeen: boolean
   lastSeenVersion: string
   reduceMotion: boolean
   /** Короткие звуки компаньона; отдельно от радио и озвучки слов. */
@@ -535,6 +543,7 @@ export type Command =
   | { op: 'addShelf'; name: string; now: number }
   | { op: 'removeShelf'; name: string }
   | { op: 'review'; cardId: string; right: boolean; now: number; offsetMinutes: number }
+  | { op: 'seenWordTap' }
   | { op: 'due'; now: number }
   | { op: 'deckStatus'; kind: CardKind; now: number }
   | { op: 'trainingQueue'; kind: CardKind; now: number }

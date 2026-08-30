@@ -17,6 +17,22 @@
 .settingTitle { font-weight: 650; color: color-mix(in srgb, var(--ink) 82%, var(--accent)); }
 .settingHint { color: var(--ink-muted); font-size: .8rem; line-height: 1.4; margin-top: .15rem; }
 .choices { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .4rem; }
+
+/*
+ * Сводка чисел.
+ *
+ * Плитками, а не строками: числа читают взглядом, а не по порядку, и колонка
+ * из десяти строк «книг — 12» заставляет читать все десять, чтобы найти одно.
+ * Ширина плитки задана минимумом, а не количеством в ряду: на телефоне их
+ * встанет две, на широком экране — четыре, и переносить руками ничего не надо.
+ */
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr)); gap: .5rem; margin-top: .75rem; }
+.fact { padding: .7rem .8rem; border: 1px solid var(--rule); border-radius: var(--radius-lg); background: var(--surface); }
+.fact__value { font-size: 1.35rem; font-weight: 650; line-height: 1.1; color: color-mix(in srgb, var(--ink) 88%, var(--accent)); font-variant-numeric: tabular-nums; }
+.fact__label { margin-top: .2rem; font-size: .74rem; color: var(--ink-muted); line-height: 1.35; }
+/* Подпись под группой: то, что числами не выражается. */
+.factsNote { margin-top: .5rem; font-size: .78rem; color: var(--ink-muted); line-height: 1.45; }
+.groupTitle { margin: 1.25rem 0 .25rem; font-size: .78rem; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-muted); }
 .choice { padding: .45rem .7rem; border: 1px solid var(--rule); border-radius: 999px; color: var(--ink-muted); }
 .choice[data-active='true'] { background: var(--inverse); color: var(--on-inverse); border-color: var(--inverse); }
 /* Образец краски: кружок самого цвета — единственная подпись, которая тут не врёт. */

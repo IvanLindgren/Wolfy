@@ -31,24 +31,41 @@ import com.wolfy.theme.WolfyTheme
  *
  * Фигура не перекрывает текст: размер задаёт родитель, здесь только слои и
  * палитра. Догрузка слоёв идёт мимо кадра: открытие читалки ассетов не ждёт.
+ *
+ * ## Почему анимация здесь, а не поверх фигуры
+ *
+ * Снаружи фигуру можно было бы покачивать целиком через `graphicsLayer`, и
+ * ровно это раньше и делалось: покачивание на три пикселя и наклон на
+ * семь десятых градуса. Издали такое движение неотличимо от неподвижности, а
+ * ближе — от дрожания.
+ *
+ * Живым персонажа делает не движение целиком, а движение частей: веки
+ * смыкаются, рот раскрывается, корпус дышит. Слои рисуются по одному, поэтому
+ * каждому можно назначить своё преобразование — и покадровая анимация,
+ * которой в паке нет и быть не может, оказывается не нужна.
  */
 @Composable
 fun CompanionFigure(
     appearance: CompanionAppearance,
     modifier: Modifier = Modifier,
+    /** Поза на этом кадре; по умолчанию фигура неподвижна. */
+    pose: CompanionPose = CompanionPose.Still,
 ) {
     val cache = remember { CompanionAssetCache.global }
     val manifest by produceState<CompanionManifest?>(initialValue = null) {
         value = cache.ensureLoaded()
     }
-    val assets by produceState<List<CompanionAsset>>(initialValue = emptyList(), appearance, manifest) {
+    val assets by produceState<List<LayeredAsset>>(initialValue = emptyList(), appearance, manifest) {
         val current = manifest ?: return@produceState
-        val resolved = mutableListOf<CompanionAsset>()
+        val resolved = mutableListOf<LayeredAsset>()
         for (slot in current.layerOrder) {
             val assetId = appearance.asset(slot)
             if (assetId.endsWith(".none") && slot != "base") continue
             val fallbackId = if (slot == "base") "base.base" else "$slot.none"
-            (cache.get(assetId) ?: cache.get(fallbackId))?.let { resolved.add(it) }
+            // Слот запоминается рядом с разобранным слоем: по нему риг
+            // отличает веки от причёски. Выводить его из идентификатора на
+            // каждом кадре значило бы резать строку в цикле отрисовки.
+            (cache.get(assetId) ?: cache.get(fallbackId))?.let { resolved.add(LayeredAsset(slot, it)) }
         }
         value = resolved
     }
@@ -77,12 +94,19 @@ fun CompanionFigure(
                 )
                 val left = (size.width - bounds.width * factor) / 2f - bounds.left * factor
                 val top = (size.height - bounds.height * factor) / 2f - bounds.top * factor
+                // Общее движение фигуры: дыхание, наклон и смещение. Опора —
+                // низ по центру: персонаж стоит на земле, а не висит вокруг
+                // своего геометрического центра.
+                val ground = Offset(size.width / 2f, size.height)
                 withTransform({
+                    translate(pose.slide * size.width, pose.rise * size.height)
+                    if (pose.tilt != 0f) rotate(pose.tilt, ground)
+                    if (pose.breath != 0f) scale(1f, 1f + pose.breath, ground)
                     translate(left, top)
                     scale(factor, factor, pivot = Offset.Zero)
                 }) {
-                    for (asset in assets) {
-                        drawAsset(asset, palette)
+                    for (layer in assets) {
+                        drawLayer(layer, palette, pose)
                     }
                 }
             }
@@ -90,10 +114,13 @@ fun CompanionFigure(
     }
 }
 
-private fun List<CompanionAsset>.contentBounds(): Rect? {
+/** Слой вместе со слотом, в который его поставила внешность. */
+private data class LayeredAsset(val slot: String, val asset: CompanionAsset)
+
+private fun List<LayeredAsset>.contentBounds(): Rect? {
     var combined: Rect? = null
-    for (asset in this) {
-        for (shape in asset.shapes) {
+    for (layer in this) {
+        for (shape in layer.asset.shapes) {
             val next = when (shape) {
                 is com.wolfy.data.companion.CompanionShape.Path -> shape.path.getBounds()
                 is com.wolfy.data.companion.CompanionShape.Oval -> Rect(
@@ -121,6 +148,40 @@ private fun List<CompanionAsset>.contentBounds(): Rect? {
     }
     return combined
 }
+
+/**
+ * Слой со своим преобразованием.
+ *
+ * Веки и рот двигаются вокруг собственного центра, а не вокруг центра фигуры:
+ * глаз, сомкнувшийся вокруг подбородка, — это не моргание.
+ */
+private fun DrawScope.drawLayer(layer: LayeredAsset, palette: CompanionPalette, pose: CompanionPose) {
+    val squeeze = when (layer.slot) {
+        SLOT_EYES -> 1f - pose.lids * LID_CLOSE
+        SLOT_MOUTH -> 1f + pose.mouth * MOUTH_OPEN
+        else -> 1f
+    }
+    if (squeeze == 1f) {
+        drawAsset(layer.asset, palette)
+        return
+    }
+    val bounds = listOf(layer).contentBounds() ?: run {
+        drawAsset(layer.asset, palette)
+        return
+    }
+    withTransform({ scale(1f, squeeze, pivot = bounds.center) }) {
+        drawAsset(layer.asset, palette)
+    }
+}
+
+/** Насколько закрытое веко сжимает глаз. Не в ноль: щёлочка честнее пустоты. */
+private const val LID_CLOSE = 0.88f
+
+/** Насколько раскрывается рот на речи. */
+private const val MOUTH_OPEN = 1.1f
+
+private const val SLOT_EYES = "eyes"
+private const val SLOT_MOUTH = "mouth"
 
 private fun DrawScope.drawAsset(asset: CompanionAsset, palette: CompanionPalette) {
     for (shape in asset.shapes) {

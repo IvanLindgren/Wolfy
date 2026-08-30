@@ -2,6 +2,8 @@ package com.wolfy.ui.reader
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -40,6 +42,7 @@ import androidx.compose.material3.TooltipAnchorPosition
 import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.animation.core.Animatable
@@ -60,6 +63,7 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -73,6 +77,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.zIndex
 import com.wolfy.data.companion.takeCodePoints
@@ -92,6 +97,7 @@ import com.wolfy.theme.WolfyTheme
 import com.wolfy.theme.paced
 import com.wolfy.theme.still
 import com.wolfy.widgets.ChapterHeading
+import com.wolfy.ui.settings.ReadingSettingsPanel
 import com.wolfy.widgets.DropCapParagraph
 import com.wolfy.widgets.NavGlyph
 import com.wolfy.widgets.NavIcon
@@ -187,6 +193,23 @@ fun ReaderScreen(
     segmentWords: Int = 0,
     reduceMotion: Boolean = false,
     companionSounds: Boolean = true,
+    /**
+     * Видна ли сейчас оснастка чтения.
+     *
+     * Оболочка прячет по этому признаку нижнюю навигацию приложения. Держать
+     * «Книги, Полки, Лента, Карточки, Ещё» на экране посреди романа значит
+     * весь роман предлагать его закрыть.
+     */
+    onChrome: (Boolean) -> Unit = {},
+    /**
+     * Открывал ли читатель разбор слова хоть раз.
+     *
+     * Пока нет — читалка один раз показывает, что касание слова вообще что-то
+     * делает. Без этого главное действие продукта не существует для того, кто
+     * не догадался ткнуть в текст пальцем.
+     */
+    wordTapSeen: Boolean = true,
+    onWordTapSeen: () -> Unit = {},
     onSegmentWordsChange: (Int) -> Unit = {},
     onNextSegment: (Int) -> Unit = {},
     onStopSegments: () -> Unit = {},
@@ -306,10 +329,30 @@ fun ReaderScreen(
     }
     BackHandler(enabled = true, onBack = goBack)
 
+    // Оснастка обязана быть видна там, где на неё опираются: панель настроек
+    // и оглавление раскрываются из шапки и стоят под ней.
+    //
+    // Карточка слова, выделение фразы и лист сюжета сюда не входят намеренно.
+    // Это листы поверх страницы, шапка им не нужна, а вытаскивать её за их
+    // спиной значило бы устроить движение там, где читатель ничего не просил:
+    // он всего лишь тронул слово и по-прежнему в книге.
+    val chromeLocked = readingSettingsOpen || contentsOpen
+    val immersion = rememberReadingImmersion(
+        scroll = scroll,
+        locked = chromeLocked,
+        chapterKey = state.chapterIndex,
+    )
+    val chromeVisible = immersion.chromeVisible
+    LaunchedEffect(chromeVisible) { onChrome(chromeVisible) }
+    // Уход из книги обязан вернуть навигацию: иначе оболочка осталась бы без
+    // нижних вкладок в библиотеке, куда читатель как раз и вышел.
+    DisposableEffect(Unit) { onDispose { onChrome(true) } }
+
     Box(
         modifier
             .fillMaxSize()
             .background(colors.paper)
+            .nestedScroll(immersion.connection)
             .chapterSwipe(
                 enabled = !cardOpen && !contentsOpen && !readingSettingsOpen && !LocalKeyboard.current,
                 onPrevious = onPreviousChapter,
@@ -361,101 +404,137 @@ fun ReaderScreen(
         // композицию всего экрана, а панель на первом открытии успевала
         // мигнуть на кадр выше своего места.
         val headerHeightPx = remember { mutableIntStateOf(0) }
-        Column(
-            Modifier.fillMaxSize(),
+        val headerInset = with(LocalDensity.current) { headerHeightPx.intValue.toDp() }
+
+        // Оснастка лежит поверх текста, а не над ним столбцом.
+        //
+        // Столбцом её прятать нельзя: тело книги выросло бы вверх на высоту
+        // шапки, а `LazyColumn` держит первый видимый блок у верхней границы
+        // окна — строка, на которой читатель остановился, прыгала бы на сотню
+        // точек при каждом уходе и возврате шапки. Поэтому тело занимает весь
+        // экран всегда, а место под шапку отводится постоянным отступом
+        // содержимого: он виден только в самом начале главы, где шапка и так
+        // показана.
+        when {
+            state.error != null -> Message(state.error)
+            state.loading -> Message("Книга открывается…")
+            else -> ChapterBody(
+                state = state,
+                scroll = scroll,
+                focusMode = focusMode,
+                activeBlock = activeBlock,
+                activeSentence = if (pacing) paceSentence else 0,
+                pacing = pacing,
+                topInset = headerInset,
+                onWordTap = onWordTap,
+                onPreviousChapter = onPreviousChapter,
+                onNextChapter = onNextChapter,
+                onScrolled = onScrolled,
+                images = images,
+                onImageVisible = onImageVisible,
+                phraseSelectionBlock = phraseSelection.value?.block ?: -1,
+                phraseSelectionRange = phraseSelection.value?.range,
+                painted = annotations.filter { it.paints && it.chapter == state.chapterIndex },
+                selectViaMouse = selectViaMouse,
+                onPhraseSelect = { block, range ->
+                    if (phraseSelection.value?.block != block || phraseSelection.value?.range != range) {
+                        phraseSelection.value = PhraseSelection(block, range)
+                    }
+                },
+                onPhraseCommit = { block, range ->
+                    val selectedBlock = state.blocks.getOrNull(block)
+                    val parsedForBlock = selectedBlock?.parsed
+                    val span = selectedBlock?.let { chapterTokensOf(it, range) }
+                    when {
+                        // Маркер: выделение сразу становится краской, без
+                        // карточки и без подтверждения. Так же ведёт себя
+                        // настоящий маркер на бумаге.
+                        tool == ReaderTool.Pencil && span != null -> {
+                            onAnnotationAdd(
+                                state.chapterIndex, span.first, span.last + 1, pencilTone,
+                                quoteOfRange(selectedBlock, range),
+                            )
+                            phraseSelection.value = null
+                        }
+                        // Заметка: та же запись, но без краски и с
+                        // открытым полем — писать её будут прямо сейчас.
+                        tool == ReaderTool.Note && span != null -> {
+                            onAnnotationAdd(
+                                state.chapterIndex, span.first, span.last + 1, null,
+                                quoteOfRange(selectedBlock, range),
+                            )
+                            phraseSelection.value = null
+                        }
+                        parsedForBlock != null && range.first <= range.last ->
+                            onPhraseSelected(block, range, selectedBlock.text, parsedForBlock)
+                    }
+                    // Подсветка остаётся до закрытия карточки: снять её
+                    // раньше — значит спрятать то, что читатель взял.
+                },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .chapterArrival(state.chapterIndex),
+            )
+        }
+
+        // Оснастка чтения: шапка книги и полоса внимания.
+        //
+        // Одним слоем, а не двумя: они появляются и уходят вместе, и разводить
+        // их значило бы разрешить состояние «полоса внимания без шапки», в
+        // котором читатель видит остаток подхода и не видит, из какой он
+        // главы.
+        AnimatedVisibility(
+            visible = chromeVisible,
+            enter = fadeIn(motion.paced(motion.quick)) +
+                slideInVertically(motion.paced(motion.calm)) { -it },
+            exit = fadeOut(motion.paced(motion.instant)) +
+                slideOutVertically(motion.paced(motion.quick)) { -it },
+            modifier = Modifier.align(Alignment.TopCenter).zIndex(Z_CHROME),
         ) {
             Column(
-                Modifier.onSizeChanged { headerHeightPx.intValue = it.height },
+                Modifier
+                    .background(colors.paper)
+                    .onSizeChanged { headerHeightPx.intValue = it.height },
             ) {
+                if (!wordTapSeen) {
+                    // Пример берётся один раз на главу: пересчитывать его на
+                    // каждой прокрутке значило бы менять слово в подсказке под
+                    // читателем, который как раз ищет его глазами.
+                    val example = remember(state.chapterIndex, state.blocks) {
+                        invitingWord(state.blocks)
+                    }
+                    FirstWordHint(example = example, onDismiss = onWordTapSeen)
+                    Rule()
+                }
                 ReaderTopBar(
-                    state = state,
-                    withinChapterProgress = withinChapterProgress,
-                    minutesLeft = minutesLeft,
-                    onClose = onClose,
-                    onOpenContents = { contentsOpen = true },
-                    onOpenSettings = { readingSettingsOpen = !readingSettingsOpen },
-                    onRecap = onRecap,
-                    companionMode = companionProfile?.readerMode,
-                    onCompanionMode = {
-                        companionProfile?.let { profile ->
-                            val next = when (profile.readerMode) {
-                                "off" -> "quiet"
-                                "quiet" -> "active"
-                                else -> "off"
+                        state = state,
+                        withinChapterProgress = withinChapterProgress,
+                        minutesLeft = minutesLeft,
+                        onClose = onClose,
+                        onOpenContents = { contentsOpen = true },
+                        onOpenSettings = { readingSettingsOpen = !readingSettingsOpen },
+                        onRecap = onRecap,
+                        companionMode = companionProfile?.readerMode,
+                        onCompanionMode = {
+                            companionProfile?.let { profile ->
+                                val next = when (profile.readerMode) {
+                                    "off" -> "quiet"
+                                    "quiet" -> "active"
+                                    else -> "off"
+                                }
+                                companionOnProfileChange(profile.copy(readerMode = next))
                             }
-                            companionOnProfileChange(profile.copy(readerMode = next))
-                        }
-                    },
-                )
-                AttentionBar(
-                    state = state,
-                    activeBlock = activeBlock,
-                    pacing = pacing,
-                    pacerWpm = pacerWpm,
-                    onPace = { pacing = it },
-                    onNextSegment = onNextSegment,
-                    onStopSegments = onStopSegments,
-                )
-            }
-
-            when {
-                state.error != null -> Message(state.error)
-                state.loading -> Message("Книга открывается…")
-                else -> ChapterBody(
-                    state = state,
-                    scroll = scroll,
-                    focusMode = focusMode,
-                    activeBlock = activeBlock,
-                    activeSentence = if (pacing) paceSentence else 0,
-                    onWordTap = onWordTap,
-                    onPreviousChapter = onPreviousChapter,
-                    onNextChapter = onNextChapter,
-                    onScrolled = onScrolled,
-                    images = images,
-                    onImageVisible = onImageVisible,
-                    phraseSelectionBlock = phraseSelection.value?.block ?: -1,
-                    phraseSelectionRange = phraseSelection.value?.range,
-                    painted = annotations.filter { it.paints && it.chapter == state.chapterIndex },
-                    selectViaMouse = selectViaMouse,
-                    onPhraseSelect = { block, range ->
-                        if (phraseSelection.value?.block != block || phraseSelection.value?.range != range) {
-                            phraseSelection.value = PhraseSelection(block, range)
-                        }
-                    },
-                    onPhraseCommit = { block, range ->
-                        val selectedBlock = state.blocks.getOrNull(block)
-                        val parsedForBlock = selectedBlock?.parsed
-                        val span = selectedBlock?.let { chapterTokensOf(it, range) }
-                        when {
-                            // Маркер: выделение сразу становится краской, без
-                            // карточки и без подтверждения. Так же ведёт себя
-                            // настоящий маркер на бумаге.
-                            tool == ReaderTool.Pencil && span != null -> {
-                                onAnnotationAdd(
-                                    state.chapterIndex, span.first, span.last + 1, pencilTone,
-                                    quoteOfRange(selectedBlock, range),
-                                )
-                                phraseSelection.value = null
-                            }
-                            // Заметка: та же запись, но без краски и с
-                            // открытым полем — писать её будут прямо сейчас.
-                            tool == ReaderTool.Note && span != null -> {
-                                onAnnotationAdd(
-                                    state.chapterIndex, span.first, span.last + 1, null,
-                                    quoteOfRange(selectedBlock, range),
-                                )
-                                phraseSelection.value = null
-                            }
-                            parsedForBlock != null && range.first <= range.last ->
-                                onPhraseSelected(block, range, selectedBlock.text, parsedForBlock)
-                        }
-                        // Подсветка остаётся до закрытия карточки: снять её
-                        // раньше — значит спрятать то, что читатель взял.
-                    },
-                    modifier = Modifier
-                        .weight(1f)
-                        .chapterArrival(state.chapterIndex),
-                )
+                        },
+                    )
+                    AttentionBar(
+                        state = state,
+                        activeBlock = activeBlock,
+                        pacing = pacing,
+                        pacerWpm = pacerWpm,
+                        onPace = { pacing = it },
+                        onNextSegment = onNextSegment,
+                        onStopSegments = onStopSegments,
+                    )
             }
         }
 
@@ -488,7 +567,22 @@ fun ReaderScreen(
          * выбирать, а мешают.
          */
         AnimatedVisibility(
-            visible = !readingSettingsOpen && !contentsOpen,
+            // Уезжает вместе с шапкой: полка инструментов висит под ней и без
+            // неё оказалась бы одинокой плашкой посреди текста. Читателю,
+            // который убрал оснастку, она не нужна тем более — он читает.
+            //
+            // Кроме одного случая: выбран не «Чтение». Тогда полка остаётся,
+            // потому что режим остаётся. Инструмент меняет смысл проводки
+            // пальцем — маркер красит вместо того, чтобы открыть разбор, — и
+            // прятать единственное место, где об этом сказано, значит устроить
+            // читателю ловушку: он выбрал маркер, прокрутил страницу, провёл
+            // по строке за разбором и получил краску, не понимая почему.
+            //
+            // Включённый режим обязан быть виден. Это и есть весь ответ на
+            // вопрос, зачем полка вообще торчит над текстом: она торчит ровно
+            // тогда, когда что-то делает.
+            visible = (chromeVisible || tool != ReaderTool.Read) &&
+                !readingSettingsOpen && !contentsOpen,
             enter = fadeIn(motion.paced(motion.quick)),
             exit = fadeOut(motion.paced(motion.instant)),
             modifier = Modifier
@@ -602,9 +696,18 @@ fun ReaderScreen(
                 onEditCompanion = companionOnEdit,
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    // На телефоне нижняя навигация приложения занимает около
-                    // 64 dp. Ярлычок живёт над ней и не закрывает вкладки.
-                    .padding(bottom = if (selectViaMouse) 32.dp else 84.dp, end = 6.dp)
+                    // Нижняя навигация приложения занимает около 64 dp, пока
+                    // она на экране. Компаньон живёт над ней и не закрывает
+                    // вкладки, а когда она уходит в погружении — опускается
+                    // следом, чтобы не висеть посреди пустого поля.
+                    .padding(
+                        bottom = when {
+                            selectViaMouse -> 32.dp
+                            chromeVisible -> 84.dp
+                            else -> 20.dp
+                        },
+                        end = 6.dp,
+                    )
                     .zIndex(Z_COMPANION),
             )
         }
@@ -654,6 +757,15 @@ private fun visiblePageText(blocks: List<ReaderBlock>, activeBlock: Int): String
  * настроек, а лист сюжета и сама панель делили одно значение и раскладывались
  * по порядку объявления.
  */
+/**
+ * Оснастка чтения лежит над текстом, но под всем, что открывается по просьбе.
+ *
+ * Ниже компаньона нарочно: фигура стоит в углу, а шапка занимает верхнюю
+ * полосу, и спорить им не о чем — а вот панель разговора, карточка слова и
+ * листы обязаны перекрывать шапку целиком.
+ */
+private const val Z_CHROME = 0.5f
+
 private const val Z_COMPANION = 1f
 private const val Z_SHEET = 2f
 private const val Z_OVERLAY_SCRIM = 3f
@@ -705,8 +817,10 @@ private val CHAPTER_TRAVEL = 28.dp
  * сказал, в каком темпе читает. Иначе — спокойный темп чтения на неродном
  * языке, ради которого приложение и существует.
  *
- * Возвращает null там, где оценка была бы враньём: глава не разобрана, слов
- * не осталось или до конца меньше минуты.
+ * `null` — оценки нет вовсе: глава не разобрана или слов не осталось. Ноль —
+ * оценка есть и она меньше минуты. Раньше это был один и тот же ответ, и
+ * дочитанная до конца глава выглядела как неразобранная: показание пропадало
+ * ровно в тот момент, когда читатель заканчивал.
  */
 internal fun minutesLeftInChapter(blocks: List<ReaderBlock>, activeBlock: Int, pacerWpm: Int): Int? {
     if (blocks.isEmpty() || activeBlock >= blocks.size) return null
@@ -717,8 +831,7 @@ internal fun minutesLeftInChapter(blocks: List<ReaderBlock>, activeBlock: Int, p
     }
     if (words == 0) return null
     val wpm = if (pacerWpm > 0) pacerWpm else LEARNER_WPM
-    val minutes = (words + wpm - 1) / wpm
-    return minutes.takeIf { it >= 1 }
+    return (words + wpm - 1) / wpm
 }
 
 /** Спокойный темп чтения на неродном языке. */
@@ -732,6 +845,14 @@ private const val PAGE_TEXT_TARGET = 600
 
 /** Потолок серверного контракта. */
 private const val PAGE_TEXT_MAX = 4_000
+
+/**
+ * Короче этого абзац буквицу не открывает.
+ *
+ * Примерно четыре строки набора на телефоне: столько нужно, чтобы рядом с
+ * трёхстрочной литерой осталась хотя бы одна строка, а под ней — продолжение.
+ */
+private const val DROP_CAP_MIN_CHARS = 180
 
 /** Шапка: глава и полоса прогресса чтения. */
 @Composable
@@ -750,12 +871,18 @@ private fun ReaderTopBar(
 ) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
-    val progress = if (state.chapterCount > 0) {
-        ((state.chapterIndex + withinChapterProgress.coerceIn(0f, 1f)) / state.chapterCount)
-            .coerceIn(0f, 1f)
-    } else {
-        0f
-    }
+    // Масштаб показания. Местный для сеанса: это взгляд, а не настройка, и
+    // спрашивать его заново при следующем открытии книги не жалко.
+    var scope by remember { mutableStateOf(ReadingScope.Chapter) }
+    val progress = readingPlaceFraction(
+        scope = scope,
+        withinChapter = withinChapterProgress,
+        chapterIndex = state.chapterIndex,
+        chapterCount = state.chapterCount,
+    )
+    val placeLabel = readingPlaceLabel(scope, minutesLeft, state.chapterIndex, state.chapterCount)
+    val placeDescription =
+        readingPlaceDescription(scope, minutesLeft, state.chapterIndex, state.chapterCount)
 
     Column {
         Row(
@@ -804,13 +931,26 @@ private fun ReaderTopBar(
                         tint = colors.accent,
                         onClick = onRecap,
                     )
-                    // Доля книги уже нарисована линейкой под шапкой, и второй
-                    // раз числом она ничего не добавляет: «сорок три процента»
-                    // не влияет ни на одно решение. Влияет другое — сколько
-                    // осталось до конца главы, потому что читают до неё.
-                    SectionLabel(minutesLeft?.let { "$it мин" } ?: "${(progress * 100).toInt()}%")
+                    // Одно показание на всю шапку, и линейка под ней о том же
+                    // самом. Касание меняет вопрос: «сколько осталось до конца
+                    // главы» или «какая это глава из скольких». Пустое место
+                    // означает, что величины пока нет, — подставлять на её
+                    // место соседнюю в другой единице нельзя.
+                    SectionLabel(
+                        text = placeLabel.orEmpty(),
+                        modifier = Modifier
+                            .pressable { scope = scope.next() }
+                            // Отступ после pressable, а не до: цель нажатия
+                            // должна быть больше самой строчки кеглем в
+                            // одиннадцать пунктов, иначе в неё не попасть.
+                            .padding(horizontal = spacing.tight, vertical = spacing.small)
+                            .semantics { contentDescription = placeDescription },
+                    )
                 }
         }
+        // Линейка того же масштаба, что и подпись над ней. Раньше она мерила
+        // книгу, пока подпись рядом мерила главу, и вместе они не отвечали ни
+        // на один вопрос целиком.
         Box(
             Modifier
                 .fillMaxWidth()
@@ -821,7 +961,7 @@ private fun ReaderTopBar(
                 Modifier
                     .fillMaxWidth(progress)
                     .height(spacing.hair)
-                .background(colors.accent),
+                    .background(colors.accent),
             )
         }
         if (companionMode != null) {
@@ -889,9 +1029,9 @@ private fun ReaderQuickSettings(
 ) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
-    // Настройки стали богаче, и на маленьком landscape-экране крупным кеглем
-    // они больше не помещаются: панель ограничена четырьмя пятыми экрана и
-    // прокручивается. Нижние переключатели остаются досягаемыми.
+    // Панель ограничена четырьмя пятыми экрана и прокручивается: с образцом
+    // и пояснениями она заведомо длиннее короткого landscape-экрана, а
+    // нижние настройки обязаны оставаться досягаемыми.
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val panelCap = maxHeight * 0.8f
         Column(
@@ -901,117 +1041,25 @@ private fun ReaderQuickSettings(
                 .verticalScroll(rememberScrollState())
                 .background(colors.surface)
                 .padding(horizontal = spacing.pageMargin, vertical = spacing.medium),
-            verticalArrangement = Arrangement.spacedBy(spacing.small),
         ) {
-            SectionLabel("Тема страницы")
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(spacing.small),
-            ) {
-                ReadingTheme.entries.forEach { option ->
-                    Text(
-                        text = option.title,
-                        style = WolfyTheme.typography.caption,
-                        color = if (theme == option) colors.onInverse else colors.ink,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier
-                            .weight(1f)
-                            .pressable(onClick = { onThemeChange(option) })
-                            .background(
-                                if (theme == option) colors.inverse else colors.paper,
-                                RoundedCornerShape(spacing.huge),
-                            )
-                            .padding(vertical = spacing.small),
-                    )
-                }
-            }
-            SettingStepper(
-                title = "Размер текста",
-                value = "${(fontScale * 100).toInt()}%",
-                onLess = { onFontScaleChange(fontScale - 0.1f) },
-                onMore = { onFontScaleChange(fontScale + 0.1f) },
+            // То же определение, что и на экране «Ещё». Две копии настроек
+            // расходились подписями и составом на первой же правке.
+            ReadingSettingsPanel(
+                theme = theme,
+                onThemeChange = onThemeChange,
+                fontScale = fontScale,
+                onFontScaleChange = onFontScaleChange,
+                lineScale = lineScale,
+                onLineScaleChange = onLineScaleChange,
+                emphasizeStems = emphasizeStems,
+                onEmphasizeStems = onEmphasizeStems,
+                focusMode = focusMode,
+                onFocusModeChange = onFocusModeChange,
+                pacerWpm = pacerWpm,
+                onPacerChange = onPacerChange,
+                segmentWords = segmentWords,
+                onSegmentWordsChange = onSegmentWordsChange,
             )
-            SettingStepper(
-                title = "Интервал строк",
-                value = "${(lineScale * 100).toInt()}%",
-                onLess = { onLineScaleChange(lineScale - 0.1f) },
-                onMore = { onLineScaleChange(lineScale + 0.1f) },
-            )
-            QuickSwitch(
-                title = "Выделять основу слова",
-                on = emphasizeStems,
-                onChange = onEmphasizeStems,
-            )
-            QuickChoice(
-                title = "Окно чтения",
-                choices = listOf(
-                    FocusMode.Off to "нет",
-                    FocusMode.Sentence to "фраза",
-                    FocusMode.Paragraph to "абзац",
-                ),
-                selected = focusMode,
-                onChange = onFocusModeChange,
-            )
-            QuickChoice(
-                title = "Ведущая строка",
-                choices = listOf(0 to "нет", 160 to "тихо", 220 to "обычно", 300 to "быстро"),
-                selected = pacerWpm,
-                onChange = onPacerChange,
-            )
-            QuickChoice(
-                title = "Отрезок",
-                choices = listOf(0 to "нет", 150 to "короткий", 400 to "средний", 900 to "длинный"),
-                selected = segmentWords,
-                onChange = onSegmentWordsChange,
-            )
-        }
-    }
-}
-
-@Composable
-private fun QuickSwitch(title: String, on: Boolean, onChange: (Boolean) -> Unit) {
-    val colors = WolfyTheme.colors
-    Row(
-        Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(title, style = WolfyTheme.typography.body, color = colors.ink)
-        Text(
-            text = if (on) "включено" else "выключено",
-            style = WolfyTheme.typography.caption,
-            color = if (on) colors.accent else colors.inkMuted,
-            modifier = Modifier.pressable { onChange(!on) },
-        )
-    }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun <T> QuickChoice(
-    title: String,
-    choices: List<Pair<T, String>>,
-    selected: T,
-    onChange: (T) -> Unit,
-) {
-    val colors = WolfyTheme.colors
-    val spacing = WolfyTheme.spacing
-    Column(verticalArrangement = Arrangement.spacedBy(spacing.tight)) {
-        Text(title, style = WolfyTheme.typography.body, color = colors.ink)
-        // Четыре подписи в обычной Row на узком экране с крупным кеглем не
-        // умещаются: переносятся на вторую строку.
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(spacing.medium),
-            verticalArrangement = Arrangement.spacedBy(spacing.tight),
-        ) {
-            choices.forEach { (value, label) ->
-                Text(
-                    text = label,
-                    style = WolfyTheme.typography.caption,
-                    color = if (value == selected) colors.accent else colors.inkMuted,
-                    modifier = Modifier.pressable { onChange(value) },
-                )
-            }
         }
     }
 }
@@ -1068,7 +1116,7 @@ private fun StoryRecapSheet(
                         )
                     }
                     Text(
-                        "ИИ может ошибаться. До 10 запросов в день.",
+                        "ИИ может ошибаться.",
                         style = WolfyTheme.typography.caption,
                         color = colors.inkMuted,
                     )
@@ -1121,47 +1169,6 @@ private fun StoryRecapSheet(
     }
 }
 
-@Composable
-private fun SettingStepper(
-    title: String,
-    value: String,
-    onLess: () -> Unit,
-    onMore: () -> Unit,
-) {
-    val spacing = WolfyTheme.spacing
-    Row(
-        Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(title, style = WolfyTheme.typography.body, color = WolfyTheme.colors.ink)
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(spacing.small),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // Цвет задаётся явно. Без него material3 брал LocalContentColor,
-            // а тот по умолчанию чёрный — и обе подписи пропадали на тёмной
-            // и OLED-бумаге.
-            StepperAction("Меньше", onLess)
-            Text(value, style = WolfyTheme.typography.body, color = WolfyTheme.colors.ink)
-            StepperAction("Больше", onMore)
-        }
-    }
-}
-
-/** Подпись-действие шага: своя цель нажатия, а не одна строка кегля caption. */
-@Composable
-private fun StepperAction(label: String, onClick: () -> Unit) {
-    Text(
-        label,
-        style = WolfyTheme.typography.caption,
-        color = WolfyTheme.colors.accent,
-        modifier = Modifier
-            .pressable(onClick = onClick)
-            .padding(horizontal = WolfyTheme.spacing.small, vertical = WolfyTheme.spacing.medium),
-    )
-}
-
 /** Замеченный кадр прокрутки: доля главы и якорь «блок + смещение внутри». */
 private data class ScrollReport(
     val place: Float,
@@ -1182,6 +1189,24 @@ private fun ChapterBody(
     focusMode: FocusMode,
     activeBlock: Int,
     activeSentence: Int,
+    /**
+     * Ведущая строка идёт прямо сейчас.
+     *
+     * Отдельно от окна чтения, потому что рисует то же самое, но по своей
+     * причине. Раньше подсветку давало только окно в режиме «фраза»: при
+     * выключенном окне ведущая строка честно отсчитывала время и прокручивала
+     * главу, не показывая ни одной строки. Со стороны это выглядело так, будто
+     * настройка сломана, а на деле она молча зависела от соседней.
+     */
+    pacing: Boolean,
+    /**
+     * Место под плавающую оснастку.
+     *
+     * Постоянное, а не зависящее от того, видна ли она сейчас. Отступ, который
+     * то появляется, то исчезает, сдвигал бы текст при каждом уходе шапки —
+     * ровно та беда, ради которой оснастку и вынесли из столбца наверх.
+     */
+    topInset: Dp,
     onWordTap: (Int, com.wolfy.ffi.Token, com.wolfy.ffi.ParsedText) -> Unit,
     onPreviousChapter: () -> Unit,
     onNextChapter: () -> Unit,
@@ -1262,7 +1287,16 @@ private fun ChapterBody(
     // один раз на главу. Внутри itemsIndexed этот поиск шёл бы заново для
     // каждого блока — сотня линейных проходов по сотне блоков на каждый кадр
     // прокрутки.
-    val dropCapAt = remember(state.blocks) { state.blocks.indexOfFirst { it.kind == "paragraph" } }
+    val dropCapAt = remember(state.blocks) {
+        // Не просто первый абзац, а первый настоящий. Первым текстовым блоком
+        // главы часто оказывается строка вроде названия книги или пометки
+        // переводчика: буквица в три строки рядом с одной строкой текста
+        // выглядит поломкой вёрстки, а не открытием главы. Порог по знакам
+        // грубый нарочно — точную границу знает только раскладка, и она же
+        // отказывается от буквицы окончательно, если абзац всё равно
+        // оказался коротким.
+        state.blocks.indexOfFirst { it.kind == "paragraph" && it.text.length >= DROP_CAP_MIN_CHARS }
+    }
 
     LazyColumn(
         modifier.fillMaxSize(),
@@ -1270,7 +1304,7 @@ private fun ChapterBody(
         contentPadding = PaddingValues(
             start = spacing.pageMargin,
             end = spacing.pageMargin,
-            top = spacing.large,
+            top = topInset + spacing.large,
             bottom = spacing.huge,
         ),
         verticalArrangement = Arrangement.spacedBy(spacing.medium),
@@ -1286,8 +1320,8 @@ private fun ChapterBody(
                 savedLemmas = state.savedLemmas,
                 // Окно чтения: светлым остаётся только то место, где читатель
                 // сейчас. Абзац целиком или одно предложение в нём — решает он.
-                dimmed = focusMode != FocusMode.Off && index != activeBlock,
-                bright = if (focusMode == FocusMode.Sentence && index == activeBlock) {
+                dimmed = (focusMode != FocusMode.Off || pacing) && index != activeBlock,
+                bright = if ((focusMode == FocusMode.Sentence || pacing) && index == activeBlock) {
                     block.parsed?.sentences?.getOrNull(activeSentence)
                         ?.let { it.start until it.end }
                 } else {
@@ -1356,6 +1390,11 @@ private fun BlockView(
                     selectViaMouse = selectViaMouse,
                     anchors = block.anchors,
                     dimmed = dimmed,
+                    // Окно чтения по фразе раньше обходило первый абзац главы
+                    // стороной: буквичная вёрстка светлого куска не принимала
+                    // вовсе. Настройка, которая молча не работает в одном
+                    // месте из ста, читается как сломанная настройка.
+                    bright = bright,
                     onWordTap = { onWordTap(index, it, parsed) },
                     onPhrase = onPhrase,
                     onPhraseDone = onPhraseDone,

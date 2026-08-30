@@ -52,6 +52,15 @@ export function useFocusWindow(
   const [window_, setWindow] = useState<FocusWindow | null>(null)
   const frame = useRef<number | null>(null)
 
+  // Ведущая строка рисует своё окно и при выключенном окне чтения.
+  //
+  // Раньше не рисовала: при mode === 'off' окно не считалось вовсе, и ведущая
+  // строка честно отсчитывала темп и прокручивала главу, не подсвечивая ни
+  // одной фразы. Со стороны настройка выглядела сломанной, а на деле молча
+  // зависела от соседней. Ведущая строка — это и есть подсвеченная фраза;
+  // без неё она не ведёт, а просто листает.
+  const effective: FocusMode = mode === 'off' && driven !== null ? 'sentence' : mode
+
   /** Прямоугольник единицы чтения, внутри которой стоит токен. */
   const measure = useCallback(
     (token: number): FocusWindow | null => {
@@ -59,7 +68,7 @@ export function useFocusWindow(
       if (!host) return null
       const base = host.getBoundingClientRect()
 
-      if (mode === 'paragraph') {
+      if (effective === 'paragraph') {
         const element = host.querySelector<HTMLElement>(`[data-t="${token}"]`)
         const block = element?.closest<HTMLElement>('[data-block]')
         if (!block) return null
@@ -87,7 +96,7 @@ export function useFocusWindow(
       if (box.height < 1) return null
       return { top: box.top - base.top, bottom: box.bottom - base.top }
     },
-    [column, mode, sentences],
+    [column, effective, sentences],
   )
 
   const schedule = useCallback(
@@ -105,14 +114,14 @@ export function useFocusWindow(
   // Ведущая строка правит окном напрямую: у неё есть номер токена, и искать
   // его под указателем незачем.
   useEffect(() => {
-    if (mode === 'off' || driven === null) return
+    if (effective === 'off' || driven === null) return
     schedule(driven)
-  }, [mode, driven, schedule])
+  }, [effective, driven, schedule])
 
   // Указатель ведёт окно, только пока молчит ведущая строка.
   useEffect(() => {
     const host = column.current
-    if (!host || mode === 'off' || driven !== null) return
+    if (!host || effective === 'off' || driven !== null) return
 
     const follow = (event: PointerEvent) => {
       const target = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-t]')
@@ -128,11 +137,11 @@ export function useFocusWindow(
       host.removeEventListener('pointermove', follow)
       host.removeEventListener('pointerdown', follow)
     }
-  }, [column, mode, driven, schedule])
+  }, [column, effective, driven, schedule])
 
   useEffect(() => {
-    if (mode === 'off') setWindow(null)
-  }, [mode])
+    if (effective === 'off') setWindow(null)
+  }, [effective])
 
   useEffect(
     () => () => {
@@ -141,7 +150,7 @@ export function useFocusWindow(
     [],
   )
 
-  return mode === 'off' ? null : window_
+  return effective === 'off' ? null : window_
 }
 
 /**

@@ -13,6 +13,7 @@
 - неизменяемые релизы: `/opt/wolfy/releases/<git-sha>`;
 - активный релиз: симлинк `/opt/wolfy/current`;
 - секреты и общие данные: `/opt/wolfy/shared/`;
+- файлы книг: `/opt/wolfy/shared/book-files/` (или `WOLFY_BOOK_FILES_PATH`);
 - окружение: `/opt/wolfy/shared/wolfy.env`, владелец `wolfy:wolfy`, режим `600`.
 
 Шаблоны сервера лежат в `deploy/`: `install-server.sh`, `wolfy.service` и
@@ -42,7 +43,11 @@
    - `WOLFY_VDS_HOST`;
    - `WOLFY_VDS_USER`;
    - `WOLFY_VDS_SSH_KEY`;
-   - `WOLFY_VDS_KNOWN_HOSTS`.
+   - `WOLFY_VDS_KNOWN_HOSTS`;
+   - `WOLFY_ANDROID_KEYSTORE_BASE64`;
+   - `WOLFY_ANDROID_STORE_PASSWORD`;
+   - `WOLFY_ANDROID_KEY_ALIAS`;
+   - `WOLFY_ANDROID_KEY_PASSWORD`.
 
 Deploy-пользователю нужны только права загрузить архив в `/tmp` и выполнить
 ограниченный production-скрипт/перезапуск `wolfy`; не расширять их без причины.
@@ -93,7 +98,9 @@ callback Wolfy в кабинете Яндекса не нужен. Читаву�
 3. Отправить проверенный коммит в `master`. Workflow
    `.github/workflows/ci-deploy.yml` сначала тестирует Rust, Go и web, затем
    собирает единый архив и только после успеха запускает deploy job.
-4. Дождаться обеих зелёных jobs. Не обходить красный CI ручной выкладкой.
+4. Дождаться зелёных обязательных jobs. Не обходить красный CI ручной выкладкой.
+   Основной production deploy ждёт `Test and build` и `Windows x64 installer`;
+   Windows ARM64 и Linux DEB публикуются отдельными артефактами и не блокируют сайт.
 5. Проверить production:
 
    ```bash
@@ -105,6 +112,11 @@ callback Wolfy в кабинете Яндекса не нужен. Читаву�
    карточки слова. Для OAuth достаточно убедиться, что фирменная кнопка Google
    отрисовалась, а Яндекс начинает авторизацию и сохраняет origin Wolfy; не
    завершать вход под чужой учётной записью.
+
+Для push в `master` workflow также создаёт подписанный APK, MSI x64, MSI ARM64 и
+DEB. В production-архив и каталог обновлений попадают APK и MSI x64; остальные
+пакеты берутся из GitHub Actions artifacts. Ключ подписи Android восстанавливается
+только из secrets внутри CI и никогда не хранится в репозитории.
 
 ## Откат и диагностика
 
@@ -124,4 +136,3 @@ nginx -t
 `/opt/wolfy/releases/`: атомарно заменить `/opt/wolfy/current`, перезапустить
 `wolfy` и повторить локальный и публичный healthcheck. Не удалять предыдущие
 релизы и резервные копии в ходе аварийного отката.
-

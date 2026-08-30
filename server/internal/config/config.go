@@ -61,6 +61,22 @@ type Config struct {
 	// укладывается. Общий таймаут ронял его в резерв, где следующая модель
 	// не успевала тем более, и читатель получал «нет связи» вместо ответа.
 	AITimeout time.Duration
+	// AIBudget — потолок времени на всю цепочку моделей одного запроса.
+	// Отдельно от AITimeout: тот ограничивает одну попытку, а этот — их
+	// сумму. Без него четыре модели по две попытки складывались в шесть
+	// минут работы в соединение, которое читалка закрыла на первой минуте.
+	AIBudget time.Duration
+	// AIPackBudget — тот же потолок для набора из ста реплик. Он длиннее:
+	// сто фраз одним ответом модель пишет заметно дольше подсказки, а ждёт
+	// его не читатель у страницы, а редактор компаньона.
+	AIPackBudget time.Duration
+	// AIFallbackModels — запасные модели того же провайдера, через запятую.
+	// Пробуются после основной и раньше бесплатного резерва OpenRouter.
+	AIFallbackModels string
+	// AIReasoningEffort — сколько модели разрешено думать перед ответом.
+	// Пустая строка снимает просьбу и возвращает поведение провайдера по
+	// умолчанию.
+	AIReasoningEffort string
 	// OpenRouter* — резервный OpenAI-совместимый провайдер. Поддерживается
 	// старое имя WOLFY_OPENROUTER, уже использованное в production env.
 	OpenRouterKey    string
@@ -131,6 +147,43 @@ type Config struct {
 // держится на провайдере - ответ проверяет и при нужде чинит AskValidated.
 const DefaultAIModel = "z-ai/glm-5.3-flash"
 
+// DefaultAIFallbackModels — запасные модели у того же провайдера.
+//
+// Цены Polza за миллион токенов, рублями:
+//
+//	z-ai/glm-5.3-flash                     вход  8.90   выход  29.67
+//	deepseek/deepseek-v4-flash-vision-exp  вход 26.11   выход  78.34
+//
+// Втрое дороже основной и всё ещё вчетверо дешевле того, что стояло здесь до
+// glm. Платить втрое имеет смысл только тогда, когда альтернатива — не ответить
+// вовсе, и именно в этом месте цепочки она такая.
+//
+// Endpoint у модели тот же, response_format и reasoning она принимает — то
+// есть контракт JSON и просьба думать поменьше доезжают до неё без оговорок.
+const DefaultAIFallbackModels = "deepseek/deepseek-v4-flash-vision-exp"
+
+// DefaultAIReasoningEffort — сколько модели разрешено думать перед ответом.
+//
+// Модель по умолчанию рассуждающая, и на промпте мнения о странице она тратила
+// на размышление шестьсот токенов и тридцать секунд. На «minimal» тот же промпт
+// с тем же проверяемым контрактом отвечает за семь секунд и вчетверо дешевле:
+//
+//	default  30.0 c, 616 reasoning-токенов, 0.0285 руб.
+//	minimal   7.3 c,   0 reasoning-токенов, 0.0075 руб.
+//
+// Тридцать секунд подсказка себе позволить не может: клиент ждёт ответа
+// ограниченное время, и первая же неудачная попытка выносила запрос за этот
+// предел. Значение снимается пустой строкой, если провайдер сменится на
+// нерассуждающую модель, где просьба лишняя.
+const DefaultAIReasoningEffort = "minimal"
+
+// DefaultAIBudget и DefaultAIPackBudget — потолки времени цепочки моделей.
+// Оба заметно меньше терпения клиента: см. readingai.DefaultBudget.
+const (
+	DefaultAIBudget     = 45 * time.Second
+	DefaultAIPackBudget = 150 * time.Second
+)
+
 // Load читает настройки и проверяет обязательные.
 func Load() (Config, error) {
 	cfg := Config{
@@ -149,6 +202,10 @@ func Load() (Config, error) {
 		AIURL:                    envOr("WOLFY_AI_URL", envOr("WOLFY_OCR_URL", "https://api.polza.ai/api/v1/chat/completions")),
 		AIJSONMode:               envBool("WOLFY_AI_JSON_MODE", true),
 		AITimeout:                envSeconds("WOLFY_AI_TIMEOUT_SECONDS", 45*time.Second),
+		AIBudget:                 envSeconds("WOLFY_AI_BUDGET_SECONDS", DefaultAIBudget),
+		AIPackBudget:             envSeconds("WOLFY_AI_PACK_BUDGET_SECONDS", DefaultAIPackBudget),
+		AIFallbackModels:         envOr("WOLFY_AI_FALLBACK_MODELS", DefaultAIFallbackModels),
+		AIReasoningEffort:        envOr("WOLFY_AI_REASONING_EFFORT", DefaultAIReasoningEffort),
 		OpenRouterKey:            envOr("WOLFY_OPENROUTER_KEY", env("WOLFY_OPENROUTER")),
 		OpenRouterModels:         envOr("WOLFY_OPENROUTER_MODELS", "nvidia/nemotron-3-super-120b-a12b:free,z-ai/glm-5.2:free,openrouter/free"),
 		CitavukLoginURL:          envOr("WOLFY_CITAVUK_LOGIN_URL", "https://api.citavuk.ru/v1/auth/login"),

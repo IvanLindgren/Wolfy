@@ -25,6 +25,11 @@ var (
 	// Внешнее обновление Android обязано быть подписанным release APK. Старый
 	// суффикс -debug оставлен только для уже опубликованных тестовых сборок.
 	androidPackage = regexp.MustCompile(`^Wolfy-(\d+\.\d+\.\d+)(?:-debug)?\.apk$`)
+	// DEB собирался в CI и оставался артефактом сборки: до сервера он не
+	// доезжал, и клиент на Linux не мог узнать о новой версии ничем, кроме
+	// захода на сайт. Имя приводится к общему виду при выкладке — packageDeb
+	// называет файл по-своему (wolfy_0.1.5-1_amd64.deb).
+	linuxPackage = regexp.MustCompile(`^Wolfy-(\d+\.\d+\.\d+)\.deb$`)
 )
 
 type Service struct {
@@ -116,13 +121,17 @@ func patternFor(platform string) (*regexp.Regexp, bool) {
 		return windowsPackage, true
 	case "android":
 		return androidPackage, true
+	case "linux":
+		return linuxPackage, true
 	default:
 		return nil, false
 	}
 }
 
 func allowed(name string) bool {
-	return windowsPackage.MatchString(name) || androidPackage.MatchString(name)
+	return windowsPackage.MatchString(name) ||
+		androidPackage.MatchString(name) ||
+		linuxPackage.MatchString(name)
 }
 
 func (s *Service) latest(pattern *regexp.Regexp) (*packageFile, error) {

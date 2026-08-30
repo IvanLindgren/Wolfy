@@ -1,20 +1,19 @@
 package com.wolfy.widgets
 
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Constraints
-import androidx.compose.ui.unit.dp
 import androidx.compose.material3.Text
 import androidx.compose.ui.layout.SubcomposeLayout
 import com.wolfy.ffi.ParsedText
@@ -31,13 +30,34 @@ import com.wolfy.theme.WolfyTheme
  * прямоугольник, и никакого «float» в его модели не существует.
  *
  * Поэтому абзац честно делится на две части. Первая — те слова, что
- * помещаются в узкую колонку рядом с буквицей; они рисуются в `Row` справа от
- * литеры. Вторая — остаток, он идёт под ними на всю ширину. Границу между
- * частями находит измеритель текста: он раскладывает абзац в узкой ширине и
- * говорит, на каком символе кончается третья строка.
+ * помещаются в узкую колонку рядом с буквицей; они рисуются справа от литеры.
+ * Вторая — остаток, он идёт под ними на всю ширину. Границу между частями
+ * находит измеритель текста: он раскладывает абзац в узкой ширине и говорит,
+ * на каком символе кончается третья строка.
  *
- * Дешёвых способов тут нет. Отказаться от буквицы можно, но она — половина
- * узнаваемости газетного разворота, ради которого всё и затевалось.
+ * ## Три правила, без которых приём разваливается
+ *
+ * **Кегль буквицы не равен высоте трёх строк.** Кегль — это размер площадки
+ * шрифта, а видимая литера занимает от неё около семи десятых, зато выносные
+ * элементы шрифта в сумме дают около 1.3 кегля. Прежний код брал кегль равным
+ * трём межстрочным интервалам и одновременно объявлял такую же высоту строки:
+ * литера не помещалась в собственную строку примерно на треть и рисовалась
+ * выше границы блока — поверх конца предыдущего абзаца. Здесь высота строки у
+ * буквицы естественная, а место ей отводится по измеренному размеру, поэтому
+ * выехать за свой блок она не может.
+ *
+ * **Буквица садится на базовую линию, а не в начало коробки.** Печатная
+ * буквица стоит на той же линии, что последняя строка рядом с ней; выключка по
+ * верхнему краю давала литеру, висящую отдельно от текста.
+ *
+ * **Замер обязан мерить то, что будет нарисовано.** Абзац рисуется с
+ * полужирными основами слов, если читатель включил их в настройках, а мерился
+ * обычным начертанием. Полужирный шире, реальные строки не совпадали с
+ * посчитанными, и разрез приходился не туда, где кончается третья строка.
+ *
+ * И общее правило поверх этих трёх: если рядом с литерой не остаётся места на
+ * осмысленную строку, буквицы просто не будет. Абзац, потерявший первую букву
+ * ради приёма, который не сработал, — это не оформление, а опечатка.
  */
 @Composable
 fun DropCapParagraph(
@@ -55,6 +75,8 @@ fun DropCapParagraph(
     anchors: List<Int> = emptyList(),
     /** Притушить абзац целиком: читатель сейчас не здесь. */
     dimmed: Boolean = false,
+    /** Единственный светлый кусок абзаца в его собственных смещениях. */
+    bright: IntRange? = null,
     onWordTap: (Token) -> Unit = {},
     onPhrase: (IntRange) -> Unit = {},
     onPhraseDone: (IntRange) -> Unit = {},
@@ -85,6 +107,7 @@ fun DropCapParagraph(
             selectViaMouse = selectViaMouse,
             anchors = anchors,
             dimmed = dimmed,
+            bright = bright,
             onWordTap = onWordTap,
             onPhrase = onPhrase,
             onPhraseDone = onPhraseDone,
@@ -92,45 +115,114 @@ fun DropCapParagraph(
         return
     }
 
-    val capStyle = remember(typography, fonts, linesBesideCap, colors) {
-        TextStyle(
-            fontFamily = fonts.dropCap,
-            fontWeight = FontWeight.Bold,
-            // Кегль буквицы — высота стольких строк основного текста.
-            fontSize = typography.reader.lineHeight * linesBesideCap,
-            lineHeight = typography.reader.lineHeight * linesBesideCap,
-            color = colors.ink,
+    // Метрики набора, по которым считается буквица. Первая базовая линия
+    // берётся замером, а не формулой: Compose распределяет разницу между
+    // высотой строки и метриками шрифта сам, и повторять это распределение
+    // числом значило бы держать копию чужого правила.
+    val bodyBaseline = remember(typography.reader) {
+        measurer.measure(AnnotatedString(BASELINE_PROBE), typography.reader).firstBaseline
+    }
+
+    // Замер остатка абзаца — с теми же полужирными основами, с какими он
+    // будет нарисован. Первый токен своей основы лишается: её начало унесла
+    // буквица, и слайсер обнуляет якорь ровно так же (см. slice ниже).
+    val measuredRest: AnnotatedString = remember(parsed, anchors) {
+        buildAnnotatedString {
+            parsed.tokens.forEachIndexed { index, token ->
+                val start = length
+                append(token.text)
+                if (index == 0) return@forEachIndexed
+                val anchor = anchors.getOrElse(index) { 0 }
+                if (anchor in 1 until token.text.length) {
+                    addStyle(SpanStyle(fontWeight = FontWeight.W600), start, start + anchor)
+                }
+            }
+        }.let { if (it.length > 1) it.subSequence(1, it.length) else AnnotatedString("") }
+    }
+
+    // Мера «узкой колонки»: строка, в которую не влезает и восьми знаков, —
+    // это лесенка из обрывков слов, а не колонка. Меряется настоящим кеглем
+    // читалки, поэтому предел едет вместе с размером текста.
+    val narrowColumn = remember(typography.reader) {
+        measurer.measure(AnnotatedString(NARROW_PROBE), typography.reader).size.width
+    }
+
+    val plainParagraph: @Composable () -> Unit = {
+        ReaderParagraph(
+            parsed = parsed,
+            style = typography.reader,
+            saved = saved,
+            savedLemmaOf = savedLemmaOf,
+            selected = selected,
+            selection = selection,
+            marks = marks,
+            selectViaMouse = selectViaMouse,
+            anchors = anchors,
+            dimmed = dimmed,
+            bright = bright,
+            onWordTap = onWordTap,
+            onPhrase = onPhrase,
+            onPhraseDone = onPhraseDone,
         )
     }
 
     SubcomposeLayout(modifier.fillMaxWidth()) { constraints ->
         val width = constraints.maxWidth
 
-        val capLayout = measurer.measure(capChar.toString(), capStyle)
+        // Высота видимой литеры: от верха первой строки до базовой линии
+        // последней строки рядом с ней. Это и есть определение буквицы в n
+        // строк, а кегль из него уже выводится.
+        val lineHeightPx = typography.reader.lineHeight.toPx()
+        val capInkHeight = bodyBaseline + lineHeightPx * (linesBesideCap - 1)
+        val capStyle = TextStyle(
+            fontFamily = fonts.dropCap,
+            fontWeight = FontWeight.Bold,
+            // Прописная буква занимает 0.700 кегля, поэтому кегль считается от
+            // нужной высоты литеры делением, а не назначается ей равным.
+            // Прежний код объявлял кегль равным трём межстрочным интервалам и
+            // такой же высоте строки: у литеры в 1.233 кегля высотой это
+            // означало выход за собственную строку почти на четверть, вверх,
+            // поверх конца предыдущего абзаца.
+            fontSize = (capInkHeight / CAP_HEIGHT_RATIO).toSp(),
+            color = colors.ink,
+        )
+
+        val capLayout = measurer.measure(AnnotatedString(capChar.toString()), capStyle)
         val capWidth = capLayout.size.width
         val gap = with(density) { spacing.small.roundToPx() }
-        val besideWidth = (width - capWidth - gap).coerceAtLeast(1)
+        val besideWidth = width - capWidth - gap
+
+        // Отступление к обычному абзацу. Оно же — единственный ответ на любую
+        // настройку, при которой приём не помещается: буква остаётся на своём
+        // месте в слове, а не улетает в отдельную строку.
+        fun fallback(): androidx.compose.ui.layout.MeasureResult {
+            val plain = subcompose(DropCapSlot.Plain, plainParagraph).first().measure(constraints)
+            return layout(plain.width, plain.height) { plain.place(0, 0) }
+        }
+
+        if (besideWidth < narrowColumn) return@SubcomposeLayout fallback()
 
         // Раскладываем остаток абзаца в узкой колонке и смотрим, где кончается
         // последняя строка, помещающаяся рядом с буквицей.
-        val rest = fullText.substring(1)
         val restLayout = measurer.measure(
-            text = rest,
+            text = measuredRest,
             style = typography.reader,
             constraints = Constraints(maxWidth = besideWidth),
         )
-        val splitAt = if (restLayout.lineCount <= linesBesideCap) {
-            rest.length
-        } else {
-            restLayout.getLineEnd(linesBesideCap - 1, visibleEnd = true)
-        }
+        // Буквице нужен абзац, а не строка. Одна-две строки — это заголовок,
+        // подпись или короткая реплика, и трёхстрочная литера рядом с ними
+        // выглядит не приёмом, а сбоем вёрстки: именно так первый короткий
+        // блок главы получал огромную букву и одну строку текста сбоку, а всё
+        // остальное съезжало вниз отдельным абзацем.
+        if (restLayout.lineCount <= linesBesideCap) return@SubcomposeLayout fallback()
+        val splitAt = restLayout.getLineEnd(linesBesideCap - 1, visibleEnd = true)
+        if (splitAt <= 0) return@SubcomposeLayout fallback()
 
         // Смещения считаются от начала абзаца: буквица — один символ, поэтому
         // граница в исходном тексте на единицу больше.
         val beside = parsed.slice(1, splitAt + 1, anchors)
         val below = parsed.slice(splitAt + 1, fullText.length, anchors)
-        val besideParsed = beside.parsed
-        val belowParsed = below.parsed
+        if (beside.parsed.tokens.isEmpty()) return@SubcomposeLayout fallback()
 
         // Тап по обрезанному куску слова должен открывать карточку целого
         // слова: «he» после буквицы — это по-прежнему «the», и разбирать надо
@@ -142,63 +234,110 @@ fun DropCapParagraph(
             onWordTap(whole)
         }
 
-        val content = subcompose("dropCap") {
-            Column(Modifier.fillMaxWidth()) {
-                Row(Modifier.fillMaxWidth()) {
-                    Text(
-                        text = capChar.toString(),
-                        style = capStyle,
-                        modifier = Modifier.padding(end = spacing.small),
-                    )
-                    Box(Modifier.width(with(density) { besideWidth.toDp() })) {
-                        ReaderParagraph(
-                            parsed = besideParsed,
-                            style = typography.reader,
-                            saved = saved,
-                            savedLemmaOf = savedLemmaOf,
-                            selected = selected,
-                            selection = selection,
-                            marks = marks,
-                            // Локальные смещения этой раскладки начинаются с
-                            // нуля, а токены — с единицы (буквицы): без
-                            // сдвига попадание уехало бы на один знак.
-                            offsetShift = 1,
-                            selectViaMouse = selectViaMouse,
-                            anchors = beside.anchors,
-                            dimmed = dimmed,
-                            onWordTap = tapWhole,
-                            onPhrase = onPhrase,
-                            onPhraseDone = onPhraseDone,
-                        )
-                    }
-                }
-                if (belowParsed.tokens.isNotEmpty()) {
-                    ReaderParagraph(
-                        parsed = belowParsed,
-                        style = typography.reader,
-                        saved = saved,
-                        savedLemmaOf = savedLemmaOf,
-                        selected = selected,
-                        selection = selection,
-                        marks = marks,
-                        offsetShift = splitAt + 1,
-                        selectViaMouse = selectViaMouse,
-                        anchors = below.anchors,
-                        dimmed = dimmed,
-                        onWordTap = tapWhole,
-                        onPhrase = onPhrase,
-                        onPhraseDone = onPhraseDone,
-                    )
-                }
+        val besidePlaceable = subcompose(DropCapSlot.Beside) {
+            Box(Modifier.width(with(density) { besideWidth.toDp() })) {
+                ReaderParagraph(
+                    parsed = beside.parsed,
+                    style = typography.reader,
+                    saved = saved,
+                    savedLemmaOf = savedLemmaOf,
+                    selected = selected,
+                    selection = selection,
+                    marks = marks,
+                    // Локальные смещения этой раскладки начинаются с нуля, а
+                    // токены — с единицы (буквицы): без сдвига попадание
+                    // уехало бы на один знак.
+                    offsetShift = 1,
+                    selectViaMouse = selectViaMouse,
+                    anchors = beside.anchors,
+                    dimmed = dimmed,
+                    bright = bright?.shiftedInto(1, splitAt + 1),
+                    onWordTap = tapWhole,
+                    onPhrase = onPhrase,
+                    onPhraseDone = onPhraseDone,
+                )
             }
+        }.first().measure(Constraints(maxWidth = besideWidth))
+
+        val capPlaceable = subcompose(DropCapSlot.Cap) {
+            Text(text = capChar.toString(), style = capStyle)
+        }.first().measure(Constraints())
+
+        // Буквица садится на базовую линию последней строки рядом с ней.
+        // Строк заведомо хватает: более короткий абзац сюда не доходит.
+        val capTop = (restLayout.getLineBaseline(linesBesideCap - 1) - capLayout.firstBaseline).toInt()
+        // Над видимой литерой у шрифта остаётся пустое поле выносных элементов
+        // (0.978 кегля до базовой линии против 0.700 у самой литеры). Ставить
+        // границу блока по нему значило бы отбить сверху пустоту в четверть
+        // буквицы. Границу задаёт верх литеры, а пустое поле над ней спокойно
+        // уходит в отрицательную координату: пикселей там нет.
+        val inkTop = capTop + (capLayout.firstBaseline - capInkHeight).toInt()
+        val shift = if (inkTop < 0) -inkTop else 0
+        val capY = capTop + shift
+        val besideY = shift
+
+        val belowPlaceable = if (below.parsed.tokens.isEmpty()) {
+            null
+        } else {
+            subcompose(DropCapSlot.Below) {
+                ReaderParagraph(
+                    parsed = below.parsed,
+                    style = typography.reader,
+                    saved = saved,
+                    savedLemmaOf = savedLemmaOf,
+                    selected = selected,
+                    selection = selection,
+                    marks = marks,
+                    offsetShift = splitAt + 1,
+                    selectViaMouse = selectViaMouse,
+                    anchors = below.anchors,
+                    dimmed = dimmed,
+                    bright = bright?.shiftedInto(splitAt + 1, fullText.length),
+                    onWordTap = tapWhole,
+                    onPhrase = onPhrase,
+                    onPhraseDone = onPhraseDone,
+                )
+            }.first().measure(constraints.copy(minWidth = 0, minHeight = 0))
         }
 
-        val placeable = content.first().measure(constraints)
-        layout(placeable.width, placeable.height) {
-            placeable.place(0, 0)
+        // Низ блока — низ колонки рядом с буквицей или базовая линия литеры,
+        // что ниже. Полная высота площадки шрифта в счёт не идёт: у прописной
+        // буквы нет выносного элемента вниз, и вычитать её значило бы отбить
+        // снизу треть строки пустоты.
+        val capBottom = capY + capLayout.firstBaseline.toInt()
+        val headHeight = maxOf(besideY + besidePlaceable.height, capBottom)
+        val totalHeight = headHeight + (belowPlaceable?.height ?: 0)
+        layout(width, totalHeight) {
+            capPlaceable.place(0, capY)
+            besidePlaceable.place(capWidth + gap, besideY)
+            belowPlaceable?.place(0, headHeight)
         }
     }
 }
+
+/** Слоты подкомпозиции. Именованные, чтобы порядок вызовов не был контрактом. */
+private enum class DropCapSlot { Plain, Cap, Beside, Below }
+
+/**
+ * Проба узкой колонки.
+ *
+ * Восемь знаков — граница, за которой строка перестаёт быть строкой: в неё не
+ * помещается среднее слово, и колонка превращается в столбик переносов.
+ */
+private const val NARROW_PROBE = "восемьзн"
+
+/** Проба для замера первой базовой линии набора. */
+private const val BASELINE_PROBE = "Hg"
+
+/**
+ * Доля кегля, которую занимает прописная буква Fraunces.
+ *
+ * Не подобрано на глаз: в `Fraunces.ttf` при `unitsPerEm` 2000 таблица OS/2
+ * объявляет `sCapHeight` 1400, то есть ровно 0.700 кегля. Compose метрики
+ * литеры не отдаёт — только высоту строки, — поэтому число живёт здесь
+ * константой и меняется вместе со шрифтом буквицы.
+ */
+private const val CAP_HEIGHT_RATIO = 0.700f
 
 /**
  * Кусок разбора между двумя смещениями.
@@ -244,3 +383,16 @@ private fun ParsedText.slice(from: Int, to: Int, anchors: List<Int>): SlicedText
     return SlicedText(ParsedText(tokens = inside, sentences = sentences), insideAnchors)
 }
 
+/**
+ * Светлый кусок окна чтения в координатах отрезанной части.
+ *
+ * Окно приходит в смещениях всего абзаца, а каждая часть буквичной вёрстки
+ * раскладывается со своими, от нуля. Пересечения нет — значит эта часть вся
+ * притушена, и `null` здесь сказал бы обратное; поэтому пустой диапазон.
+ */
+private fun IntRange.shiftedInto(from: Int, to: Int): IntRange {
+    val start = maxOf(first, from)
+    val end = minOf(last + 1, to)
+    if (start >= end) return IntRange.EMPTY
+    return (start - from) until (end - from)
+}

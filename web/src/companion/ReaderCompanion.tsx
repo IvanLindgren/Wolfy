@@ -173,7 +173,7 @@ export function ReaderCompanion(props: ReaderCompanionProps) {
     }).then(
       (value) => {
         if (requestRef.current !== controller) return
-        useCompanionMemory.getState().rememberOpinion(bookId, bookTitle, chapter, visibleText, profile.profileHash, value)
+        useCompanionMemory.getState().rememberOpinion(bookId, chapter, visibleText, profile.profileHash, value)
         setSheet({ kind: 'opinion', opinion: value })
       },
       (error: unknown) => {
@@ -200,7 +200,9 @@ export function ReaderCompanion(props: ReaderCompanionProps) {
     const position = offset()
     const context = pageText()
     const memory = useCompanionMemory.getState()
-    const cached = memory.findQuestion(bookId, chapter, text, context, profile.profileHash)
+    // В ключ памяти уходит место, а не прочитанное: прочитанное растёт каждой
+    // строкой. На сервер прочитанное едет по-прежнему.
+    const cached = memory.findQuestion(bookId, chapter, text, position, profile.profileHash)
     if (cached) {
       setSheet({ kind: 'question', question: cached })
       return
@@ -212,7 +214,7 @@ export function ReaderCompanion(props: ReaderCompanionProps) {
     }).then(
       (value) => {
         if (requestRef.current !== controller) return
-        useCompanionMemory.getState().rememberQuestion(bookId, bookTitle, chapter, text, context, profile.profileHash, value)
+        useCompanionMemory.getState().rememberQuestion(bookId, bookTitle, chapter, text, position, profile.profileHash, value)
         setSheet({ kind: 'question', question: value })
       },
       (error: unknown) => {
@@ -269,7 +271,7 @@ export function ReaderCompanion(props: ReaderCompanionProps) {
           <MenuRow label="Изменить компаньона" onClick={() => { setMenuOpen(false); props.onEdit() }} />
           <MenuRow label="Спрятать компаньона" onClick={() => { setMenuOpen(false); setBubble(null); setRevealed(false) }} />
           <hr style={{ border: 'none', borderTop: '1px solid rgba(0,0,0,.15)', width: '100%' }} />
-          <small>ИИ может ошибаться. До 10 запросов в день.</small>
+          <small>ИИ может ошибаться.</small>
         </div>
       )}
 

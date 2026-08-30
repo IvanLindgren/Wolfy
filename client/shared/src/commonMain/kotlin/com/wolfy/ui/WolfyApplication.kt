@@ -3,6 +3,9 @@
 package com.wolfy.ui
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.tween
@@ -81,6 +84,7 @@ import com.wolfy.theme.ReadingTheme
 import com.wolfy.theme.WolfyTheme
 import com.wolfy.theme.WolfyMotion
 import com.wolfy.theme.Curves
+import com.wolfy.theme.paced
 import com.wolfy.srs.Deck
 import com.wolfy.srs.TrainingViewModel
 import com.wolfy.ui.decks.DecksScreen
@@ -363,6 +367,11 @@ fun WolfyApplication(
                         parts.settings.markDemoAdded()
                         parts.catalogue.import(
                             PickedBook(path = writeDemoBook(), name = "Старая библиотека.txt"),
+                            // Демо кладёт приложение, а не читатель. Выбранная
+                            // книга открывается сразу, эта — остаётся плиткой:
+                            // первое, что видит новый читатель, не должно быть
+                            // чужим текстом во весь экран.
+                            chosenByReader = false,
                         )
                     }
                 }
@@ -713,11 +722,14 @@ private fun Shell(
     // телефоном и переносят.
     val shoot = rememberPhotoPicker(fromCamera = onPhone, onPicked = parts.catalogue::recognize)
 
-    // Распознанную страницу и только что скачанную книгу открываем сразу:
-    // читатель их добыл ради чтения, а не ради строчки в списке.
+    // Распознанную страницу, добавленный файл и скачанную книгу открываем
+    // сразу: читатель их добыл ради чтения, а не ради строчки в списке.
     LaunchedEffect(parts) {
         launch {
             parts.catalogue.recognized.collect { open(it) }
+        }
+        launch {
+            parts.catalogue.imported.collect { open(it) }
         }
         launch {
             parts.catalogue.addedFromCatalog.collect { book ->
@@ -780,6 +792,10 @@ private fun Shell(
             if (parts.session.token.value != null) parts.sync.sync()
         }
     }
+
+    // Видна ли оснастка читалки. Живёт в оболочке, потому что по ней прячется
+    // нижняя навигация, а она принадлежит оболочке, а не книге.
+    var readerChrome by remember { mutableStateOf(true) }
 
     Box(Modifier.fillMaxSize()) {
     Column(
@@ -862,10 +878,19 @@ private fun Shell(
                 )
 
                 is Route.Reader -> ReaderScreen(
+                    onChrome = { readerChrome = it },
+                    wordTapSeen = readingSettings.wordTapSeen,
+                    onWordTapSeen = parts.settings::seenWordTap,
                     state = readerState,
                     withinChapterProgress = readerProgress,
                     images = readerImages,
-                    onWordTap = parts.reader::onWordTap,
+                    // Первое же касание слова гасит подсказку про касание
+                    // слова: читатель, который это умеет, больше в ней не
+                    // нуждается, и напоминать ему об умении незачем.
+                    onWordTap = { block, token, parsed ->
+                        parts.reader.onWordTap(block, token, parsed)
+                        if (!readingSettings.wordTapSeen) parts.settings.seenWordTap()
+                    },
                     onDismissCard = parts.reader::dismissCard,
                     onSaveWord = parts.reader::toggleWord,
                     onSavePhrase = parts.reader::savePhrase,
@@ -997,6 +1022,8 @@ private fun Shell(
                     onThemeChange = onThemeChange,
                     fontScale = fontScale,
                     onFontScaleChange = onFontScaleChange,
+                    lineScale = lineScale,
+                    onLineScaleChange = onLineScaleChange,
                     sync = syncStatus,
                     onSyncNow = { scope.launch { parts.sync.sync() } },
                     appVersion = APP_VERSION,
@@ -1063,7 +1090,24 @@ private fun Shell(
             }
         }
 
-        BottomBar(selected = section, onSelect = { section = it })
+        // Нижняя навигация уходит вместе с оснасткой читалки.
+        //
+        // «Книги, Полки, Лента, Карточки, Ещё» посреди романа не помогают
+        // читать, а весь роман предлагают перестать. Прячется целиком, а не
+        // притушивается: полупрозрачная полоса занимает то же место и остаётся
+        // тем же приглашением уйти.
+        //
+        // Тело книги от этого растёт вниз, и это безопасно: `LazyColumn`
+        // держит первый видимый блок у верхней границы окна, поэтому строка
+        // под глазами остаётся на месте, а снизу просто открывается ещё
+        // немного текста.
+        AnimatedVisibility(
+            visible = readerChrome,
+            enter = expandVertically(motion.paced(motion.calm)) + fadeIn(motion.paced(motion.quick)),
+            exit = shrinkVertically(motion.paced(motion.quick)) + fadeOut(motion.paced(motion.instant)),
+        ) {
+            BottomBar(selected = section, onSelect = { section = it })
+        }
     }
 
         ShortcutsSheet(visible = helpOpen, onDismiss = { helpOpen = false })

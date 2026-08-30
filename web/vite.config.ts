@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module'
 import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
@@ -19,7 +20,22 @@ import { VitePWA } from 'vite-plugin-pwa'
  * 3. **`.wasm` не инлайнится.** Полтора мегабайта в base64 внутри JS — это
  *    полтора мегабайта, которые парсит главный поток.
  */
+
+/*
+ * Версия веба берётся из package.json, а не пишется в интерфейсе руками.
+ *
+ * В диагностике настроек стояла строка «Веб 0.1.0». С package.json она
+ * совпадала по случайности и разошлась бы при первом же выпуске — молча, а
+ * читают её именно тогда, когда что-то не работает и версия должна быть
+ * правдой.
+ */
+const appVersion = createRequire(import.meta.url)('./package.json').version as string
+
 export default defineConfig({
+  define: {
+    __WOLFY_WEB_VERSION__: JSON.stringify(appVersion),
+  },
+
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),

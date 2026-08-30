@@ -141,7 +141,7 @@ func (s *Server) postAICompanionPack(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, result)
 	case err == readingai.ErrLimit:
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{
-			"error": "Лимит Beta: до 10 запросов в день.",
+			"error": readingai.LimitMessage(),
 			"code":  "quota",
 		})
 	case err == readingai.ErrInvalid:

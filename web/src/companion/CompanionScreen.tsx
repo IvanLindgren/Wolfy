@@ -236,7 +236,7 @@ function ProfileView({ profile, onEdit }: { profile: CompanionProfile; onEdit: (
         {profile.phrasePack ? 'Обновить набор реплик' : 'Создать набор реплик'}
       </Button>
       {store.packRequest.kind === 'loading' && <small role="status">Создаём набор реплик. Это может занять минуту.</small>}
-      <small>Это один запрос к ИИ. Обычное чтение запросов не тратит. ИИ может ошибаться. До 10 запросов в день.</small>
+      <small>Это один запрос к ИИ. Обычное чтение запросов не тратит. ИИ может ошибаться.</small>
       <a href="/privacy" target="_blank" rel="noreferrer">Политика приватности</a>
       {(profile.aiConsentAt ?? 0) > 0 && (
         <Button variant="quiet" onClick={() => store.save({ ...profile, aiConsentAt: 0 })}>Отозвать согласие на ИИ</Button>

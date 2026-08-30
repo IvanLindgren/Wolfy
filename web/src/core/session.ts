@@ -47,6 +47,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   fontScale: 1,
   lineScale: 1,
   onboardingSeen: false,
+  wordTapSeen: false,
   lastSeenVersion: '',
   reduceMotion: false,
   companionSounds: true,
@@ -353,6 +354,19 @@ export const session = {
 
   async setCompanionSounds(on: boolean): Promise<void> {
     await run({ op: 'setCompanionSounds', on })
+  },
+
+  /**
+   * Читатель открыл разбор слова: подсказка про касание больше не нужна.
+   *
+   * В браузере самой подсказки нет — она живёт в native-читалке. Отметка всё
+   * равно ставится: настройка синхронная, и научился ей человек, а не
+   * устройство. Тот, кто разобрался с касанием в браузере, не должен получать
+   * объяснение на телефоне.
+   */
+  async seenWordTap(): Promise<void> {
+    if (useSession.getState().settings.wordTapSeen) return
+    await run({ op: 'seenWordTap' })
   },
 
   async setEmphasizeStems(on: boolean): Promise<void> {

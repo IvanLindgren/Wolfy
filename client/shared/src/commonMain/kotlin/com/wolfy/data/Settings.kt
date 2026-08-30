@@ -35,6 +35,16 @@ data class AppSettings(
     /** Множитель межстрочного интервала читалки. */
     val lineScale: Float = 1f,
     val onboardingSeen: Boolean = false,
+    /**
+     * Открывал ли читатель разбор слова хоть раз.
+     *
+     * Касание слова — главное действие продукта, и узнать о нём неоткуда:
+     * страница книги выглядит как страница книги и ничего не обещает. Читалка
+     * один раз подсказывает это сама и навсегда замолкает, как только
+     * подсказкой воспользовались. Синхронизируется: научился человек, а не
+     * устройство.
+     */
+    val wordTapSeen: Boolean = false,
     val lastSeenVersion: String = "",
     val reduceMotion: Boolean = false,
     /** Короткие звуки компаньона; не влияет на радио и произношение. */
@@ -178,6 +188,11 @@ class Settings(private val session: CoreSession) {
 
     fun seenOnboarding() {
         send(command("seenOnboarding"))
+    }
+
+    /** Читатель открыл разбор слова. Идемпотентна: ядро отсеет повтор. */
+    fun seenWordTap() {
+        send(command("seenWordTap"))
     }
 
     fun seenVersion(version: String) {

@@ -261,6 +261,8 @@ pub enum Command {
         scale: f32,
     },
     SeenOnboarding,
+    /// Читатель открыл разбор слова: подсказка про касание больше не нужна.
+    SeenWordTap,
     SeenVersion {
         version: String,
     },
@@ -899,6 +901,18 @@ impl Session {
             Command::SeenOnboarding => {
                 self.settings.onboarding_seen = true;
                 self.mark_settings_dirty();
+                self.done(Outcome::default())
+            }
+
+            Command::SeenWordTap => {
+                // Идемпотентна нарочно: клиент зовёт её на каждом касании
+                // слова, а не только на первом. Считать касания и звать её
+                // ровно один раз значило бы держать вторую копию того же
+                // признака на стороне, которая его не хранит.
+                if !self.settings.word_tap_seen {
+                    self.settings.word_tap_seen = true;
+                    self.mark_settings_dirty();
+                }
                 self.done(Outcome::default())
             }
 
@@ -1595,6 +1609,7 @@ mod tests {
             r#"{"op":"setFontScale","scale":1.2}"#,
             r#"{"op":"setLineScale","scale":1.1}"#,
             r#"{"op":"seenOnboarding"}"#,
+            r#"{"op":"seenWordTap"}"#,
             r#"{"op":"seenVersion","version":"1.0.5"}"#,
             r#"{"op":"setReduceMotion","on":true}"#,
             r#"{"op":"setCompanionSounds","on":false}"#,

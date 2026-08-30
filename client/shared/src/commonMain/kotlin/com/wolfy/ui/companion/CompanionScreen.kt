@@ -108,6 +108,9 @@ private fun Landing(onCreate: () -> Unit, onContinue: () -> Unit) {
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
             CompanionFigure(
                 appearance = LandingExample,
+                // Витрина. Неподвижная фигура на ней обещала фотографию, а
+                // не персонажа; дышащая и моргающая обещает то, что и есть.
+                pose = rememberCompanionPose(seed = LANDING_SEED),
                 modifier = Modifier.size(160.dp),
             )
         }
@@ -235,6 +238,7 @@ private fun StepLook(viewModel: CompanionViewModel, face: Boolean) {
     Column(verticalArrangement = Arrangement.spacedBy(spacing.large)) {
         CompanionFigure(
             appearance = draft.appearance,
+            pose = rememberCompanionPose(seed = draft.id.hashCode()),
             modifier = Modifier
                 .size(160.dp)
                 .align(Alignment.CenterHorizontally),
@@ -452,7 +456,11 @@ private fun Review(viewModel: CompanionViewModel, onSave: () -> Unit) {
         verticalArrangement = Arrangement.spacedBy(spacing.large),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        CompanionFigure(appearance = draft.appearance, modifier = Modifier.size(180.dp))
+        CompanionFigure(
+            appearance = draft.appearance,
+            pose = rememberCompanionPose(seed = draft.id.hashCode()),
+            modifier = Modifier.size(180.dp),
+        )
         Text(draft.name, style = WolfyTheme.typography.bookTitle, color = colors.ink)
         CharacterLine(draft)
         PrimaryButton("Сохранить", onSave, enabled = viewModel.draftValid())
@@ -478,6 +486,7 @@ private fun Profile(
     Column(verticalArrangement = Arrangement.spacedBy(spacing.large)) {
         CompanionFigure(
             appearance = profile.appearance,
+            pose = rememberCompanionPose(seed = profile.id.hashCode()),
             modifier = Modifier
                 .size(180.dp)
                 .align(Alignment.CenterHorizontally),
@@ -540,7 +549,7 @@ private fun Profile(
                     .padding(vertical = spacing.medium),
             )
         }
-        val warning = "ИИ может ошибаться. До 10 запросов в день."
+        val warning = "ИИ может ошибаться."
         Text(warning, style = WolfyTheme.typography.caption, color = colors.inkMuted)
         Text(
             "Политика приватности",
@@ -634,5 +643,8 @@ private val SCALES: Map<String, Scale> = mapOf(
     "curiosity" to Scale("Любопытство", "практичный", "любопытный"),
     "formality" to Scale("Тон", "дружеский", "формальный"),
 )
+
+/** Зерно морганий витрины: у примера нет профиля, а такт нужен свой. */
+private const val LANDING_SEED = 7
 
 private const val PRIVACY_URL = "https://wolfy.citavuk.ru/privacy"
