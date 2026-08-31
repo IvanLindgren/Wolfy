@@ -12,6 +12,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.unit.dp
@@ -98,6 +102,15 @@ fun ReaderParagraph(
     onWordTap: (Token) -> Unit = {},
     onPhrase: (IntRange) -> Unit = {},
     onPhraseDone: (IntRange) -> Unit = {},
+    /**
+     * Где на экране лежит выделенный кусок — в координатах окна.
+     *
+     * Нужно тому, кто ставит рядом с выделением панель действий. Абзац — не
+     * годная опора: в романе он бывает выше экрана, и панель под его нижней
+     * границей оказалась бы за пределами страницы. Годятся только строки самого
+     * выделения, а знает их одна раскладка текста, и живёт она здесь.
+     */
+    onSelectionBounds: ((Rect) -> Unit)? = null,
 ) {
     val colors = WolfyTheme.colors
     // Раскладка нужна, чтобы перевести точку касания в смещение внутри
@@ -202,7 +215,8 @@ fun ReaderParagraph(
 
     // Ручки лежат поверх текста, поэтому текст живёт в коробке. Коробка
     // обтягивает абзац и ничего не занимает сверх него.
-    Box(modifier.fillMaxWidth()) {
+    var box by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    Box(modifier.fillMaxWidth().onGloballyPositioned { box = it }) {
         Text(
             text = text,
             style = style.copy(
@@ -229,6 +243,14 @@ fun ReaderParagraph(
                 },
         )
         val settled = layout
+
+        // Границы выделения сообщаются наружу на каждой готовой раскладке:
+        // прокрутка двигает абзац, а панель обязана ехать вместе с ним.
+        val place = box
+        if (onSelectionBounds != null && selection != null && settled != null && place != null) {
+            selectionBounds(selection, offsetShift, settled, place)?.let(onSelectionBounds)
+        }
+
         if (selection != null && !selectViaMouse && settled != null) {
             SelectionHandles(
                 parsed = parsed,
@@ -240,6 +262,50 @@ fun ReaderParagraph(
             )
         }
     }
+}
+
+/**
+ * Прямоугольник выделения в координатах окна.
+ *
+ * Строки, а не абзац: панель действий встаёт под последней строкой выделения,
+ * а не под абзацем, который в романе бывает выше экрана.
+ *
+ * Возвращает `null`, когда выделение этой части текста не касается. Буквица
+ * режет первый абзац главы на две раскладки, и обе получают одно и то же
+ * выделение в общих смещениях: без этой проверки вторая половина сообщала бы
+ * пустой прямоугольник поверх верного, посчитанного первой.
+ */
+private fun selectionBounds(
+    selection: IntRange,
+    shift: Int,
+    layout: TextLayoutResult,
+    place: LayoutCoordinates,
+): Rect? {
+    val length = layout.layoutInput.text.length
+    if (length == 0) return null
+    val from = selection.first - shift
+    val to = selection.last + 1 - shift
+    if (to <= 0 || from >= length) return null
+
+    val start = from.coerceIn(0, length - 1)
+    val end = (to - 1).coerceIn(start, length - 1)
+    val firstLine = layout.getLineForOffset(start)
+    val lastLine = layout.getLineForOffset(end)
+    // Одна строка — берём её по горизонтали точно; несколько — вся ширина
+    // колонки: середина у ломаного выделения всё равно приходится на колонку.
+    val left = if (firstLine == lastLine) layout.getHorizontalPosition(start, true) else 0f
+    val right = if (firstLine == lastLine) {
+        layout.getHorizontalPosition(end + 1, true)
+    } else {
+        layout.size.width.toFloat()
+    }
+    val corner = place.positionInWindow()
+    return Rect(
+        left = corner.x + minOf(left, right),
+        top = corner.y + layout.getLineTop(firstLine),
+        right = corner.x + maxOf(left, right),
+        bottom = corner.y + layout.getLineBottom(lastLine),
+    )
 }
 
 /**

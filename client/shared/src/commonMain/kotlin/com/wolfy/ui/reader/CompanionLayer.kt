@@ -78,6 +78,7 @@ import com.wolfy.ui.companion.CompanionMotion
 import com.wolfy.ui.companion.rememberCompanionPose
 import com.wolfy.widgets.PrimaryButton
 import com.wolfy.widgets.Rule
+import com.wolfy.widgets.SectionLabel
 import com.wolfy.widgets.CompanionSpark
 import com.wolfy.widgets.SparkKind
 import com.wolfy.widgets.TypesettingLine
@@ -456,13 +457,23 @@ fun CompanionLayer(
                 val reserved = if (compact) FIGURE_LANE_COMPACT else FIGURE_LANE_WIDE
                 val room = (maxWidth - reserved).coerceAtLeast(MIN_PANEL_WIDTH)
                 val width = minOf(room, MAX_PANEL_WIDTH)
+                // Угол, обращённый к персонажу, оставлен прямым: панель
+                // прирастает к нему, а не висит рядом самостоятельной
+                // карточкой. Три скруглённых угла и один прямой — тот же
+                // приём, что у ярлычка у края страницы.
+                val slip = RoundedCornerShape(
+                    topStart = spacing.medium,
+                    topEnd = spacing.medium,
+                    bottomEnd = 0.dp,
+                    bottomStart = spacing.medium,
+                )
                 Column(
                     Modifier
                         .widthIn(min = minOf(width, room), max = width)
                         .heightIn(max = cap)
-                        .clip(RoundedCornerShape(spacing.medium))
+                        .clip(slip)
                         .background(colors.paper)
-                        .border(1.dp, colors.rule, RoundedCornerShape(spacing.medium))
+                        .border(1.dp, colors.rule, slip)
                         .animateContentSize(motion.settling())
                         .verticalScroll(rememberScrollState())
                         .padding(spacing.large),
@@ -479,6 +490,8 @@ fun CompanionLayer(
                         Column(verticalArrangement = Arrangement.spacedBy(spacing.medium)) {
                             when (face) {
                                 CompanionPanel.Menu -> CompanionMenu(
+                                    name = profile.name,
+                                    description = persona.description,
                                     reactionsEnabled = profile.reactionsEnabled,
                                     onOpinion = { menuOpen = false; runOpinion() },
                                     onAsk = {
@@ -503,7 +516,6 @@ fun CompanionLayer(
                                 )
                                 CompanionPanel.Sheet, null -> CompanionSheet(
                                     sheet = lastSheet,
-                                    appearance = profile.appearance,
                                     questionDraft = questionDraft,
                                     onQuestionDraft = { questionDraft = it },
                                     onAllowAi = {
@@ -641,7 +653,15 @@ fun CompanionLayer(
         // Полная фигура появляется только после осознанного действия. Тап по
         // ней открывает меню, а прокрутка или отдельная команда снова прячут.
         AnimatedVisibility(
-            visible = revealed && !suppressed && !menuOpen && aiSheet == null,
+            // Персонаж остаётся на экране и при открытой панели.
+            //
+            // Полоса под него слева от панели отводилась всегда — ради того,
+            // чтобы «фигура осталась видна», как сказано там же в коде, — но
+            // видимость его гасила ровно на `menuOpen`. Читатель нажимал на
+            // собеседника, собеседник исчезал, и разговаривать оставалось со
+            // списком строк в пустой рамке. Ради этого списка отдельный
+            // редактор внешности и характера не заводят.
+            visible = revealed && !suppressed,
             // Только прозрачность: slide-контейнер обрезал волосы и одежду
             // своим промежуточным квадратом во время появления.
             enter = fadeIn(motion.paced(motion.quick)),
@@ -663,8 +683,15 @@ fun CompanionLayer(
                     .size(figureSize)
                     .semantics { contentDescription = "Компаньон ${profile.name}. Нажмите, чтобы открыть действия" }
                     .pressable(enabled = true) {
-                        menuOpen = true
-                        bubble = null
+                        // Переключатель, а не выключатель: панель теперь
+                        // открывается рядом с персонажем, и нажать на него
+                        // второй раз — самый очевидный способ её закрыть.
+                        if (menuOpen) {
+                            menuOpen = false
+                        } else {
+                            menuOpen = true
+                            bubble = null
+                        }
                     },
             )
         }
@@ -689,16 +716,36 @@ private fun <T : Any> rememberLastNotNull(value: T?): T? {
 /** Два лица одной панели компаньона. */
 private enum class CompanionPanel { None, Menu, Sheet }
 
-/** Панель растёт из угла, где живёт персонаж, а не из своего центра. */
-private val PanelOrigin = TransformOrigin(0f, 1f)
+/**
+ * Панель растёт из угла, где живёт персонаж, а не из своего центра.
+ *
+ * Персонаж стоит справа внизу, панель раскладывается слева от него — значит
+ * ближний к нему угол правый нижний, (1, 1). Стояло (0, 1): панель уезжала
+ * из дальнего от собеседника угла, то есть выглядела не ответом персонажа, а
+ * всплывшим окном рядом.
+ */
+private val PanelOrigin = TransformOrigin(1f, 1f)
 
 /**
  * Меню действий.
  *
- * Предупреждение о Beta стоит один раз под действиями, а не под каждой кнопкой.
+ * ## Почему у списка появилась голова и разделы
+ *
+ * Раньше это были девять одинаковых строк подряд: разговор, ИИ-запросы и
+ * хозяйственные команды одним кеглем и одним цветом. Из такого списка не
+ * следует ни с кем говорят, ни что из этого стоит запроса, ни что «Спрятать
+ * компаньона» — не реплика.
+ *
+ * Теперь наверху имя и характер: панель раскрывается рядом с персонажем и
+ * говорит от его лица, а не от лица приложения. Дальше два раздела с
+ * подписями — то, что идёт к модели, и то, что живёт на устройстве, — и внизу
+ * хозяйство, набранное тише всего остального. Пометку Beta несёт подпись
+ * раздела, а не каждая строка: три «· Beta» подряд читались как часть реплики.
  */
 @Composable
 private fun CompanionMenu(
+    name: String,
+    description: String,
     reactionsEnabled: Boolean,
     onOpinion: () -> Unit,
     onAsk: () -> Unit,
@@ -711,26 +758,41 @@ private fun CompanionMenu(
     onHide: () -> Unit,
 ) {
     val spacing = WolfyTheme.spacing
-    Column(verticalArrangement = Arrangement.spacedBy(spacing.medium)) {
-        ActionRow("Что думаешь об этой странице? · Beta", onOpinion)
-        ActionRow("Задать вопрос о книге · Beta", onAsk)
-        ActionRow("Вспомнить сюжет · Beta", onRecap)
-        Rule()
-        // Ниже черты - то, что не ходит в сеть и не тратит дневные запросы.
-        // Черта здесь не украшение: она и есть обещание, что за этими тремя
+    val colors = WolfyTheme.colors
+    Column(verticalArrangement = Arrangement.spacedBy(spacing.small)) {
+        Text(
+            name.ifBlank { "Компаньон" },
+            style = WolfyTheme.typography.bookTitle,
+            color = colors.ink,
+        )
+        if (description.isNotBlank()) {
+            Text(
+                description,
+                style = WolfyTheme.typography.caption,
+                color = colors.inkMuted,
+                maxLines = 2,
+            )
+        }
+        SectionLabel("СПРОСИТЬ · BETA", Modifier.padding(top = spacing.small))
+        ActionRow("Что думаешь об этой странице?", onOpinion)
+        ActionRow("Задать вопрос о книге", onAsk)
+        ActionRow("Вспомнить сюжет", onRecap)
+        // Ниже подписи - то, что не ходит в сеть и не тратит дневные запросы.
+        // Подпись здесь не украшение: она и есть обещание, что за этими тремя
         // строками ничего не спишется.
+        SectionLabel("ПРОСТО ТАК", Modifier.padding(top = spacing.small))
         ActionRow("Подбодри меня", onCheerUp)
         ActionRow("Как я читаю?", onHowIsItGoing)
         ActionRow("Скажи что-нибудь", onSaySomething)
-        Rule()
-        ActionRow(if (reactionsEnabled) "Помолчи пока" else "Включить реплики", onToggleReactions)
-        ActionRow("Изменить компаньона", onEdit)
-        ActionRow("Спрятать компаньона", onHide)
-        Rule()
+        Rule(modifier = Modifier.padding(vertical = spacing.small))
+        QuietRow(if (reactionsEnabled) "Помолчи пока" else "Включить реплики", onToggleReactions)
+        QuietRow("Изменить компаньона", onEdit)
+        QuietRow("Спрятать компаньона", onHide)
         Text(
             "ИИ может ошибаться.",
             style = WolfyTheme.typography.caption,
-            color = WolfyTheme.colors.inkMuted,
+            color = colors.inkMuted,
+            modifier = Modifier.padding(top = spacing.small),
         )
     }
 }
@@ -739,7 +801,6 @@ private fun CompanionMenu(
 @Composable
 private fun CompanionSheet(
     sheet: AiSheetState?,
-    appearance: CompanionAppearance,
     questionDraft: String,
     onQuestionDraft: (String) -> Unit,
     onAllowAi: () -> Unit,
@@ -773,11 +834,7 @@ private fun CompanionSheet(
                 Text(sheet.value.title, style = WolfyTheme.typography.bookTitle, color = colors.ink)
                 Text(sheet.value.opinion, style = WolfyTheme.typography.body, color = colors.ink)
                 for (detail in sheet.value.details) {
-                    Text(
-                        "${detail.label}: ${detail.text}",
-                        style = WolfyTheme.typography.caption,
-                        color = colors.inkMuted,
-                    )
+                    Aside(detail.label, detail.text)
                 }
                 sheet.value.uncertainty?.let { Text(it, style = WolfyTheme.typography.caption, color = colors.inkMuted) }
                 RemainingLine(sheet.value.remaining, sheet.value.cached)
@@ -788,11 +845,7 @@ private fun CompanionSheet(
                 Text("Ответ", style = WolfyTheme.typography.bookTitle, color = colors.ink)
                 Text(sheet.value.answer, style = WolfyTheme.typography.body, color = colors.ink)
                 for (evidence in sheet.value.evidence) {
-                    Text(
-                        "${evidence.hint}: ${evidence.text}",
-                        style = WolfyTheme.typography.caption,
-                        color = colors.inkMuted,
-                    )
+                    Aside(evidence.hint, evidence.text)
                 }
                 sheet.value.uncertainty?.let { Text(it, style = WolfyTheme.typography.caption, color = colors.inkMuted) }
                 RemainingLine(sheet.value.remaining, sheet.value.cached)
@@ -800,23 +853,13 @@ private fun CompanionSheet(
             }
 
             is AiSheetState.Failed -> {
-                // Отказ говорит персонаж, а не пустая строка. Экран, на
-                // котором что-то не получилось, — единственное место, где
-                // компаньон нужнее всего, и единственное, куда его не звали.
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(spacing.medium),
-                    verticalAlignment = Alignment.Top,
-                ) {
-                    Box(Modifier.size(width = 52.dp, height = 58.dp), contentAlignment = Alignment.Center) {
-                        CompanionFigure(appearance, Modifier.fillMaxSize())
-                    }
-                    Text(
-                        sheet.message,
-                        style = WolfyTheme.typography.body,
-                        color = colors.ink,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
+                // Отказ говорит персонаж, а не пустая строка. Раньше рядом с
+                // сообщением рисовали его же маленькую копию — тогда сам он на
+                // время разговора исчезал, и без копии говорить было некому.
+                // Теперь он стоит рядом с панелью живьём, и вторая фигура в
+                // полсотни точек была бы просто вторым таким же лицом на
+                // экране.
+                Text(sheet.message, style = WolfyTheme.typography.body, color = colors.ink)
                 Row(horizontalArrangement = Arrangement.spacedBy(spacing.medium)) {
                     if (sheet.retryable) SheetAction("Повторить", onClick = { onRetry(sheet.action) })
                     SheetAction("Закрыть", onClose, quiet = true)
@@ -848,6 +891,23 @@ private fun CompanionSheet(
 
             null -> Unit
         }
+    }
+}
+
+/**
+ * Подпись и текст под ответом: деталь мнения или ссылка на место в книге.
+ *
+ * Раньше это была одна строка «подпись: текст» мелким серым — тем же кеглем и
+ * цветом, что «ИИ может ошибаться» рядом. Читатель не отличал цитату из своей
+ * книги от служебной оговорки. Подпись ушла в капслок, как в разборе слова, а
+ * текст остался текстом.
+ */
+@Composable
+private fun Aside(label: String, text: String) {
+    val spacing = WolfyTheme.spacing
+    Column(verticalArrangement = Arrangement.spacedBy(spacing.hair)) {
+        SectionLabel(label.uppercase())
+        Text(text, style = WolfyTheme.typography.body, color = WolfyTheme.colors.inkMuted)
     }
 }
 
@@ -918,6 +978,26 @@ private fun ActionRow(label: String, onClick: () -> Unit) {
         label,
         style = WolfyTheme.typography.body,
         color = WolfyTheme.colors.ink,
+        modifier = Modifier
+            .fillMaxWidth()
+            .pressable(onClick = onClick)
+            .padding(vertical = 4.dp),
+    )
+}
+
+/**
+ * Хозяйственная строка: спрятать, переделать, помолчать.
+ *
+ * Тише разговора и по кеглю, и по цвету. Это не то, что компаньону говорят, а
+ * то, что делают с ним самим, и одинаковый набор с репликами каждый раз
+ * заставлял перечитывать список целиком.
+ */
+@Composable
+private fun QuietRow(label: String, onClick: () -> Unit) {
+    Text(
+        label,
+        style = WolfyTheme.typography.caption,
+        color = WolfyTheme.colors.inkMuted,
         modifier = Modifier
             .fillMaxWidth()
             .pressable(onClick = onClick)

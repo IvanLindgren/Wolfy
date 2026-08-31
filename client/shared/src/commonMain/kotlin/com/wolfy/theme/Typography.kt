@@ -47,6 +47,28 @@ data class WolfyFonts(
     val ui: FontFamily,
 )
 
+/*
+ * Высота прописной буквы — долей от кегля.
+ *
+ * Не подобрано на глаз: это `OS/2.sCapHeight / head.unitsPerEm` из самих
+ * файлов шрифтов. Compose метрику литеры наружу не отдаёт — только высоту
+ * строки и базовую линию, — а буквице нужна именно она: приём определён через
+ * высоту прописных, а не через кегль.
+ *
+ * Числа лежат здесь, рядом с объявлением семейств, а не там, где считается
+ * буквица: сменить шрифт и не сменить его метрику — ошибка, которую видно
+ * только глазами и только у кого-то другого.
+ */
+
+/** Fraunces: 1400/2000. */
+internal const val FRAUNCES_CAP_HEIGHT = 0.700f
+
+/** Playfair Display: 708/1000. Им набрана буквица там, где Fraunces бессилен. */
+internal const val PLAYFAIR_CAP_HEIGHT = 0.708f
+
+/** EB Garamond: 650/1000. Это набор книги, и от него отмеряется буквица. */
+internal const val GARAMOND_CAP_HEIGHT = 0.650f
+
 @Composable
 fun rememberWolfyFonts(): WolfyFonts = WolfyFonts(
     display = FontFamily(

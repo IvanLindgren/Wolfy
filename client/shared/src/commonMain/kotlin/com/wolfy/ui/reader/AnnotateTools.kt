@@ -21,6 +21,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.wolfy.data.annotations.Annotation
 import com.wolfy.data.annotations.TONES
@@ -29,54 +31,122 @@ import com.wolfy.theme.WolfyTheme
 import com.wolfy.theme.highlightColor
 import com.wolfy.widgets.pressable
 
-/** Чем сейчас занят палец: обычным чтением, маркером или заметкой. */
-enum class ReaderTool { Read, Pencil, Note }
-
 /**
- * Полоса инструментов чтения.
+ * Что можно сделать с только что выделенным куском.
  *
- * Она нужна затем, что на телефоне не существует «выделить и выбрать из
- * контекстного меню»: меню там перекрывает текст, а долгое нажатие уже занято
- * выделением. Вместо меню читатель заранее говорит, чем он сейчас водит, - и
- * дальше просто ведёт пальцем.
+ * ## Почему это заменило полку инструментов
  *
- * Карандаш работает и ластиком: провёл - покрасил, нажал по покрашенному -
- * снял. Отдельная кнопка ластика была бы лишней: тем же карандашом
- * зачёркивают и на бумаге.
+ * Раньше над текстом постоянно висела полка «Чтение · Маркер · Заметка»:
+ * читатель заранее объявлял, чем он сейчас водит, и дальше просто вёл пальцем.
+ * У этого было три беды, и все три об одном — режим живёт дольше намерения.
  *
- * Полоса того же вида, что и в вебе, и краски у неё те же по номеру и по
- * цвету: у читателя с двумя устройствами жёлтый обязан быть жёлтым на обоих.
+ * Полка **всегда занимала верх страницы**. Роман открывался не первой строкой,
+ * а тремя словами интерфейса поверх неё; ради оснастки, к которой обращаются
+ * несколько раз за книгу, страница переставала быть страницей.
+ *
+ * Режим **оставался включённым после действия**. Покрасив фразу, читатель
+ * оставался с маркером в руке: следующее выделение красилось молча, а разбор,
+ * за которым он тянулся, не открывался.
+ *
+ * И режим **надо было выбрать заранее**, до того как читателю стало что
+ * выделять. Он видит фразу, ведёт по ней пальцем — и только тут узнаёт, что
+ * нужно было сперва сказать «маркер». Чтобы покрасить, выделение приходилось
+ * делать дважды.
+ *
+ * Здесь выбор идёт после жеста, как во всём остальном на этом экране: сначала
+ * читатель берёт кусок, потом решает, что с ним делать, и после решения ничего
+ * включённым не остаётся. Ни одного невидимого состояния на странице.
+ *
+ * ## Почему краски открываются, а не лежат сразу
+ *
+ * Десять кружков рядом с тремя подписями — ряд шире телефона; прежняя полка
+ * ровно так и не помещалась в 360 точек. Поэтому «Маркер» сперва красит
+ * последней краской — одно нажатие на самый частый случай, — и только потом
+ * показывает остальные, чтобы цвет можно было переменить уже покрашенному.
+ * Выбор цвета до покраски был бы обязательным шагом ради решения, которое
+ * читателю обычно безразлично.
  */
 @Composable
-fun AnnotateDock(
-    tool: ReaderTool,
+fun SelectionActions(
     tone: Int,
-    onTool: (ReaderTool) -> Unit,
-    onTone: (Int) -> Unit,
+    /** Уже покрашено: тогда «Маркер» превращается в «Цвет». */
+    painted: Boolean,
+    /** Выделение накрывает отметку — значит её есть чем убрать. */
+    removable: Boolean,
+    onExplain: () -> Unit,
+    onPaint: (Int) -> Unit,
+    onNote: () -> Unit,
+    onRemove: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = WolfyTheme.colors
     val spacing = WolfyTheme.spacing
+    var tonesOpen by remember { mutableStateOf(false) }
 
     Column(
         modifier
             .clip(RoundedCornerShape(spacing.medium))
             .background(colors.paper)
             .border(1.dp, colors.rule, RoundedCornerShape(spacing.medium))
-            .padding(spacing.medium),
+            .padding(horizontal = spacing.medium, vertical = spacing.small),
         verticalArrangement = Arrangement.spacedBy(spacing.small),
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(spacing.medium)) {
-            ToolLabel("Чтение", tool == ReaderTool.Read) { onTool(ReaderTool.Read) }
-            ToolLabel("Маркер", tool == ReaderTool.Pencil) { onTool(ReaderTool.Pencil) }
-            ToolLabel("Заметка", tool == ReaderTool.Note) { onTool(ReaderTool.Note) }
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(spacing.medium),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // Разбор идёт первым и набран цветом: это то, ради чего фразу
+            // выделяют в девяти случаях из десяти, и единственное здесь, что
+            // ходит в сеть.
+            Action("Разбор", accent = true, onClick = onExplain)
+            Row(
+                Modifier
+                    .pressable {
+                        onPaint(tone)
+                        tonesOpen = true
+                    }
+                    .semantics { contentDescription = "Покрасить: " + toneTitle(tone) }
+                    .padding(vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(spacing.small),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    Modifier
+                        .size(14.dp)
+                        .clip(CircleShape)
+                        .background(highlightColor(tone))
+                        .border(1.dp, colors.rule, CircleShape),
+                )
+                Text(
+                    if (painted) "Цвет" else "Маркер",
+                    style = WolfyTheme.typography.button,
+                    color = colors.ink,
+                )
+            }
+            Action("Заметка", accent = false, onClick = onNote)
+            if (removable) Action("Убрать", accent = false, quiet = true, onClick = onRemove)
         }
-        // Краски показываются только при выбранном маркере: десять кружков
-        // в режиме чтения - десять кнопок, которые ничего не делают.
-        if (tool == ReaderTool.Pencil) {
+        if (tonesOpen) {
+            ToneRows(chosen = tone, onPick = onPaint)
+        }
+    }
+}
+
+/**
+ * Краски двумя рядами по пять.
+ *
+ * Не десять в строку: десять кружков по 36 точек — это 360 точек, ровно ширина
+ * телефона без полей. Прежняя полка так и стояла, и последние краски у неё
+ * уезжали за экран.
+ */
+@Composable
+private fun ToneRows(chosen: Int?, onPick: (Int) -> Unit) {
+    val spacing = WolfyTheme.spacing
+    Column(verticalArrangement = Arrangement.spacedBy(spacing.small)) {
+        for (half in TONES.chunked(5)) {
             Row(horizontalArrangement = Arrangement.spacedBy(spacing.small)) {
-                for (value in TONES) {
-                    ToneDot(value, chosen = value == tone, onPick = { onTone(value) })
+                for (value in half) {
+                    ToneDot(value, chosen = value == chosen, onPick = { onPick(value) })
                 }
             }
         }
@@ -84,11 +154,15 @@ fun AnnotateDock(
 }
 
 @Composable
-private fun ToolLabel(title: String, active: Boolean, onClick: () -> Unit) {
+private fun Action(label: String, accent: Boolean, quiet: Boolean = false, onClick: () -> Unit) {
     Text(
-        title,
+        label,
         style = WolfyTheme.typography.button,
-        color = if (active) WolfyTheme.colors.accent else WolfyTheme.colors.inkMuted,
+        color = when {
+            accent -> WolfyTheme.colors.accent
+            quiet -> WolfyTheme.colors.inkMuted
+            else -> WolfyTheme.colors.ink
+        },
         modifier = Modifier
             .pressable(onClick = onClick)
             .padding(vertical = 6.dp),
@@ -99,7 +173,7 @@ private fun ToolLabel(title: String, active: Boolean, onClick: () -> Unit) {
  * Кружок краски.
  *
  * Тридцать шесть точек на кружок в двадцать: попасть пальцем в двадцать точек
- * можно только прицелившись, а красок здесь десять в ряд.
+ * можно только прицелившись.
  */
 @Composable
 private fun ToneDot(tone: Int, chosen: Boolean, onPick: () -> Unit) {
@@ -107,7 +181,8 @@ private fun ToneDot(tone: Int, chosen: Boolean, onPick: () -> Unit) {
     Box(
         Modifier
             .size(36.dp)
-            .pressable(onClick = onPick),
+            .pressable(onClick = onPick)
+            .semantics { contentDescription = toneTitle(tone) },
         contentAlignment = Alignment.Center,
     ) {
         Box(
@@ -174,11 +249,7 @@ fun NoteSheet(
             placeholder = { Text("Что здесь важного?", color = colors.inkMuted) },
             modifier = Modifier.fillMaxWidth(),
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(spacing.small)) {
-            for (value in TONES) {
-                ToneDot(value, chosen = value == item.tone, onPick = { onTone(value) })
-            }
-        }
+        ToneRows(chosen = item.tone, onPick = onTone)
         Row(horizontalArrangement = Arrangement.spacedBy(spacing.large)) {
             Text(
                 "Закрыть",

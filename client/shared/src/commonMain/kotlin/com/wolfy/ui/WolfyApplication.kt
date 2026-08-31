@@ -939,7 +939,7 @@ private fun Shell(
                     companionMemory = parts.companionMemory,
                     annotations = annotationState.items,
                     onAnnotationAdd = { chapter, start, end, tone, quote ->
-                        parts.annotations.add(chapter, start, end, tone, quote)
+                        parts.annotations.add(chapter, start, end, tone, quote)?.id
                     },
                     onAnnotationNote = { id, note -> parts.annotations.update(id, note = note) },
                     onAnnotationTone = { id, tone -> parts.annotations.update(id, tone = tone) },

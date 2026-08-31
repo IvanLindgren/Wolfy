@@ -62,7 +62,13 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.unit.IntSize
+import kotlin.math.roundToInt
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
@@ -155,7 +161,15 @@ fun ReaderScreen(
     companionPersona: com.wolfy.data.CompanionPersonaIn = com.wolfy.data.CompanionPersonaIn(),
     /** Отметки читателя во всей книге: краски и заметки. */
     annotations: List<com.wolfy.data.annotations.Annotation> = emptyList(),
-    onAnnotationAdd: (chapter: Int, start: Int, end: Int, tone: Int?, quote: String) -> Unit = { _, _, _, _, _ -> },
+    /**
+     * Заводит отметку и возвращает её номер.
+     *
+     * Номер нужен здесь же: покрашенное перекрашивают, а заметку сразу
+     * открывают. Раньше он терялся по дороге, и лист заметки в клиенте
+     * открыть было нечем.
+     */
+    onAnnotationAdd: (chapter: Int, start: Int, end: Int, tone: Int?, quote: String) -> String? =
+        { _, _, _, _, _ -> null },
     onAnnotationNote: (id: String, note: String) -> Unit = { _, _ -> },
     onAnnotationTone: (id: String, tone: Int) -> Unit = { _, _ -> },
     onAnnotationRemove: (id: String) -> Unit = {},
@@ -223,14 +237,42 @@ fun ReaderScreen(
     val motion = WolfyTheme.motion
     var contentsOpen by remember { mutableStateOf(false) }
     var readingSettingsOpen by remember { mutableStateOf(false) }
-    // Чем сейчас водят по странице. На телефоне нет контекстного меню поверх
-    // выделения, поэтому инструмент выбирают заранее, а не после.
-    var tool by remember { mutableStateOf(ReaderTool.Read) }
+    // Последняя краска. Не режим: она ничего не делает сама, а только помнит,
+    // каким цветом читатель красил в прошлый раз, чтобы не спрашивать снова.
     var pencilTone by remember { mutableStateOf(1) }
     var openNote by remember { mutableStateOf<String?>(null) }
 
     // Живое выделение фразы: блок и диапазон, подсвечиваемый по ходу жеста.
     val phraseSelection = remember { mutableStateOf<PhraseSelection?>(null) }
+
+    /*
+     * Выбор после жеста, а не до него.
+     *
+     * Пока палец ведёт, показывать нечего — читатель ещё не закончил брать
+     * кусок. Как только он его отпустил, рядом с выделением появляется
+     * [SelectionActions], и вот там уже решают: разобрать, покрасить, записать.
+     *
+     * `selectionMark` — отметка, которую выделение накрыло. Ею и красят
+     * повторно, и её же убирают: две записи на одном куске текста означали бы
+     * два слоя краски, из которых снимается только верхний.
+     */
+    var selectionReady by remember { mutableStateOf(false) }
+    var selectionBounds by remember { mutableStateOf<Rect?>(null) }
+    var selectionMark by remember { mutableStateOf<String?>(null) }
+    // Начало читалки в координатах корня: `boundsInRoot` меряет от окна, а
+    // раскладывается панель внутри этого экрана. Без поправки она уехала бы на
+    // высоту всего, что стоит выше читалки.
+    var readerOrigin by remember { mutableStateOf(Offset.Zero) }
+    var readerSize by remember { mutableStateOf(IntSize.Zero) }
+    var actionsSize by remember { mutableStateOf(IntSize.Zero) }
+    val gutterPx = with(LocalDensity.current) { WolfyTheme.spacing.medium.roundToPx() }
+
+    fun forgetSelection() {
+        phraseSelection.value = null
+        selectionReady = false
+        selectionMark = null
+        selectionBounds = null
+    }
     // Десктоп выделяет мышью (двойной клик + протягивание), палец — долгим
     // нажатием. Признак берётся у клавиатуры: она есть на десктопе.
     val selectViaMouse = LocalKeyboard.current
@@ -238,9 +280,9 @@ fun ReaderScreen(
     // Подсветка принадлежит открытой карточке и текущей главе. Раньше она
     // переживала закрытие карточки и на следующей главе могла подсветить
     // случайный диапазон с теми же смещениями.
-    LaunchedEffect(state.chapterIndex) { phraseSelection.value = null }
+    LaunchedEffect(state.chapterIndex) { forgetSelection() }
     LaunchedEffect(state.card == null) {
-        if (state.card == null) phraseSelection.value = null
+        if (state.card == null) forgetSelection()
     }
 
     // Прокрутка живёт здесь, а не в теле главы: её же двигают клавиши, а они
@@ -352,6 +394,14 @@ fun ReaderScreen(
         modifier
             .fillMaxSize()
             .background(colors.paper)
+            // Своё место в окне и свой размер: выделение приезжает в
+            // координатах окна, а панель действий раскладывается внутри этого
+            // экрана. Без поправки она уехала бы на высоту всего, что стоит
+            // над читалкой, а без размера ей не во что упереться краями.
+            .onGloballyPositioned {
+                readerOrigin = it.positionInWindow()
+                readerSize = it.size
+            }
             .nestedScroll(immersion.connection)
             .chapterSwipe(
                 enabled = !cardOpen && !contentsOpen && !readingSettingsOpen && !LocalKeyboard.current,
@@ -440,37 +490,27 @@ fun ReaderScreen(
                     if (phraseSelection.value?.block != block || phraseSelection.value?.range != range) {
                         phraseSelection.value = PhraseSelection(block, range)
                     }
+                    // Пока палец ведёт, предлагать нечего: кусок ещё берут.
+                    selectionReady = false
                 },
                 onPhraseCommit = { block, range ->
                     val selectedBlock = state.blocks.getOrNull(block)
-                    val parsedForBlock = selectedBlock?.parsed
                     val span = selectedBlock?.let { chapterTokensOf(it, range) }
-                    when {
-                        // Маркер: выделение сразу становится краской, без
-                        // карточки и без подтверждения. Так же ведёт себя
-                        // настоящий маркер на бумаге.
-                        tool == ReaderTool.Pencil && span != null -> {
-                            onAnnotationAdd(
-                                state.chapterIndex, span.first, span.last + 1, pencilTone,
-                                quoteOfRange(selectedBlock, range),
-                            )
-                            phraseSelection.value = null
-                        }
-                        // Заметка: та же запись, но без краски и с
-                        // открытым полем — писать её будут прямо сейчас.
-                        tool == ReaderTool.Note && span != null -> {
-                            onAnnotationAdd(
-                                state.chapterIndex, span.first, span.last + 1, null,
-                                quoteOfRange(selectedBlock, range),
-                            )
-                            phraseSelection.value = null
-                        }
-                        parsedForBlock != null && range.first <= range.last ->
-                            onPhraseSelected(block, range, selectedBlock.text, parsedForBlock)
+                    phraseSelection.value = PhraseSelection(block, range)
+                    // Отметка под выделением ищется один раз, здесь: рисовать
+                    // «Убрать» по живому списку значило бы искать её на каждом
+                    // кадре прокрутки.
+                    selectionMark = span?.let { tokens ->
+                        annotations.firstOrNull {
+                            !it.deleted && it.chapter == state.chapterIndex &&
+                                it.end > tokens.first && it.start <= tokens.last
+                        }?.id
                     }
-                    // Подсветка остаётся до закрытия карточки: снять её
-                    // раньше — значит спрятать то, что читатель взял.
+                    selectionReady = span != null
+                    // Подсветка остаётся до закрытия карточки или до отмены:
+                    // снять её раньше — значит спрятать то, что читатель взял.
                 },
+                onSelectionBounds = { selectionBounds = it },
                 modifier = Modifier
                     .fillMaxSize()
                     .chapterArrival(state.chapterIndex),
@@ -555,47 +595,89 @@ fun ReaderScreen(
         }
 
         /*
-         * Полоса инструментов стоит под шапкой, а не внизу экрана.
+         * Что делать с выделенным — решают рядом с выделением.
          *
-         * Внизу уже живут компаньон справа и его панель слева, и третий житель
-         * там оказался бы поверх одного из них ровно в тот момент, когда нужен.
-         * А наверху это ещё и честно по смыслу: инструмент - такая же настройка
-         * чтения, как размер шрифта, и лежит там же, где остальная оснастка.
+         * Панель встаёт под последней строкой взятого куска, а если снизу
+         * места нет — над первой. Не наверху экрана и не внизу: наверху она
+         * была бы очередной полосой оснастки поверх романа, внизу упёрлась бы
+         * в компаньона и его панель.
          *
-         * Прячется, когда открыто что-то своё - оглавление или настройки:
-         * две полосы органов управления одна поверх другой не помогают
-         * выбирать, а мешают.
+         * Появляется только по законченному жесту и уходит вместе с
+         * выделением. Ничего не остаётся включённым: см. [SelectionActions].
          */
+        val takenBounds = selectionBounds
+        val takenIndex = phraseSelection.value?.block ?: -1
+        val takenBlock = state.blocks.getOrNull(takenIndex)
+        val takenRange = phraseSelection.value?.range
+        // Выделение уехало за край страницы — панели не за что держаться.
+        // Без этой проверки она прилипала бы к краю экрана и предлагала
+        // покрасить то, чего читатель уже не видит.
+        val takenOnScreen = takenBounds != null && readerSize.height > 0 &&
+            takenBounds.bottom > readerOrigin.y &&
+            takenBounds.top < readerOrigin.y + readerSize.height
         AnimatedVisibility(
-            // Уезжает вместе с шапкой: полка инструментов висит под ней и без
-            // неё оказалась бы одинокой плашкой посреди текста. Читателю,
-            // который убрал оснастку, она не нужна тем более — он читает.
-            //
-            // Кроме одного случая: выбран не «Чтение». Тогда полка остаётся,
-            // потому что режим остаётся. Инструмент меняет смысл проводки
-            // пальцем — маркер красит вместо того, чтобы открыть разбор, — и
-            // прятать единственное место, где об этом сказано, значит устроить
-            // читателю ловушку: он выбрал маркер, прокрутил страницу, провёл
-            // по строке за разбором и получил краску, не понимая почему.
-            //
-            // Включённый режим обязан быть виден. Это и есть весь ответ на
-            // вопрос, зачем полка вообще торчит над текстом: она торчит ровно
-            // тогда, когда что-то делает.
-            visible = (chromeVisible || tool != ReaderTool.Read) &&
-                !readingSettingsOpen && !contentsOpen,
+            visible = selectionReady && takenOnScreen && !cardOpen &&
+                openNote == null && !readingSettingsOpen && !contentsOpen,
             enter = fadeIn(motion.paced(motion.quick)),
             exit = fadeOut(motion.paced(motion.instant)),
             modifier = Modifier
                 .align(Alignment.TopStart)
-                .offset { IntOffset(0, headerHeightPx.intValue) }
-                .padding(horizontal = WolfyTheme.spacing.medium)
+                .offset {
+                    val where = takenBounds ?: return@offset IntOffset.Zero
+                    actionsPlace(
+                        selection = where.translate(-readerOrigin.x, -readerOrigin.y),
+                        panel = actionsSize,
+                        room = readerSize,
+                        margin = gutterPx,
+                    )
+                }
+                .onSizeChanged { actionsSize = it }
                 .zIndex(Z_OVERLAY),
         ) {
-            AnnotateDock(
-                tool = tool,
+            fun mark(tone: Int?): String? {
+                val block = takenBlock ?: return null
+                val range = takenRange ?: return null
+                val span = chapterTokensOf(block, range) ?: return null
+                return onAnnotationAdd(
+                    state.chapterIndex, span.first, span.last + 1, tone,
+                    quoteOfRange(block, range),
+                )
+            }
+            SelectionActions(
                 tone = pencilTone,
-                onTool = { tool = it },
-                onTone = { pencilTone = it },
+                painted = selectionMark != null,
+                removable = selectionMark != null,
+                onExplain = {
+                    val block = takenBlock
+                    val range = takenRange
+                    val parsedForBlock = block?.parsed
+                    selectionReady = false
+                    if (parsedForBlock != null && range != null && range.first <= range.last) {
+                        onPhraseSelected(takenIndex, range, block.text, parsedForBlock)
+                    }
+                },
+                onPaint = { tone ->
+                    pencilTone = tone
+                    // Первое нажатие заводит отметку, следующие перекрашивают
+                    // её же. Иначе выбор цвета оставлял бы под фразой стопку
+                    // выделений, из которой видно только верхнее.
+                    val existing = selectionMark
+                    if (existing != null) onAnnotationTone(existing, tone) else selectionMark = mark(tone)
+                },
+                onNote = {
+                    // Заметка заводится и тут же открывается: лист, к которому
+                    // не ведёт ни одна дорога, до этой правки в клиенте и был —
+                    // `NoteSheet` рисовался только по `openNote`, а `openNote`
+                    // никто никогда не выставлял.
+                    val id = selectionMark ?: mark(null)
+                    selectionMark = id
+                    openNote = id
+                    selectionReady = false
+                },
+                onRemove = {
+                    selectionMark?.let(onAnnotationRemove)
+                    forgetSelection()
+                },
             )
         }
 
@@ -609,8 +691,15 @@ fun ReaderScreen(
                     onRemove = {
                         onAnnotationRemove(item.id)
                         openNote = null
+                        forgetSelection()
                     },
-                    onClose = { openNote = null },
+                    // Лист закрыт — выделение своё дело сделало. Оставить его
+                    // подсвеченным значило бы держать на странице кусок,
+                    // который читателю уже незачем.
+                    onClose = {
+                        openNote = null
+                        forgetSelection()
+                    },
                 )
             }
         }
@@ -1182,6 +1271,32 @@ private data class PhraseSelection(val block: Int, val range: IntRange)
 /** Абсолютный потолок высоты иллюстрации: доля экрана его только ограничивает. */
 private val ImageMaxHeight = 640.dp
 
+/**
+ * Куда встать панели действий над выделением.
+ *
+ * Под последней строкой взятого куска, серединой по его середине. Если внизу
+ * не хватает места — над первой строкой: панель, вылезшая за край экрана,
+ * означает решение, которое нельзя принять.
+ *
+ * Всё в координатах читалки; выделение сюда приходит уже переведённым.
+ */
+internal fun actionsPlace(selection: Rect, panel: IntSize, room: IntSize, margin: Int): IntOffset {
+    if (panel.width <= 0 || room.width <= 0) return IntOffset.Zero
+    val gap = margin / 2
+    val x = (selection.center.x - panel.width / 2f).roundToInt()
+        .coerceIn(margin, (room.width - panel.width - margin).coerceAtLeast(margin))
+    val below = selection.bottom.roundToInt() + gap
+    val y = if (below + panel.height + margin <= room.height) {
+        below
+    } else {
+        // Наверх — но не выше страницы: у абзаца выше экрана верх выделения
+        // тоже за краем, и панель ушла бы вслед за ним.
+        (selection.top.roundToInt() - panel.height - gap)
+            .coerceIn(margin, (room.height - panel.height - margin).coerceAtLeast(margin))
+    }
+    return IntOffset(x, y)
+}
+
 @Composable
 private fun ChapterBody(
     state: ReaderState,
@@ -1220,6 +1335,8 @@ private fun ChapterBody(
     selectViaMouse: Boolean,
     onPhraseSelect: (Int, IntRange) -> Unit,
     onPhraseCommit: (Int, IntRange) -> Unit,
+    /** Где на экране лежит выделение: по нему встаёт панель действий. */
+    onSelectionBounds: (Rect) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val spacing = WolfyTheme.spacing
@@ -1336,6 +1453,10 @@ private fun ChapterBody(
                 painted = painted,
                 onPhrase = { range -> onPhraseSelect(index, range) },
                 onPhraseDone = { range -> onPhraseCommit(index, range) },
+                // Границы сообщает только тот блок, в котором выделение и
+                // лежит: остальные о нём ничего не знают, а звать их значило
+                // бы получать пустые прямоугольники со всей главы.
+                onSelectionBounds = onSelectionBounds.takeIf { index == phraseSelectionBlock },
                 image = block.imagePath?.let(images::get),
                 onImageVisible = onImageVisible,
                 onWordTap = onWordTap,
@@ -1368,6 +1489,7 @@ private fun BlockView(
     painted: List<com.wolfy.data.annotations.Annotation>,
     onPhrase: (IntRange) -> Unit,
     onPhraseDone: (IntRange) -> Unit,
+    onSelectionBounds: ((Rect) -> Unit)?,
     image: ImageBitmap?,
     onImageVisible: (String) -> Unit,
     onWordTap: (Int, com.wolfy.ffi.Token, com.wolfy.ffi.ParsedText) -> Unit,
@@ -1398,6 +1520,7 @@ private fun BlockView(
                     onWordTap = { onWordTap(index, it, parsed) },
                     onPhrase = onPhrase,
                     onPhraseDone = onPhraseDone,
+                    onSelectionBounds = onSelectionBounds,
                 )
             } else {
                 ReaderParagraph(
@@ -1414,6 +1537,7 @@ private fun BlockView(
                     onWordTap = { onWordTap(index, it, parsed) },
                     onPhrase = onPhrase,
                     onPhraseDone = onPhraseDone,
+                    onSelectionBounds = onSelectionBounds,
                 )
             }
         }
@@ -1435,6 +1559,7 @@ private fun BlockView(
                     onWordTap = { onWordTap(index, it, parsed) },
                     onPhrase = onPhrase,
                     onPhraseDone = onPhraseDone,
+                    onSelectionBounds = onSelectionBounds,
                 )
             }
         }

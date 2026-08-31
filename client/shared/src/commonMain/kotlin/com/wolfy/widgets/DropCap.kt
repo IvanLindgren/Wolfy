@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -18,6 +19,9 @@ import androidx.compose.material3.Text
 import androidx.compose.ui.layout.SubcomposeLayout
 import com.wolfy.ffi.ParsedText
 import com.wolfy.ffi.Token
+import com.wolfy.theme.FRAUNCES_CAP_HEIGHT
+import com.wolfy.theme.GARAMOND_CAP_HEIGHT
+import com.wolfy.theme.PLAYFAIR_CAP_HEIGHT
 import com.wolfy.theme.WolfyTheme
 
 /**
@@ -35,27 +39,33 @@ import com.wolfy.theme.WolfyTheme
  * находит измеритель текста: он раскладывает абзац в узкой ширине и говорит,
  * на каком символе кончается третья строка.
  *
- * ## Три правила, без которых приём разваливается
+ * ## Четыре правила, без которых приём разваливается
  *
- * **Кегль буквицы не равен высоте трёх строк.** Кегль — это размер площадки
- * шрифта, а видимая литера занимает от неё около семи десятых, зато выносные
- * элементы шрифта в сумме дают около 1.3 кегля. Прежний код брал кегль равным
- * трём межстрочным интервалам и одновременно объявлял такую же высоту строки:
- * литера не помещалась в собственную строку примерно на треть и рисовалась
- * выше границы блока — поверх конца предыдущего абзаца. Здесь высота строки у
- * буквицы естественная, а место ей отводится по измеренному размеру, поэтому
- * выехать за свой блок она не может.
+ * **Буквица меряется от линии прописных, а не от верха коробки.** Приём
+ * определён двумя границами набора: верх литеры стоит на линии прописных
+ * первой строки, низ — на базовой линии последней. Прежний код отсчитывал верх
+ * от верха первой строки, то есть прихватывал и междустрочный воздух, и
+ * надстрочное поле шрифта: около семи точек при кегле 19. Литера получалась на
+ * десятую часть крупнее положенной и начиналась выше текста отдельным этажом.
+ * Считает это [dropCapPlan], и он же единственное место, где эту арифметику
+ * можно проверить.
  *
  * **Буквица садится на базовую линию, а не в начало коробки.** Печатная
  * буквица стоит на той же линии, что последняя строка рядом с ней; выключка по
  * верхнему краю давала литеру, висящую отдельно от текста.
+ *
+ * **Шрифт буквицы выбирает буква.** Во Fraunces нет кириллицы — только
+ * латиница. Русская глава открывалась литерой от случайного системного шрифта,
+ * которой при этом назначали кегль по метрике Fraunces: и характер не тот, и
+ * высота не та. Кириллицу набирает Playfair, у которого кириллица есть, и
+ * метрика к нему прилагается своя.
  *
  * **Замер обязан мерить то, что будет нарисовано.** Абзац рисуется с
  * полужирными основами слов, если читатель включил их в настройках, а мерился
  * обычным начертанием. Полужирный шире, реальные строки не совпадали с
  * посчитанными, и разрез приходился не туда, где кончается третья строка.
  *
- * И общее правило поверх этих трёх: если рядом с литерой не остаётся места на
+ * И общее правило поверх этих четырёх: если рядом с литерой не остаётся места на
  * осмысленную строку, буквицы просто не будет. Абзац, потерявший первую букву
  * ради приёма, который не сработал, — это не оформление, а опечатка.
  */
@@ -80,6 +90,8 @@ fun DropCapParagraph(
     onWordTap: (Token) -> Unit = {},
     onPhrase: (IntRange) -> Unit = {},
     onPhraseDone: (IntRange) -> Unit = {},
+    /** Границы выделения; каждая часть буквичной вёрстки сообщает свою. */
+    onSelectionBounds: ((Rect) -> Unit)? = null,
 ) {
     val colors = WolfyTheme.colors
     val typography = WolfyTheme.typography
@@ -111,6 +123,7 @@ fun DropCapParagraph(
             onWordTap = onWordTap,
             onPhrase = onPhrase,
             onPhraseDone = onPhraseDone,
+            onSelectionBounds = onSelectionBounds,
         )
         return
     }
@@ -163,27 +176,31 @@ fun DropCapParagraph(
             onWordTap = onWordTap,
             onPhrase = onPhrase,
             onPhraseDone = onPhraseDone,
+            onSelectionBounds = onSelectionBounds,
         )
     }
 
     SubcomposeLayout(modifier.fillMaxWidth()) { constraints ->
         val width = constraints.maxWidth
 
-        // Высота видимой литеры: от верха первой строки до базовой линии
-        // последней строки рядом с ней. Это и есть определение буквицы в n
+        // Высота видимой литеры: от линии прописных первой строки до базовой
+        // линии последней рядом с ней. Это и есть определение буквицы в n
         // строк, а кегль из него уже выводится.
         val lineHeightPx = typography.reader.lineHeight.toPx()
-        val capInkHeight = bodyBaseline + lineHeightPx * (linesBesideCap - 1)
+        // Буквой определяется и шрифт, и метрика: одно без другого даёт литеру
+        // верного начертания и неверной высоты.
+        val latin = frauncesHasLetter(capChar)
+        val plan = dropCapPlan(
+            bodyBaseline = bodyBaseline,
+            bodyCapHeight = typography.reader.fontSize.toPx() * GARAMOND_CAP_HEIGHT,
+            lineHeight = lineHeightPx,
+            lines = linesBesideCap,
+            capHeightRatio = if (latin) FRAUNCES_CAP_HEIGHT else PLAYFAIR_CAP_HEIGHT,
+        )
         val capStyle = TextStyle(
-            fontFamily = fonts.dropCap,
+            fontFamily = if (latin) fonts.dropCap else fonts.display,
             fontWeight = FontWeight.Bold,
-            // Прописная буква занимает 0.700 кегля, поэтому кегль считается от
-            // нужной высоты литеры делением, а не назначается ей равным.
-            // Прежний код объявлял кегль равным трём межстрочным интервалам и
-            // такой же высоте строки: у литеры в 1.233 кегля высотой это
-            // означало выход за собственную строку почти на четверть, вверх,
-            // поверх конца предыдущего абзаца.
-            fontSize = (capInkHeight / CAP_HEIGHT_RATIO).toSp(),
+            fontSize = plan.fontSize.toSp(),
             color = colors.ink,
         )
 
@@ -255,6 +272,7 @@ fun DropCapParagraph(
                     onWordTap = tapWhole,
                     onPhrase = onPhrase,
                     onPhraseDone = onPhraseDone,
+                    onSelectionBounds = onSelectionBounds,
                 )
             }
         }.first().measure(Constraints(maxWidth = besideWidth))
@@ -263,18 +281,18 @@ fun DropCapParagraph(
             Text(text = capChar.toString(), style = capStyle)
         }.first().measure(Constraints())
 
-        // Буквица садится на базовую линию последней строки рядом с ней.
-        // Строк заведомо хватает: более короткий абзац сюда не доходит.
-        val capTop = (restLayout.getLineBaseline(linesBesideCap - 1) - capLayout.firstBaseline).toInt()
-        // Над видимой литерой у шрифта остаётся пустое поле выносных элементов
-        // (0.978 кегля до базовой линии против 0.700 у самой литеры). Ставить
-        // границу блока по нему значило бы отбить сверху пустоту в четверть
-        // буквицы. Границу задаёт верх литеры, а пустое поле над ней спокойно
-        // уходит в отрицательную координату: пикселей там нет.
-        val inkTop = capTop + (capLayout.firstBaseline - capInkHeight).toInt()
-        val shift = if (inkTop < 0) -inkTop else 0
-        val capY = capTop + shift
-        val besideY = shift
+        // Буквица садится базовой линией на базовую линию последней строки
+        // рядом с ней. Строк заведомо хватает: более короткий абзац сюда не
+        // доходит. Верх литеры при этом приходит на линию прописных первой
+        // строки сам — ровно из этого посчитан её кегль.
+        //
+        // Координата у литеры получается отрицательной, и так и надо: над
+        // видимой буквой у шрифта остаётся пустое поле выносных элементов
+        // (0.978 кегля до базовой линии против 0.700 у самой литеры). Отбивать
+        // сверху пустоту в четверть буквицы, лишь бы число было
+        // неотрицательным, значило бы двигать текст ради невидимого.
+        val capY = (restLayout.getLineBaseline(linesBesideCap - 1) - capLayout.firstBaseline).toInt()
+        val besideY = 0
 
         val belowPlaceable = if (below.parsed.tokens.isEmpty()) {
             null
@@ -296,6 +314,7 @@ fun DropCapParagraph(
                     onWordTap = tapWhole,
                     onPhrase = onPhrase,
                     onPhraseDone = onPhraseDone,
+                    onSelectionBounds = onSelectionBounds,
                 )
             }.first().measure(constraints.copy(minWidth = 0, minHeight = 0))
         }
@@ -328,16 +347,6 @@ private const val NARROW_PROBE = "восемьзн"
 
 /** Проба для замера первой базовой линии набора. */
 private const val BASELINE_PROBE = "Hg"
-
-/**
- * Доля кегля, которую занимает прописная буква Fraunces.
- *
- * Не подобрано на глаз: в `Fraunces.ttf` при `unitsPerEm` 2000 таблица OS/2
- * объявляет `sCapHeight` 1400, то есть ровно 0.700 кегля. Compose метрики
- * литеры не отдаёт — только высоту строки, — поэтому число живёт здесь
- * константой и меняется вместе со шрифтом буквицы.
- */
-private const val CAP_HEIGHT_RATIO = 0.700f
 
 /**
  * Кусок разбора между двумя смещениями.
