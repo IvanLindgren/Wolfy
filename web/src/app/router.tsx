@@ -138,6 +138,24 @@ const companionRoute = createRoute({
   component: screen(() => import('../companion/CompanionScreen'), 'CompanionScreen'),
 })
 
+/*
+ * Страницы «вокруг» приложения: автор, загрузки, политика.
+ *
+ * Тоже отдельными кусками. Их открывают один раз за всё время — держать их в
+ * оболочке значило бы возить эти килобайты в каждой сессии чтения.
+ */
+const aboutRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/about',
+  component: screen(() => import('../legal/AboutScreen'), 'AboutScreen'),
+})
+
+const downloadsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/downloads',
+  component: screen(() => import('../legal/DownloadsScreen'), 'DownloadsScreen'),
+})
+
 const privacyRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/privacy',
@@ -186,6 +204,8 @@ const routeTree = rootRoute.addChildren([
   discoveryRoute,
   settingsRoute,
   companionRoute,
+  aboutRoute,
+  downloadsRoute,
   privacyRoute,
   accountRoute,
   authReturnRoute,

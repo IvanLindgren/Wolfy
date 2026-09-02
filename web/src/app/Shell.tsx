@@ -54,6 +54,15 @@ const SECTIONS = [
 export function Shell() {
   const navigate = useNavigate()
   const path = useRouterState({ select: (state) => state.location.pathname })
+  /*
+   * Открытая книга — единственный экран без подвала.
+   *
+   * Подвал стоит под содержимым и прокручивается вместе с ним. В читалке
+   * «вместе с ним» означает «через триста страниц»: до него нельзя дойти, а
+   * дойдя — оказаться в конце главы среди ссылок на политику. Список книг
+   * (`/reader` без номера) подвал сохраняет: это обычная страница.
+   */
+  const immersive = path.startsWith('/reader/')
   const settings = useSession((state) => state.settings)
   const ready = useSession((state) => state.ready)
   const bootError = useSession((state) => state.bootError)
@@ -249,6 +258,7 @@ export function Shell() {
 
         <main className={styles.content}>
           <Outlet />
+          {!immersive && <SiteFooter />}
         </main>
       </div>
 
@@ -279,6 +289,69 @@ export function Shell() {
         {cheatSheet && <CheatSheet onClose={() => setCheatSheet(false)} quick={timing.quick} />}
       </AnimatePresence>
     </div>
+  )
+}
+
+/*
+ * Адреса наружу продублированы здесь, а не взяты из `legal/downloads`.
+ *
+ * Оболочка едет в каждую сессию чтения и уложена в бюджет 200 КБ gzip. Импорт
+ * ради трёх строк втащил бы в неё весь список изданий с описаниями платформ —
+ * шесть килобайт за четыре ссылки в подвале.
+ */
+const PLAY_URL = 'https://play.google.com/store/apps/details?id=com.wolfy.reader'
+const TELEGRAM_URL = 'https://t.me/citavuk'
+const SOURCE_URL = 'https://github.com/IvanLindgren/Wolfy'
+
+/**
+ * Подвал сайта.
+ *
+ * Всё, что не помещается в разделы приложения и при этом обязано быть
+ * найдено: где скачать, кто автор, что с данными, куда написать. До этой
+ * правки такие страницы существовали только по прямой ссылке — из
+ * приложения на них не вело ничего.
+ *
+ * Ссылки наружу отмечены `rel="noreferrer"`: адрес страницы читалки не
+ * обязан уезжать чужому сайту вместе с переходом.
+ */
+function SiteFooter() {
+  return (
+    <footer className={styles.footer}>
+      <div className={styles.footer__brand}>
+        <span className={styles.footer__name}>Wolfy</span>
+        <p className={styles.footer__line}>Английский через чтение.</p>
+      </div>
+
+      <nav className={styles.footer__group} aria-label="Приложение">
+        <h2 className={styles.footer__title}>Приложение</h2>
+        <Link to="/downloads">Скачать</Link>
+        <a href={PLAY_URL} target="_blank" rel="noreferrer">
+          Google Play
+        </a>
+        <Link to="/library">Библиотека</Link>
+        <Link to="/settings">Настройки</Link>
+      </nav>
+
+      <nav className={styles.footer__group} aria-label="Проект">
+        <h2 className={styles.footer__title}>Проект</h2>
+        <Link to="/about">Об авторе</Link>
+        <Link to="/privacy">Политика конфиденциальности</Link>
+        <a href={TELEGRAM_URL} target="_blank" rel="noreferrer">
+          Телеграм-канал
+        </a>
+        <a href={SOURCE_URL} target="_blank" rel="noreferrer">
+          Исходный код
+        </a>
+      </nav>
+
+      <p className={styles.footer__note}>
+        Денис Корнилов ·{' '}
+        <a href="https://t.me/ivanlindgren" target="_blank" rel="noreferrer">
+          @ivanlindgren
+        </a>{' '}
+        · книги остаются на вашем устройстве
+      </p>
+    </footer>
   )
 }
 

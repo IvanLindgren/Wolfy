@@ -38,6 +38,12 @@ const LAZY_PATTERNS = [
   // и не должны считаться частью стартового куска.
   /CompanionScreen/i,
   /PrivacyScreen/i,
+  // Страницы «вокруг» приложения: автор и загрузки. Ленивы так же, как
+  // остальные маршруты; общий для них модуль ссылок Rollup выносит отдельным
+  // чанком `downloads-*`, и его имя тоже не наследует экран.
+  /AboutScreen/i,
+  /DownloadsScreen/i,
+  /^downloads-/i,
   /NewspaperScreen/i,
   /CatalogScreen/i,
   /core\.worker/i,

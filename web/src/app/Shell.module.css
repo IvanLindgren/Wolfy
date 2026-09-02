@@ -353,3 +353,88 @@
   color: var(--ink-muted);
   font-size: 0.875rem;
 }
+
+/* --- Подвал ---------------------------------------------------------------- */
+
+/*
+ * Подвал стоит внутри полосы содержимого, а не под всей оболочкой.
+ *
+ * Под оболочкой он оказался бы и под колонкой разделов — то есть на всю
+ * ширину окна, вплотную к левому краю, тогда как текст выше набран в колонке.
+ * Здесь он честно кончает ту же колонку, которую читали.
+ */
+.footer {
+  display: grid;
+  grid-template-columns: minmax(14rem, 2fr) repeat(2, minmax(9rem, 1fr));
+  gap: 1.25rem 2rem;
+  max-width: 64rem;
+  margin: 3rem auto 0;
+  padding: 1.5rem var(--gutter) 2.5rem;
+  border-top: 1px solid var(--rule);
+  font-size: 0.875rem;
+}
+
+.footer__name {
+  font-family: var(--serif), 'Playfair Fallback';
+  font-size: 1.2rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.footer__line {
+  margin: 0.35rem 0 0;
+  max-width: 32ch;
+  color: var(--ink-muted);
+  line-height: 1.5;
+}
+
+.footer__group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  align-items: start;
+}
+
+.footer__title {
+  font-family: var(--sans), 'Inter Fallback';
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin: 0 0 0.1rem;
+}
+
+.footer__group a {
+  color: var(--ink);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+}
+
+.footer__group a:hover {
+  border-bottom-color: var(--accent);
+}
+
+.footer__note {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding-top: 1rem;
+  border-top: 1px solid var(--rule);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--ink-muted);
+}
+
+.footer__note a {
+  color: var(--accent);
+}
+
+@media (max-width: 46rem) {
+  .footer {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .footer__brand {
+    grid-column: 1 / -1;
+  }
+}

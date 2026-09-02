@@ -324,7 +324,7 @@ jobs:
   deploy:
     name: Deploy production
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
-    needs: [build, desktop_windows_x64, desktop_linux_x64]
+    needs: [build, desktop_windows_x64, desktop_windows_arm64, desktop_linux_x64]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment:
@@ -352,16 +352,24 @@ jobs:
           name: wolfy-windows-x64-${{ github.sha }}
           path: windows-x64
 
+      - name: Download Windows ARM64 installer
+        uses: actions/download-artifact@v4
+        with:
+          name: wolfy-windows-arm64-${{ github.sha }}
+          path: windows-arm64
+
       - name: Download Linux x64 package
         uses: actions/download-artifact@v4
         with:
           name: wolfy-linux-x64-${{ github.sha }}
           path: linux-x64
 
-      # DEB собирался и оставался артефактом сборки: до сервера он не доезжал,
-      # и клиент на Linux не мог узнать о новой версии ничем, кроме захода на
-      # сайт. Имя приводится к тому же виду, что у MSI: сервер узнаёт пакеты по
-      # нему, а packageDeb называет файл по-своему (wolfy_0.1.5-1_amd64.deb).
+      # DEB и ARM64-установщик собирались и оставались артефактами прогона: до
+      # сервера они не доезжали, и ни Linux, ни Windows на ARM не могли узнать о
+      # новой версии ничем, кроме захода на сайт. Имена приводятся к тому виду,
+      # по которому сервер узнаёт пакеты: packageDeb называет файл по-своему
+      # (wolfy_0.1.5-1_amd64.deb), а оба MSI называются одинаково и без суффикса
+      # затёрли бы друг друга в одном каталоге.
       - name: Add desktop installers to production release
         shell: bash
         run: |
@@ -369,11 +377,14 @@ jobs:
           tar -xzf wolfy-release.tar.gz -C unpacked
           installer="$(find windows-x64 -name '*.msi' -type f -print -quit)"
           test -n "$installer"
+          arm="$(find windows-arm64 -name '*.msi' -type f -print -quit)"
+          test -n "$arm"
           package="$(find linux-x64 -name '*.deb' -type f -print -quit)"
           test -n "$package"
           version="$(sed -n 's/.*wolfyVersion = "\([0-9.]\+\)"/\1/p' client/desktopApp/build.gradle.kts)"
           test -n "$version"
           cp "$installer" "unpacked/apps/Wolfy-$version.msi"
+          cp "$arm" "unpacked/apps/Wolfy-$version-arm64.msi"
           cp "$package" "unpacked/apps/Wolfy-$version.deb"
           tar -C unpacked -czf wolfy-release.tar.gz server web apps
 

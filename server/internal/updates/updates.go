@@ -22,6 +22,15 @@ import (
 
 var (
 	windowsPackage = regexp.MustCompile(`^Wolfy-(\d+\.\d+\.\d+)\.msi$`)
+	// Windows на ARM. Отдельный ключ платформы, а не общий с x64: MSI собран
+	// под другую архитектуру, и подсунуть его x64-машине значит поставить
+	// обновление, которое не запустится. Имя с суффиксом нарочно — шаблон x64
+	// заякорен и `Wolfy-0.1.5-arm64.msi` под него не подходит, поэтому два
+	// пакета одной версии спокойно лежат в одном каталоге.
+	//
+	// Сборка на windows-11-arm была в CI и раньше, но артефакт до сервера не
+	// доезжал: как и DEB до недавнего времени, он оставался внутри прогона.
+	windowsArmPackage = regexp.MustCompile(`^Wolfy-(\d+\.\d+\.\d+)-arm64\.msi$`)
 	// Внешнее обновление Android обязано быть подписанным release APK. Старый
 	// суффикс -debug оставлен только для уже опубликованных тестовых сборок.
 	androidPackage = regexp.MustCompile(`^Wolfy-(\d+\.\d+\.\d+)(?:-debug)?\.apk$`)
@@ -119,6 +128,8 @@ func patternFor(platform string) (*regexp.Regexp, bool) {
 	switch platform {
 	case "windows":
 		return windowsPackage, true
+	case "windows-arm64":
+		return windowsArmPackage, true
 	case "android":
 		return androidPackage, true
 	case "linux":
@@ -130,6 +141,7 @@ func patternFor(platform string) (*regexp.Regexp, bool) {
 
 func allowed(name string) bool {
 	return windowsPackage.MatchString(name) ||
+		windowsArmPackage.MatchString(name) ||
 		androidPackage.MatchString(name) ||
 		linuxPackage.MatchString(name)
 }

@@ -9,7 +9,8 @@ import java.io.File
  *
  * Обе платформы проверяют, скачивают и сверяют пакет одинаково — этим занят
  * [ReleaseDownloader]. Различие ровно одно и лежит в последнем шаге: Windows
- * умеет поставить пакет сама, Linux — нет.
+ * умеет поставить пакет сама, Linux — нет. Windows при этом спрашивает пакет
+ * своей архитектуры: см. [windowsPlatform].
  *
  * ## Почему Linux больше не молчит
  *
@@ -34,7 +35,7 @@ actual fun rememberAppUpdateController(
         ReleaseDownloader(
             serverUrl = serverUrl,
             currentVersion = currentVersion,
-            platform = "windows",
+            platform = windowsPlatform(),
             directory = directory,
             launchInstaller = { packageFile -> launchWindowsUpdater(directory, packageFile) },
         )
@@ -51,6 +52,24 @@ actual fun rememberAppUpdateController(
 
 private fun isWindows(): Boolean =
     System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
+
+/**
+ * Какой Windows-пакет просить у сервера.
+ *
+ * Установщики двух архитектур собираются давно, но платформа у клиента была
+ * одна. Машина на ARM спрашивала x64-сборку и получала обновление, которое у
+ * неё не встанет: MSI проверяет архитектуру и отказывается. Обновление
+ * молча переставало работать ровно там, где его труднее всего заметить.
+ *
+ * Архитектуру берём у JVM, а не у Windows: `PROCESSOR_ARCHITECTURE` в
+ * переменных окружения врёт 32-битному процессу, а `os.arch` описывает ту
+ * самую JVM, поверх которой поставится новая сборка.
+ */
+private fun windowsPlatform(): String =
+    if (System.getProperty("os.arch").orEmpty().lowercase() in ARM64_NAMES) "windows-arm64" else "windows"
+
+/** Как разные JVM называют одну и ту же 64-битную ARM. */
+private val ARM64_NAMES = setOf("aarch64", "arm64")
 
 /**
  * Запуск обновлятора Windows.
